@@ -1,0 +1,33 @@
+name: Feature Request / Hardware Request
+description: Suggest an idea, format decoder, or DAC feature
+title: "[FEATURE]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Suggesting an idea for future releases of **tsrossa**? We'd love to hear your thoughts!
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: Is your feature request related to a problem or limitation?
+      placeholder: "I'm always frustrated when..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe what you would like to see happen.
+      placeholder: "Add support for DSD / DoP output, Parametric EQ, etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context / Hardware Specs
+      description: Any screenshots, documentation, or links to specifications.

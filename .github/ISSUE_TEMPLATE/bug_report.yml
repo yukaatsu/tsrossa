@@ -1,0 +1,52 @@
+name: Bug Report / DAC Incompatibility (RC)
+description: Report an issue, playback error, or incompatible USB DAC during RC testing
+title: "[BUG / RC]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping test **tsrossa (RC)**! Please provide details to help us reproduce and resolve the issue.
+
+  - type: input
+    id: dac_model
+    attributes:
+      label: USB DAC Model & Chipset
+      description: What DAC / Dongle are you connecting?
+      placeholder: "e.g., FiiO KA3 (ES9038Q2M), Moondrop Dawn Pro, Apple Dongle USB-C"
+    validations:
+      required: true
+
+  - type: input
+    id: device_info
+    attributes:
+      label: Android Device & OS Version
+      description: Phone model and Android version
+      placeholder: "e.g., Google Pixel 7 (Android 14) / Xiaomi 13 (HyperOS / Android 14)"
+    validations:
+      required: true
+
+  - type: input
+    id: audio_specs
+    attributes:
+      label: Audio File Format
+      description: Sample rate, bit depth, and codec
+      placeholder: "e.g., FLAC 24-bit / 96kHz stereo"
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: Clear and concise description of what happened.
+      placeholder: "Audio plays distorted, app crashes on attach, playback stops after 1 track, etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logcat / Logs (if available)
+      description: Output from `adb logcat -s KewAudioEngine:V UsbAudioController:V`
+      render: shell
