@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="tsrossa_logo_musicplayer.png" alt="tsrossa Logo" width="180"/>
+  <img src="tsrossa.png" alt="tsrossa Banner" width="100%"/>
 </p>
 
 <h1 align="center">tsrossa — Audiophile Music Player</h1>
