@@ -22,7 +22,7 @@
 
 ### ☕ Support the Project — Buy me some coffee
 
-If you enjoy **tsrossa** and appreciate having a pure, bit-perfect, open-source audiophile music player on Android that rivals commercial solutions like UAPP, please consider supporting the project! Your donation helps fund ongoing development, USB DAC hardware interoperability testing, and continuous improvements.
+If you enjoy **tsrossa** and appreciate having a pure, bit-perfect, open-source audiophile music player on Android, please consider supporting the project! Your donation helps fund ongoing development, USB DAC hardware interoperability testing, and continuous improvements.
 
 <p align="center">
   <a href="https://bagibagi.co/Yukaatsu">
@@ -113,7 +113,7 @@ On standard Android devices, every audio stream from third-party players is rout
 2. System notification sounds and notification mix channels are blended into the stream.
 3. Quantization noise and harmonic distortion are permanently injected into the audio path before reaching your USB DAC.
 
-### How tsrossa Achieves True Bit-Perfect Parity with UAPP
+### How tsrossa Achieves True Bit-Perfect Audio
 **tsrossa** bypasses Android AudioFlinger completely by using direct kernel-level USB communication:
 
 ```
@@ -184,21 +184,19 @@ if (target_subslot == 4 && in_subslot == 4) {
 
 ---
 
-## 📊 Comprehensive Feature Comparison: tsrossa vs. Other Players
+## 📊 Audio Pipeline & Architecture Comparison
 
-| Feature | Standard Players (Spotify, etc.) | Poweramp / Neutron (OpenSL ES) | USB Audio Player PRO (UAPP) | **tsrossa (v1.1.0)** |
-| :--- | :---: | :---: | :---: | :---: |
-| **Direct USB Driver Engine** | ❌ None | ⚠️ Vendor-specific / OpenSL | ✅ Custom USB Driver | ✅ **Native `libusb` C++17 Driver** |
-| **Android AudioFlinger Bypass** | ❌ 0% (Always resampled) | ⚠️ Partial (Device dependent) | ✅ 100% Bypassed | ✅ **100% Bypassed (Kernel USB Host)** |
-| **Arbitrary Sample Rates (44.1k - 384k)** | ❌ Locked to 48kHz | ⚠️ Inconsistent | ✅ Yes (Automatic) | ✅ **Yes (Direct UAC2 `SET_CUR`)** |
-| **Direct Memory Bit-Perfect Pipe** | ❌ No | ❌ Internal 64-bit DSP | ✅ Yes | ✅ **Yes (`memcpy` Zero-Math Path)** |
-| **UAC2 Hardware Volume Control** | ❌ OS Software Only | ❌ OS Software Only | ✅ 32-bit Feature Unit | ✅ **32-bit Feature Unit Gain Control** |
-| **True Gapless Playback Engine** | ⚠️ Software Crossfade | ⚠️ Buffer Splice | ✅ Native Gapless | ✅ **Native `prepareNextTrack` Handover** |
-| **Non-Destructive Shuffle & Repeat** | ✅ Standard | ✅ Standard | ✅ Standard | ✅ **Non-Destructive Fisher-Yates + 3-Mode Repeat** |
-| **Interactive Queue & Track Options** | ⚠️ Standard | ✅ Yes | ✅ Yes | ✅ **Priority FIFO Queue + Haptic Modal** |
-| **Dynamic Color Palette UI** | ❌ Generic | ❌ Custom Skinned | ❌ Rigid UI | ✅ **Dynamic Album Palette & Dark Terminal Aesthetic** |
-| **In-App Real-Time Telemetry & Logs** | ❌ None | ⚠️ Limited | ⚠️ Technical Info Only | ✅ **Live Diagnostic Terminal + System Info** |
-| **License & Price** | Free / Subscription | Paid ($5 – $10) | Paid ($8 – $15) | 💚 **100% Free & Open Source (Apache 2.0)** |
+| Architecture Feature | Standard Android Audio (AudioTrack / MediaCodec) | Generic Native Audio (OpenSL ES / AAudio) | **tsrossa Native Engine (v1.1.0)** |
+| :--- | :---: | :---: | :---: |
+| **Audio Routing** | Kernel ALSA via OS Mixer (`AudioFlinger`) | Kernel ALSA via OS Framework | **Direct Kernel USB Host (`libusb-1.0`)** |
+| **Android Resampling Bypass** | ❌ 0% (Resampled to 48kHz) | ⚠️ Partial / Unreliable | ✅ **100% Bypassed (Pure Bit-Perfect)** |
+| **Arbitrary Hardware Clock (44.1k - 384k)** | ❌ Locked to OS rate | ⚠️ Device / HAL Dependent | ✅ **Direct UAC2 `SET_CUR` Clock Switch** |
+| **PCM Data Integrity** | ❌ Multi-stage OS DSP / Mixing | ⚠️ 32-bit Float Conversion | ✅ **Direct Memory `memcpy` Path (Zero-Math)** |
+| **Hardware Volume (UAC2)** | ❌ OS Software Attenuation | ❌ OS Software Attenuation | ✅ **32-bit Feature Unit Direct Gain** |
+| **Gapless Playback Engine** | ⚠️ Software Crossfade | ⚠️ Buffer Splice | ✅ **Native `prepareNextTrack` Handover** |
+| **Playback Queue System** | Standard | Standard | ✅ **Non-Destructive Shuffle + Priority Queue** |
+| **Real-Time Hardware Diagnostics** | ❌ None | ❌ None | ✅ **Live Diagnostic Terminal & Telemetry** |
+| **License & Availability** | OS Built-in | Variable | 💚 **100% Free & Open Source (Apache 2.0)** |
 
 ---
 
