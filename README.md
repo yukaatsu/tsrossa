@@ -107,14 +107,10 @@ The latest signed, production-ready release is available directly in this reposi
 
 ## 🔬 Technical Audit & Bit-Perfect Empirical Proof
 
-### Why Standard Android Audio Fails Audiophiles
-On standard Android devices, every audio stream from third-party players is routed through the Android OS audio server (`AudioFlinger`). Regardless of the original file resolution (e.g., 96kHz, 192kHz, or 44.1kHz CD quality):
-1. The Android software mixer resamples the PCM stream into a fixed **48.0 kHz** sample rate using an integer/floating-point sinc interpolator.
-2. System notification sounds and notification mix channels are blended into the stream.
-3. Quantization noise and harmonic distortion are permanently injected into the audio path before reaching your USB DAC.
+### The Bit-Perfect Audio Pipeline
+By default, audio streams routed through the Android OS framework pass through the system mixer (`AudioFlinger`), where sample rates are resampled and mixed before reaching the hardware.
 
-### How tsrossa Achieves True Bit-Perfect Audio
-**tsrossa** bypasses Android AudioFlinger completely by using direct kernel-level USB communication:
+**tsrossa** addresses this by establishing an exclusive, direct USB communication channel with the external DAC via `libusb-1.0` and Android USB Host APIs, delivering unadulterated PCM data directly to the hardware endpoints:
 
 ```
 Standard Android Audio Path (Resampled & Degraded):
@@ -184,21 +180,7 @@ if (target_subslot == 4 && in_subslot == 4) {
 
 ---
 
-## 📊 Audio Pipeline & Architecture Comparison
 
-| Architecture Feature | Standard Android Audio (AudioTrack / MediaCodec) | Generic Native Audio (OpenSL ES / AAudio) | **tsrossa Native Engine (v1.1.0)** |
-| :--- | :---: | :---: | :---: |
-| **Audio Routing** | Kernel ALSA via OS Mixer (`AudioFlinger`) | Kernel ALSA via OS Framework | **Direct Kernel USB Host (`libusb-1.0`)** |
-| **Android Resampling Bypass** | ❌ 0% (Resampled to 48kHz) | ⚠️ Partial / Unreliable | ✅ **100% Bypassed (Pure Bit-Perfect)** |
-| **Arbitrary Hardware Clock (44.1k - 384k)** | ❌ Locked to OS rate | ⚠️ Device / HAL Dependent | ✅ **Direct UAC2 `SET_CUR` Clock Switch** |
-| **PCM Data Integrity** | ❌ Multi-stage OS DSP / Mixing | ⚠️ 32-bit Float Conversion | ✅ **Direct Memory `memcpy` Path (Zero-Math)** |
-| **Hardware Volume (UAC2)** | ❌ OS Software Attenuation | ❌ OS Software Attenuation | ✅ **32-bit Feature Unit Direct Gain** |
-| **Gapless Playback Engine** | ⚠️ Software Crossfade | ⚠️ Buffer Splice | ✅ **Native `prepareNextTrack` Handover** |
-| **Playback Queue System** | Standard | Standard | ✅ **Non-Destructive Shuffle + Priority Queue** |
-| **Real-Time Hardware Diagnostics** | ❌ None | ❌ None | ✅ **Live Diagnostic Terminal & Telemetry** |
-| **License & Availability** | OS Built-in | Variable | 💚 **100% Free & Open Source (Apache 2.0)** |
-
----
 
 ## ✨ Full Feature Overview
 
