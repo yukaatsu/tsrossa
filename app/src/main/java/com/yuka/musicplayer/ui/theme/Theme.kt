@@ -10,6 +10,20 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
+import androidx.compose.runtime.compositionLocalOf
+
+val LocalAccentColor = compositionLocalOf { Color(0xFF00FF00) }
+
+fun Color.blendWithWhite(ratio: Float): Color {
+    return Color(
+        red = this.red + (1f - this.red) * ratio,
+        green = this.green + (1f - this.green) * ratio,
+        blue = this.blue + (1f - this.blue) * ratio,
+        alpha = this.alpha
+    )
+}
+
+
 val TrueBlack = Color(0xFF000000)
 val TerminalGreen = Color(0xFF00FF00)
 val TerminalWhite = Color(0xFFF5F5F5)

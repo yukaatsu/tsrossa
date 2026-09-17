@@ -73,7 +73,13 @@ class UsbAudioController(context: Context) {
         }
     }
 
+    fun isConnected(): Boolean = usbDeviceConnection != null
+
     fun scanAndRequestPermission() {
+        if (usbDeviceConnection != null) {
+            Log.i("UsbAudioController", "USB Device already opened and active. Skipping redundant scan.")
+            return
+        }
         val deviceList = usbManager.deviceList
         val audioDevice = deviceList.values.find { isAudioDevice(it) }
 

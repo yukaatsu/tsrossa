@@ -473,56 +473,79 @@ static void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
 
         int sf_size = g_audioState.subframeSize.load();
 
-        for (size_t s = 0; s < num_samples; s++) {
-          if (delta != 0.0f) {
-            g_audioState.currentVolume += delta;
-            if ((delta > 0 && g_audioState.currentVolume > target_vol) ||
-                (delta < 0 && g_audioState.currentVolume < target_vol)) {
-              g_audioState.currentVolume = target_vol;
-              delta = 0.0f;
+        // TRUE BIT-PERFECT BYPASS (UNITY GAIN / HARDWARE VOLUME ACTIVE)
+        // Completely bypasses float casting, multipliers, and dithering when at unity gain.
+        if (g_audioState.currentVolume >= 0.999f && delta == 0.0f) {
+          if (sf_size == 4) {
+            // Direct 1:1 memory copy: decoded 32-bit PCM straight into 32-bit USB subslot
+            memcpy(dst_bytes, src, num_samples * sizeof(int32_t));
+          } else if (sf_size == 2) {
+            for (size_t s = 0; s < num_samples; s++) {
+              int32_t val16 = src[s] >> 16;
+              dst_bytes[s * 2] = (uint8_t)(val16 & 0xFF);
+              dst_bytes[s * 2 + 1] = (uint8_t)((val16 >> 8) & 0xFF);
+            }
+          } else if (sf_size == 3) {
+            for (size_t s = 0; s < num_samples; s++) {
+              int32_t val24 = src[s] >> 8;
+              dst_bytes[s * 3] = (uint8_t)(val24 & 0xFF);
+              dst_bytes[s * 3 + 1] = (uint8_t)((val24 >> 8) & 0xFF);
+              dst_bytes[s * 3 + 2] = (uint8_t)((val24 >> 16) & 0xFF);
             }
           }
+        } else {
+          // Software attenuation path with volume ramping and dynamic TPDF dithering
+          for (size_t s = 0; s < num_samples; s++) {
+            if (delta != 0.0f) {
+              g_audioState.currentVolume += delta;
+              if ((delta > 0 && g_audioState.currentVolume > target_vol) ||
+                  (delta < 0 && g_audioState.currentVolume < target_vol)) {
+                g_audioState.currentVolume = target_vol;
+                delta = 0.0f;
+              }
+            }
 
-          // src[s] is a 32-bit left-justified sample.
-          float scaled = (float)src[s] * g_audioState.currentVolume;
+            // src[s] is a 32-bit left-justified sample.
+            float scaled = (float)src[s] * g_audioState.currentVolume;
 
-          if (g_audioState.currentVolume < 0.999f) {
-            // Dynamic TPDF Dither amplitude based on target bit depth (sf_size)
-            // 16-bit: LSB in 32-bit space is 65536. Half LSB = 32768.0f
-            // 24-bit: LSB in 32-bit space is 256. Half LSB = 128.0f
-            // 32-bit: LSB in 32-bit space is 1. Half LSB = 0.5f
-            float half_lsb = 128.0f;
-            if (sf_size == 2)
-              half_lsb = 32768.0f;
-            else if (sf_size == 4)
-              half_lsb = 0.5f;
+            if (g_audioState.currentVolume < 0.999f) {
+              // Dynamic TPDF Dither amplitude based on target bit depth (sf_size)
+              // 16-bit: LSB in 32-bit space is 65536. Half LSB = 32768.0f
+              // 24-bit: LSB in 32-bit space is 256. Half LSB = 128.0f
+              // 32-bit: LSB in 32-bit space is 1. Half LSB = 0.5f
+              float half_lsb = 128.0f;
+              if (sf_size == 2)
+                half_lsb = 32768.0f;
+              else if (sf_size == 4)
+                half_lsb = 0.5f;
 
-            float randA = fast_uniform_rand() * half_lsb;
-            float randB = fast_uniform_rand() * half_lsb;
-            scaled += (randA - randB);
-          }
+              float randA = fast_uniform_rand() * half_lsb;
+              float randB = fast_uniform_rand() * half_lsb;
+              scaled += (randA - randB);
+            }
 
-          if (scaled > 2147483647.0f)
-            scaled = 2147483647.0f;
-          if (scaled < -2147483648.0f)
-            scaled = -2147483648.0f;
+            if (scaled > 2147483647.0f)
+              scaled = 2147483647.0f;
+            if (scaled < -2147483648.0f)
+              scaled = -2147483648.0f;
 
-          int32_t val32 = (int32_t)scaled;
+            int32_t val32 = (int32_t)scaled;
 
-          if (sf_size == 2) {
-            int32_t val16 = val32 >> 16;
-            dst_bytes[s * 2] = val16 & 0xFF;
-            dst_bytes[s * 2 + 1] = (val16 >> 8) & 0xFF;
-          } else if (sf_size == 3) {
-            int32_t val24 = val32 >> 8;
-            dst_bytes[s * 3] = val24 & 0xFF;
-            dst_bytes[s * 3 + 1] = (val24 >> 8) & 0xFF;
-            dst_bytes[s * 3 + 2] = (val24 >> 16) & 0xFF;
-          } else if (sf_size == 4) {
-            dst_bytes[s * 4] = val32 & 0xFF;
-            dst_bytes[s * 4 + 1] = (val32 >> 8) & 0xFF;
-            dst_bytes[s * 4 + 2] = (val32 >> 16) & 0xFF;
-            dst_bytes[s * 4 + 3] = (val32 >> 24) & 0xFF;
+            if (sf_size == 2) {
+              int32_t val16 = val32 >> 16;
+              dst_bytes[s * 2] = val16 & 0xFF;
+              dst_bytes[s * 2 + 1] = (val16 >> 8) & 0xFF;
+            } else if (sf_size == 3) {
+              int32_t val24 = val32 >> 8;
+              dst_bytes[s * 3] = val24 & 0xFF;
+              dst_bytes[s * 3 + 1] = (val24 >> 8) & 0xFF;
+              dst_bytes[s * 3 + 2] = (val24 >> 16) & 0xFF;
+            } else if (sf_size == 4) {
+              dst_bytes[s * 4] = val32 & 0xFF;
+              dst_bytes[s * 4 + 1] = (val32 >> 8) & 0xFF;
+              dst_bytes[s * 4 + 2] = (val32 >> 16) & 0xFF;
+              dst_bytes[s * 4 + 3] = (val32 >> 24) & 0xFF;
+            }
           }
         }
 
@@ -839,19 +862,8 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
                                                        jobject thiz, jint fd) {
   ApiMutexLock lock(__func__);
   if (g_audioState.usbHandle != nullptr) {
-    g_audioState.stopIsoThread.store(true);
-    if (g_audioState.isoThread != nullptr &&
-        g_audioState.isoThread->joinable()) {
-      g_audioState.isoThread->join();
-      delete g_audioState.isoThread;
-      g_audioState.isoThread = nullptr;
-    }
-    for (int iface : g_audioState.claimedInterfaces) {
-      libusb_release_interface(g_audioState.usbHandle, iface);
-    }
-    g_audioState.claimedInterfaces.clear();
-    libusb_close(g_audioState.usbHandle);
-    g_audioState.usbHandle = nullptr;
+    LOGI("initUsbDac: USB DAC is already initialized and active. Preserving existing connection.");
+    return JNI_TRUE;
   }
 
   // Clean up orphan transfers now that the USB device was physically detached and kernel state is wiped
@@ -2030,6 +2042,18 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_yuka_musicplayer_audio_AudioEngine_getRecentErrorCount(JNIEnv *env,
                                                                 jobject thiz) {
   return g_audioState.consecutiveErrors.load();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_isDacConnected(JNIEnv *env,
+                                                           jobject thiz) {
+  return g_audioState.usbHandle != nullptr ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_isPlaying(JNIEnv *env,
+                                                      jobject thiz) {
+  return g_audioState.isPlaying.load() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

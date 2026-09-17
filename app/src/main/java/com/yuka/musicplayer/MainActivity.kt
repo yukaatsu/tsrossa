@@ -28,6 +28,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -72,6 +74,11 @@ import com.yuka.musicplayer.audio.AudioEngine
 import com.yuka.musicplayer.ui.theme.KewMobileTheme
 import com.yuka.musicplayer.ui.theme.TerminalGray
 import com.yuka.musicplayer.ui.theme.TerminalWhite
+import com.yuka.musicplayer.ui.theme.LocalAccentColor
+import com.yuka.musicplayer.ui.theme.blendWithWhite
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -79,6 +86,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Prevent launcher bug where opening app creates a duplicate MainActivity instance
+        if (!isTaskRoot && intent.hasCategory(Intent.CATEGORY_LAUNCHER) && intent.action != null && intent.action == Intent.ACTION_MAIN) {
+            finish()
+            return
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
@@ -95,18 +108,25 @@ class MainActivity : ComponentActivity() {
             KewMobileTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                    color = androidx.compose.ui.graphics.Color.Transparent
                 ) {
                     KewApp(com.yuka.musicplayer.audio.AudioPlayerManager.audioEngine)
                 }
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
 }
 
 enum class ViewState { LIBRARY, PLAYLIST, TRACK, SETTINGS }
 
 enum class PlaybackSource { LIBRARY, PLAYLIST }
+
+enum class RepeatMode { OFF, ALL, ONE }
 
 fun loadPlaylist(context: Context): List<String> {
     val file = File(context.filesDir, "playlist.txt")
@@ -140,6 +160,16 @@ fun removePlaylist(context: Context, path: String, currentPaths: List<String>): 
     }
 }
 
+fun clearPlaylist(context: Context): Boolean {
+    return try {
+        val file = File(context.filesDir, "playlist.txt")
+        file.writeText("")
+        true
+    } catch (e: Exception) {
+        false
+    }
+}
+
 data class AltSettingInfo(
     val interfaceNum: Int,
     val altSetting: Int,
@@ -169,21 +199,88 @@ val TerminalFont = FontFamily(Font(R.font.fantasquesans_regular))
 @Composable
 fun KewApp(audioEngine: AudioEngine) {
     val context = LocalContext.current
-    var viewState by remember { mutableStateOf(ViewState.LIBRARY) }
+    val sharedPref = remember { context.getSharedPreferences("KewMobilePrefs", android.content.Context.MODE_PRIVATE) }
+    var fontScale by remember { mutableStateOf(sharedPref.getFloat("font_scale", 1.0f)) }
+    var hapticEnabled by remember { mutableStateOf(sharedPref.getBoolean("haptic_enabled", true)) }
+    var keepAwake by remember { mutableStateOf(sharedPref.getBoolean("keep_awake", false)) }
+    var defaultScreenStr by remember { mutableStateOf(sharedPref.getString("default_screen", "LIBRARY") ?: "LIBRARY") }
+    var bgMode by remember { mutableStateOf(sharedPref.getString("bg_mode", "BLACK") ?: "BLACK") }
+    var accentMode by remember { mutableStateOf(sharedPref.getString("accent_mode", "DYNAMIC") ?: "DYNAMIC") }
+    var accentFixedColorStr by remember { mutableStateOf(sharedPref.getString("accent_fixed_color", "#00FF00") ?: "#00FF00") }
     
-    var playlistPaths by remember { mutableStateOf(emptyList<String>()) }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val performHaptic = {
+        if (hapticEnabled) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+    }
+    val initialViewState = remember {
+        if ((com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying || audioEngine.isPlaying()) && com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack != null) {
+            ViewState.TRACK
+        } else {
+            try { ViewState.valueOf(defaultScreenStr) } catch(e:Exception) { ViewState.LIBRARY }
+        }
+    }
+    var viewState by remember { mutableStateOf(initialViewState) }
+    var showSystemLogs by remember { mutableStateOf(false) }
+    var showHelpPanel by remember { mutableStateOf(false) }
+    var showQueuePanel by remember { mutableStateOf(false) }
+    var trackActionTarget by remember { mutableStateOf<File?>(null) }
+
+    var isShuffleEnabled by remember { mutableStateOf(sharedPref.getBoolean("shuffle_enabled", false)) }
+    var repeatMode by remember {
+        mutableStateOf(
+            try {
+                RepeatMode.valueOf(sharedPref.getString("repeat_mode", RepeatMode.OFF.name) ?: RepeatMode.OFF.name)
+            } catch (e: Exception) {
+                RepeatMode.OFF
+            }
+        )
+    }
+    var priorityQueue by remember { mutableStateOf<List<File>>(com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue) }
+
+    LaunchedEffect(isShuffleEnabled) {
+        sharedPref.edit().putBoolean("shuffle_enabled", isShuffleEnabled).apply()
+    }
+    LaunchedEffect(repeatMode) {
+        sharedPref.edit().putString("repeat_mode", repeatMode.name).apply()
+    }
+    LaunchedEffect(priorityQueue) {
+        com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = priorityQueue
+    }
+    
+    var playlistPaths by remember { mutableStateOf(com.yuka.musicplayer.audio.AudioPlayerManager.playlistPaths) }
     val playlistSet = remember(playlistPaths) { playlistPaths.toSet() }
-    var currentPlaybackSourceStr by rememberSaveable { mutableStateOf(PlaybackSource.LIBRARY.name) }
+    var currentPlaybackSourceStr by rememberSaveable { mutableStateOf(com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource.name) }
     val getCurrentSource = { currentPlaybackSourceStr }
     val currentPlaybackSource = PlaybackSource.valueOf(currentPlaybackSourceStr)
 
+    LaunchedEffect(currentPlaybackSourceStr) {
+        com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource = currentPlaybackSource
+    }
+
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            playlistPaths = loadPlaylist(context)
+            val loaded = loadPlaylist(context)
+            playlistPaths = loaded
+            com.yuka.musicplayer.audio.AudioPlayerManager.playlistPaths = loaded
         }
     }
 
-    var currentTrack by remember { mutableStateOf<TrackInfo?>(null) }
+    var currentTrack by remember { mutableStateOf<TrackInfo?>(com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack) }
+    
+    LaunchedEffect(currentTrack) {
+        com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack = currentTrack
+    }
+    
+    val accentFixedColor = remember(accentFixedColorStr) {
+        try { androidx.compose.ui.graphics.Color(android.graphics.Color.parseColor(accentFixedColorStr)) } catch(e:Exception) { androidx.compose.ui.graphics.Color(0xFF00FF00) }
+    }
+    
+    val currentAccentColor = if (accentMode == "FIXED") {
+        accentFixedColor
+    } else {
+        currentTrack?.dominantColor ?: androidx.compose.ui.graphics.Color(0xFF00FF00)
+    }
+
     var searchQuery by remember { mutableStateOf("") }
 
 
@@ -193,6 +290,63 @@ fun KewApp(audioEngine: AudioEngine) {
     var isDeviceWedged by remember { mutableStateOf(false) }
     var isSampleRateUnverified by remember { mutableStateOf(false) }
 
+    var wallpaperBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    
+    androidx.compose.runtime.LaunchedEffect(bgMode) {
+        if (bgMode == "BLUR") {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    val wallpaperManager = android.app.WallpaperManager.getInstance(context)
+                    val drawable = wallpaperManager.drawable
+                    if (drawable != null) {
+                        var bmp = if (drawable is android.graphics.drawable.BitmapDrawable && drawable.bitmap != null) {
+                            drawable.bitmap.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+                        } else {
+                            val b = android.graphics.Bitmap.createBitmap(
+                                if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 1080,
+                                if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 1920,
+                                android.graphics.Bitmap.Config.ARGB_8888
+                            )
+                            val canvas = android.graphics.Canvas(b)
+                            drawable.setBounds(0, 0, canvas.width, canvas.height)
+                            drawable.draw(canvas)
+                            b
+                        }
+                        
+                        val scale = 0.25f
+                        val scaledBmp = android.graphics.Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt().coerceAtLeast(1), (bmp.height * scale).toInt().coerceAtLeast(1), true)
+                        
+                        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) {
+                            try {
+                                val rs = android.renderscript.RenderScript.create(context)
+                                val input = android.renderscript.Allocation.createFromBitmap(rs, scaledBmp)
+                                val output = android.renderscript.Allocation.createTyped(rs, input.type)
+                                val script = android.renderscript.ScriptIntrinsicBlur.create(rs, android.renderscript.Element.U8_4(rs))
+                                script.setRadius(25f)
+                                script.setInput(input)
+                                script.forEach(output)
+                                output.copyTo(scaledBmp)
+                                rs.destroy()
+                            } catch(e: Exception) {}
+                        }
+                        
+                        val imageBitmap = scaledBmp.asImageBitmap()
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            wallpaperBitmap = imageBitmap
+                        }
+                    }
+                } catch (e: SecurityException) {
+                    bgMode = "BLACK"
+                    sharedPref.edit().putString("bg_mode", "BLACK").apply()
+                } catch (e: Exception) {
+                    bgMode = "BLACK"
+                    sharedPref.edit().putString("bg_mode", "BLACK").apply()
+                }
+            }
+        }
+    }
+
+
     LaunchedEffect(Unit) {
         while(true) {
             isHardwareVolumeActive = audioEngine.isHardwareVolumeActive()
@@ -200,8 +354,7 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
 
-    val sharedPref = remember { context.getSharedPreferences("KewMobilePrefs", android.content.Context.MODE_PRIVATE) }
-    val initialDir = remember { 
+        val initialDir = remember { 
         val savedPath = sharedPref.getString("last_directory", Environment.getExternalStorageDirectory().absolutePath)
         File(savedPath ?: Environment.getExternalStorageDirectory().absolutePath)
     }
@@ -214,7 +367,7 @@ fun KewApp(audioEngine: AudioEngine) {
     
     val coroutineScope = rememberCoroutineScope()
 
-    var isPlaying by remember { mutableStateOf(false) }
+    var isPlaying by remember { mutableStateOf(com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying || audioEngine.isPlaying()) }
     var pausedByTransientLoss by remember { mutableStateOf(false) }
     var playbackPosition by remember { mutableStateOf(0.0) }
     var currentVolume by remember { 
@@ -227,7 +380,10 @@ fun KewApp(audioEngine: AudioEngine) {
     }
 
     LaunchedEffect(isPlaying) {
-        val intent = Intent(context, com.yuka.musicplayer.audio.AudioForegroundService::class.java)
+        com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying = isPlaying
+        val intent = Intent(context, com.yuka.musicplayer.audio.AudioForegroundService::class.java).apply {
+            action = if (isPlaying) "ACTION_PLAY" else "ACTION_PAUSE"
+        }
         if (isPlaying) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -251,6 +407,15 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
 
+    LaunchedEffect(viewState, isPlaying, keepAwake) {
+        val activity = context as? android.app.Activity
+        if (keepAwake && viewState == ViewState.TRACK && isPlaying) {
+            activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     val notificationManager = remember { context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager }
 
     val setDndMode: (Boolean) -> Unit = { enabled ->
@@ -265,7 +430,7 @@ fun KewApp(audioEngine: AudioEngine) {
     }
 
     val usbAudioController = com.yuka.musicplayer.audio.AudioPlayerManager.usbAudioController
-    var isDacConnected by remember { mutableStateOf(false) }
+    var isDacConnected by remember { mutableStateOf(audioEngine.isDacConnected()) }
     
     var uacVersion by remember { mutableIntStateOf(0) }
     var claimedInterfaces by remember { mutableStateOf("") }
@@ -324,7 +489,9 @@ fun KewApp(audioEngine: AudioEngine) {
     }
 
     LaunchedEffect(Unit) {
-        usbAudioController.scanAndRequestPermission()
+        if (!audioEngine.isDacConnected()) {
+            usbAudioController.scanAndRequestPermission()
+        }
     }
 
     val usbManager = remember { context.getSystemService(android.content.Context.USB_SERVICE) as android.hardware.usb.UsbManager }
@@ -416,14 +583,50 @@ fun KewApp(audioEngine: AudioEngine) {
 
     var playTrackRef: ((File, Boolean) -> Unit)? = null
 
-    fun playNext(isAutoAdvance: Boolean) {
-        val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) filesInDir else playlistPaths.map { File(it) }
+    fun getNextTrackFile(isAutoAdvance: Boolean, consumeQueue: Boolean): File? {
+        if (priorityQueue.isNotEmpty()) {
+            val nextQueueFile = priorityQueue.first()
+            if (consumeQueue) {
+                priorityQueue = priorityQueue.drop(1)
+                com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = priorityQueue
+            }
+            return nextQueueFile
+        }
+
+        if (isAutoAdvance && repeatMode == RepeatMode.ONE && currentTrack?.file != null) {
+            return currentTrack?.file
+        }
+
+        val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
+            filesInDir.filter { !it.isDirectory }
+        } else {
+            playlistPaths.map { File(it) }
+        }
+        if (currentActiveList.isEmpty()) return null
+
+        if (isShuffleEnabled) {
+            if (currentActiveList.size == 1) return currentActiveList.first()
+            val candidatePool = currentActiveList.filter { it.absolutePath != currentTrack?.file?.absolutePath }
+            return if (candidatePool.isNotEmpty()) candidatePool.random() else currentActiveList.random()
+        }
+
         val currentIndex = currentActiveList.indexOfFirst { it.absolutePath == currentTrack?.file?.absolutePath }
-        android.util.Log.e("DEBUG_BUG_A1", "playNext dipanggil! isAutoAdvance=$isAutoAdvance, source=${getCurrentSource()}, activeList.size=${currentActiveList.size}, currentIndex=$currentIndex")
-        if (currentIndex != -1 && currentIndex + 1 < currentActiveList.size) {
-            playTrackRef?.invoke(currentActiveList[currentIndex + 1], isAutoAdvance)
+        return if (currentIndex != -1 && currentIndex + 1 < currentActiveList.size) {
+            currentActiveList[currentIndex + 1]
+        } else if (repeatMode == RepeatMode.ALL && currentActiveList.isNotEmpty()) {
+            currentActiveList[0]
+        } else {
+            null
+        }
+    }
+
+    fun peekNextTrackFile(): File? = getNextTrackFile(isAutoAdvance = true, consumeQueue = false)
+
+    fun playNext(isAutoAdvance: Boolean) {
+        val nextFile = getNextTrackFile(isAutoAdvance, consumeQueue = true)
+        if (nextFile != null) {
+            playTrackRef?.invoke(nextFile, isAutoAdvance)
         } else if (isAutoAdvance) {
-            // Track terakhir selesai secara alami
             audioEngine.stopAudio()
             isPlaying = false
         }
@@ -520,22 +723,10 @@ fun KewApp(audioEngine: AudioEngine) {
                 currentTrack = metadata
             }
             
-            // Prepare next track for gapless playback (Bug A Fix)
-            val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) filesInDir else playlistPaths.map { File(it) }
-            val currentIndex = currentActiveList.indexOfFirst { it.absolutePath == file.absolutePath }
-            if (currentIndex != -1 && currentIndex + 1 < currentActiveList.size) {
-                val nextFile = currentActiveList[currentIndex + 1]
-                
-                // Guard 1: Ensure user hasn't skipped to another track manually before we start prepare
-                if (currentTrack?.file?.absolutePath == file.absolutePath) {
-                    audioEngine.prepareNextTrack(nextFile.absolutePath)
-                    
-                    // Guard 2: If the user skipped during prepare, we shouldn't keep the prepared track
-                    if (currentTrack?.file?.absolutePath != file.absolutePath) {
-                        // The engine state will be overwritten by the next playAudio call anyway, 
-                        // but this satisfies the logical guard requirement.
-                    }
-                }
+            // Prepare next track for gapless playback
+            val nextFile = peekNextTrackFile()
+            if (nextFile != null && currentTrack?.file?.absolutePath == file.absolutePath) {
+                audioEngine.prepareNextTrack(nextFile.absolutePath)
             }
         }
     }
@@ -543,10 +734,17 @@ fun KewApp(audioEngine: AudioEngine) {
     playTrackRef = ::playTrack
 
     fun playPrev() {
-        val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) filesInDir else playlistPaths.map { File(it) }
+        val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
+            filesInDir.filter { !it.isDirectory }
+        } else {
+            playlistPaths.map { File(it) }
+        }
+        if (currentActiveList.isEmpty()) return
         val currentIndex = currentActiveList.indexOfFirst { it.absolutePath == currentTrack?.file?.absolutePath }
-        if (currentIndex - 1 >= 0) {
+        if (currentIndex > 0) {
             playTrack(currentActiveList[currentIndex - 1], false)
+        } else if (repeatMode == RepeatMode.ALL && currentActiveList.isNotEmpty()) {
+            playTrack(currentActiveList.last(), false)
         }
     }
 
@@ -563,8 +761,12 @@ fun KewApp(audioEngine: AudioEngine) {
             coroutineScope.launch(Dispatchers.Main) {
                 audioEngine.cleanGarbage()
                 val nextFile = File(path)
-                val newIndex = currentActiveList.indexOfFirst { it.absolutePath == path }
                 
+                if (priorityQueue.isNotEmpty() && priorityQueue.first().absolutePath == path) {
+                    priorityQueue = priorityQueue.drop(1)
+                    com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = priorityQueue
+                }
+
                 // INSTANT SKELETON UPDATE: Cegah delay UI saat gapless & fix tombol next mengulang
                 currentTrack = TrackInfo(
                     file = nextFile,
@@ -579,10 +781,10 @@ fun KewApp(audioEngine: AudioEngine) {
                 
                 withContext(Dispatchers.IO) {
                     val nextMetadata = extractMetadata(nextFile)
-                    val sRate = audioEngine.getSampleRate()
                     
-                    if (newIndex != -1 && newIndex + 1 < currentActiveList.size) {
-                        audioEngine.prepareNextTrack(currentActiveList[newIndex + 1].absolutePath)
+                    val nextForGapless = peekNextTrackFile()
+                    if (nextForGapless != null) {
+                        audioEngine.prepareNextTrack(nextForGapless.absolutePath)
                     }
                     
                     withContext(Dispatchers.Main) {
@@ -704,66 +906,321 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.Black)
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
-            val tsrossaAscii = """
-                 _                                
-                | |_ ___ _ __ ___  ___ ___  __ _  
-                | __/ __| '__/ _ \/ __/ __|/ _` | 
-                | |_\__ \ | | (_) \__ \__ \ (_| | 
-                 \__|___/_|  \___/|___/___/\__,_| 
-            """.trimIndent()
-            
-            Text(
-                text = tsrossaAscii,
-                fontFamily = TerminalFont,
-                fontWeight = FontWeight.Normal,
-                color = Color(0xFFe6cc98),
-                lineHeight = 12.sp,
-                fontSize = 11.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 16.dp, bottom = 24.dp),
-                textAlign = TextAlign.Center
-            )
-            val hwVolumeText = if (isForceSoftwareVolume) {
-                "Software Attenuation (Dithered)"
-            } else if (isHardwareVolumeActive) {
-                "Hardware Bit-Perfect Volume"
-            } else if (isHardwareVolumeLockedBySystem) {
-                "Software Attenuation (Hardware Volume unavailable — Audio Control locked by system)"
-            } else {
-                "Software Attenuation (Dithered)"
-            }
-            Text(
-                text = hwVolumeText,
-                fontFamily = TerminalFont,
-                fontSize = 10.sp,
-                color = if (isHardwareVolumeActive && !isForceSoftwareVolume) Color(0xFFFFD700) else Color(0xFFf87171),
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-            
-            val hintText = when (viewState) {
-                ViewState.LIBRARY -> "Tap:Play · Long-press:Add to playlist · ★=in playlist"
-                ViewState.PLAYLIST -> "Tap:Play · Order:added time"
-                else -> ""
-            }
-            if (hintText.isNotEmpty()) {
-                Text(
-                    text = hintText,
-                    fontFamily = TerminalFont,
-                    fontSize = 9.sp,
-                    color = Color(0xFF5b7a68),
-                    modifier = Modifier.padding(bottom = 8.dp)
+        val currentDensity = androidx.compose.ui.platform.LocalDensity.current
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(
+            density = currentDensity.density,
+            fontScale = currentDensity.fontScale * fontScale
+        ),
+        LocalAccentColor provides currentAccentColor
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (bgMode == "BLUR" && wallpaperBitmap != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = wallpaperBitmap!!,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().blur(24.dp)
                 )
+                Box(modifier = Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.65f)))
+            } else {
+                Box(modifier = Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black))
+            }
+            
+            Column(modifier = Modifier.fillMaxSize()) {
+        AppHeader(
+            viewState = viewState,
+            isHardwareVolumeActive = isHardwareVolumeActive,
+            isForceSoftwareVolume = isForceSoftwareVolume,
+            isHardwareVolumeLockedBySystem = isHardwareVolumeLockedBySystem,
+            onToggleLogs = { showSystemLogs = !showSystemLogs },
+            onToggleHelp = { showHelpPanel = !showHelpPanel }
+        )
+        
+        if (showSystemLogs) {
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.Center,
+                onDismissRequest = { showSystemLogs = false },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.65f))
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null
+                        ) { showSystemLogs = false }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(horizontal = 16.dp, vertical = 24.dp)
+                            .fillMaxWidth(0.94f)
+                            .fillMaxHeight(0.85f)
+                            .background(androidx.compose.ui.graphics.Color(0xFF0C0C0C), shape = RoundedCornerShape(8.dp))
+                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = null
+                            ) {}
+                    ) {
+                        SystemLogsPanel(
+                            audioEngine = audioEngine,
+                            viewState = viewState,
+                            context = context,
+                            usbManager = usbManager,
+                            isDeviceWedged = isDeviceWedged,
+                            isDacConnected = isDacConnected,
+                            isPlaying = isPlaying,
+                            sourceSampleRate = sourceSampleRate,
+                            sourceBitDepth = sourceBitDepth,
+                            outputSampleRate = outputSampleRate,
+                            outputBitDepth = outputBitDepth,
+                            uacVersion = uacVersion,
+                            claimedInterfaces = claimedInterfaces,
+                            isSampleRateUnverified = isSampleRateUnverified,
+                            negotiatedSampleRate = negotiatedSampleRate,
+                            recentErrorCount = recentErrorCount,
+                            supportedSampleRates = supportedSampleRates,
+                            supportedBitDepths = supportedBitDepths,
+                            refusedTrackHistory = refusedTrackHistory,
+                            onClose = { showSystemLogs = false }
+                        )
+                    }
+                }
             }
         }
-        Divider(color = Color(0xFF1a3a26), thickness = 1.dp)
+
+        if (showHelpPanel) {
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.Center,
+                onDismissRequest = { showHelpPanel = false },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.65f))
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null
+                        ) { showHelpPanel = false }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(horizontal = 16.dp, vertical = 24.dp)
+                            .fillMaxWidth(0.94f)
+                            .fillMaxHeight(0.85f)
+                            .background(androidx.compose.ui.graphics.Color(0xFF0C0C0C), shape = RoundedCornerShape(8.dp))
+                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = null
+                            ) {}
+                    ) {
+                        HelpPanel(onClose = { showHelpPanel = false })
+                    }
+                }
+            }
+        }
+
+        if (showQueuePanel) {
+            val upcomingTracks = remember(priorityQueue, currentTrack, activeList) {
+                val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) filesInDir.filter { !it.isDirectory } else playlistPaths.map { File(it) }
+                val currentIndex = currentActiveList.indexOfFirst { it.absolutePath == currentTrack?.file?.absolutePath }
+                if (currentIndex != -1 && currentIndex + 1 < currentActiveList.size) {
+                    currentActiveList.subList(currentIndex + 1, currentActiveList.size)
+                } else {
+                    emptyList()
+                }
+            }
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.Center,
+                onDismissRequest = { showQueuePanel = false },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.65f))
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null
+                        ) { showQueuePanel = false }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(horizontal = 16.dp, vertical = 24.dp)
+                            .fillMaxWidth(0.94f)
+                            .fillMaxHeight(0.85f)
+                            .background(androidx.compose.ui.graphics.Color(0xFF0C0C0C), shape = RoundedCornerShape(8.dp))
+                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = null
+                            ) {}
+                    ) {
+                        QueuePanel(
+                            currentTrack = currentTrack,
+                            priorityQueue = priorityQueue,
+                            upcomingTracks = upcomingTracks,
+                            onRemoveFromQueue = { idx ->
+                                if (idx in priorityQueue.indices) {
+                                    priorityQueue = priorityQueue.filterIndexed { i, _ -> i != idx }
+                                    com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = priorityQueue
+                                }
+                            },
+                            onClearQueue = {
+                                priorityQueue = emptyList()
+                                com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = emptyList()
+                            },
+                            onSelectTrack = { file ->
+                                showQueuePanel = false
+                                playTrack(file, false)
+                            },
+                            onClose = { showQueuePanel = false }
+                        )
+                    }
+                }
+            }
+        }
+
+        if (trackActionTarget != null) {
+            val target = trackActionTarget!!
+            val inPlaylist = playlistSet.contains(target.absolutePath)
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.Center,
+                onDismissRequest = { trackActionTarget = null },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.65f))
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null
+                        ) { trackActionTarget = null }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(horizontal = 24.dp)
+                            .fillMaxWidth(0.9f)
+                            .background(androidx.compose.ui.graphics.Color(0xFF0C0C0C), shape = RoundedCornerShape(8.dp))
+                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = null
+                            ) {}
+                            .padding(16.dp)
+                    ) {
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "TRACK OPTIONS",
+                                    color = LocalAccentColor.current,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = TerminalFont
+                                )
+                                Text(
+                                    "✕",
+                                    color = TerminalGray,
+                                    fontSize = 12.sp,
+                                    fontFamily = TerminalFont,
+                                    modifier = Modifier.clickable { trackActionTarget = null }.padding(4.dp)
+                                )
+                            }
+                            Text(
+                                text = target.nameWithoutExtension.ifEmpty { target.name },
+                                color = TerminalWhite,
+                                fontSize = 11.sp,
+                                fontFamily = TerminalFont,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
+                            )
+                            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(LocalAccentColor.current.copy(alpha = 0.25f)))
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            RetroActionItem(
+                                icon = "▶",
+                                label = "PLAY NOW",
+                                onClick = {
+                                    trackActionTarget = null
+                                    playTrack(target, false)
+                                }
+                            )
+                            RetroActionItem(
+                                icon = "⏩",
+                                label = "PLAY NEXT (TOP OF QUEUE)",
+                                onClick = {
+                                    priorityQueue = listOf(target) + priorityQueue
+                                    com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = priorityQueue
+                                    trackActionTarget = null
+                                    Toast.makeText(context, "Added as next track", Toast.LENGTH_SHORT).show()
+                                }
+                            )
+                            RetroActionItem(
+                                icon = "☰",
+                                label = "ADD TO QUEUE",
+                                onClick = {
+                                    priorityQueue = priorityQueue + target
+                                    com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = priorityQueue
+                                    trackActionTarget = null
+                                    Toast.makeText(context, "Added to queue (#${priorityQueue.size})", Toast.LENGTH_SHORT).show()
+                                }
+                            )
+                            if (inPlaylist) {
+                                RetroActionItem(
+                                    icon = "✕",
+                                    label = "REMOVE FROM PLAYLIST",
+                                    isDestructive = true,
+                                    onClick = {
+                                        val pathToRemove = target.absolutePath
+                                        trackActionTarget = null
+                                        coroutineScope.launch(Dispatchers.IO) {
+                                            val newPaths = removePlaylist(context, pathToRemove, playlistPaths)
+                                            withContext(Dispatchers.Main) {
+                                                playlistPaths = newPaths
+                                                Toast.makeText(context, "Removed from playlist", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                )
+                            } else {
+                                RetroActionItem(
+                                    icon = "★",
+                                    label = "ADD TO PLAYLIST",
+                                    onClick = {
+                                        val pathToAdd = target.absolutePath
+                                        trackActionTarget = null
+                                        coroutineScope.launch(Dispatchers.IO) {
+                                            val added = appendPlaylist(context, pathToAdd, playlistSet)
+                                            if (added) {
+                                                val newPaths = loadPlaylist(context)
+                                                withContext(Dispatchers.Main) {
+                                                    playlistPaths = newPaths
+                                                    Toast.makeText(context, "Added to playlist", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         val sharedOnTogglePlay: () -> Unit = {
             if (isPlaying) {
@@ -830,14 +1287,8 @@ fun KewApp(audioEngine: AudioEngine) {
                     }
                 },
                 onFileLongPressed = { file ->
-                    coroutineScope.launch(Dispatchers.IO) {
-                        val added = appendPlaylist(context, file.absolutePath, playlistSet)
-                        if (added) {
-                            val newPaths = loadPlaylist(context)
-                            withContext(Dispatchers.Main) {
-                                playlistPaths = newPaths
-                            }
-                        }
+                    if (!file.isDirectory) {
+                        trackActionTarget = file
                     }
                 },
                 modifier = Modifier.weight(1f)
@@ -846,6 +1297,18 @@ fun KewApp(audioEngine: AudioEngine) {
             PlaylistView(
                 playlistPaths = playlistPaths,
                 playingFile = currentTrack?.file,
+                isShuffleEnabled = isShuffleEnabled,
+                repeatMode = repeatMode,
+                priorityQueueSize = priorityQueue.size,
+                onToggleShuffle = { isShuffleEnabled = !isShuffleEnabled },
+                onCycleRepeat = {
+                    repeatMode = when (repeatMode) {
+                        RepeatMode.OFF -> RepeatMode.ALL
+                        RepeatMode.ALL -> RepeatMode.ONE
+                        RepeatMode.ONE -> RepeatMode.OFF
+                    }
+                },
+                onOpenQueue = { showQueuePanel = true },
                 onFileSelected = { file ->
                     currentPlaybackSourceStr = PlaybackSource.PLAYLIST.name
                     playTrack(file, false)
@@ -858,6 +1321,17 @@ fun KewApp(audioEngine: AudioEngine) {
                         }
                     }
                 },
+                onClearPlaylist = {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        clearPlaylist(context)
+                        withContext(Dispatchers.Main) {
+                            playlistPaths = emptyList()
+                        }
+                    }
+                },
+                onTrackLongPressed = { file ->
+                    trackActionTarget = file
+                },
                 modifier = Modifier.weight(1f)
             )
         } else if (viewState == ViewState.TRACK) {
@@ -866,6 +1340,9 @@ fun KewApp(audioEngine: AudioEngine) {
                 playbackPosition = playbackPosition,
                 isPlaying = isPlaying,
                 currentVolume = currentVolume,
+                isShuffleEnabled = isShuffleEnabled,
+                repeatMode = repeatMode,
+                priorityQueueSize = priorityQueue.size,
                 onTogglePlay = sharedOnTogglePlay,
                 onVolumeChange = { vol -> 
                     currentVolume = vol
@@ -887,180 +1364,36 @@ fun KewApp(audioEngine: AudioEngine) {
                         audioManager.abandonAudioFocus(focusChangeListener)
                     }
                 },
+                onToggleShuffle = { isShuffleEnabled = !isShuffleEnabled },
+                onCycleRepeat = {
+                    repeatMode = when (repeatMode) {
+                        RepeatMode.OFF -> RepeatMode.ALL
+                        RepeatMode.ALL -> RepeatMode.ONE
+                        RepeatMode.ONE -> RepeatMode.OFF
+                    }
+                },
+                onOpenQueue = { showQueuePanel = true },
                 modifier = Modifier.weight(1f)
             )
         } else {
             // Settings View
-            var showExitDialog by remember { mutableStateOf(false) }
-            val dacName = remember(viewState) {
-                // Determine DAC name using UsbManager instead of AudioManager
-                val devices = usbManager.deviceList.values
-                val audioDevice = devices.find { device ->
-                    var hasAudioInterface = false
-                    for (i in 0 until device.interfaceCount) {
-                        if (device.getInterface(i).interfaceClass == android.hardware.usb.UsbConstants.USB_CLASS_AUDIO) {
-                            hasAudioInterface = true
-                            break
-                        }
-                    }
-                    hasAudioInterface
-                }
-                audioDevice?.productName ?: "Unknown DAC"
-            }
-
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxSize()
-                    .padding(24.dp)
-                    .verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.Start,
-                verticalArrangement = Arrangement.Top
-            ) {
-                Text(
-                    text = "[ SYSTEM LOGS & SETTINGS ]", 
-                    color = TerminalWhite, 
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = TerminalFont
-                )
-                Spacer(modifier = Modifier.height(32.dp))
-                
-                // 1. DEVICE STATUS
-                Text("[ DEVICE STATUS ]", color = TerminalGray, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
-                Text("DAC Name : $dacName", color = TerminalWhite, fontFamily = TerminalFont)
-                if (isDeviceWedged) {
-                    Text("Status   : ERROR / WEDGED", color = Color.Red, fontFamily = TerminalFont)
-                } else if (isDacConnected) {
-                    Text("Status   : ACTIVE (Exclusive)", color = MaterialTheme.colorScheme.primary, fontFamily = TerminalFont)
-                    Text("Engine   : libusb UAC2", color = TerminalWhite, fontFamily = TerminalFont)
-                } else {
-                    Text("Status   : DISCONNECTED", color = TerminalGray, fontFamily = TerminalFont)
-                }
-                Text("-----------------------------", color = TerminalGray, fontFamily = TerminalFont)
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // 2. SIGNAL PATH (LIVE I/O)
-                Text("[ SIGNAL PATH ]", color = TerminalGray, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
-                if (isPlaying) {
-                    val srcStr = if (sourceSampleRate > 0) "$sourceBitDepth-Bit / ${sourceSampleRate/1000.0}kHz" else "--"
-                    val outStr = if (outputSampleRate > 0) "$outputBitDepth-Bit / ${outputSampleRate/1000.0}kHz" else "--"
-                    Text("Input  : $srcStr", color = TerminalWhite, fontFamily = TerminalFont)
-                    Text("Output : $outStr", color = TerminalWhite, fontFamily = TerminalFont)
-                    
-                    if (sourceSampleRate > 0 && sourceSampleRate == outputSampleRate && sourceBitDepth == outputBitDepth) {
-                        Text("Result : [ ✓ BIT-PERFECT ]", color = Color(0xFF55FF55), fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
-                    } else if (sourceSampleRate > 0) {
-                        Text("Result : [ ✗ RESAMPLING ]", color = Color(0xFFFF5555), fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
-                    } else {
-                        Text("Result : --", color = TerminalGray, fontFamily = TerminalFont)
-                    }
-                } else {
-                    Text("(Playback stopped)", color = TerminalGray, fontFamily = TerminalFont)
-                }
-                Text("-----------------------------", color = TerminalGray, fontFamily = TerminalFont)
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // 3. DIAGNOSTICS & CAPABILITIES
-                Text("[ DIAGNOSTICS ]", color = TerminalGray, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
-                if (isDacConnected) {
-                    Text("UAC Ver  : UAC$uacVersion", color = TerminalWhite, fontFamily = TerminalFont)
-                    Text("Iface    : $claimedInterfaces", color = TerminalWhite, fontFamily = TerminalFont)
-                    if (isSampleRateUnverified) {
-                        Text("Rate     : ${negotiatedSampleRate/1000.0}kHz (Unverified)", color = Color(0xFFe6cc98), fontFamily = TerminalFont)
-                    } else {
-                        Text("Rate     : ${negotiatedSampleRate/1000.0}kHz", color = TerminalWhite, fontFamily = TerminalFont)
-                    }
-                    Text("Errors   : $recentErrorCount", color = if (recentErrorCount == 0) TerminalWhite else Color.Red, fontFamily = TerminalFont)
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                        Text("Supp. Hz : ", color = TerminalWhite, fontFamily = TerminalFont)
-                        val formattedRates = if (supportedSampleRates.isNotEmpty()) {
-                            supportedSampleRates.split(",").mapNotNull { it.trim().toIntOrNull() }
-                                .map { if (it % 1000 == 0) "${it/1000}k" else "${it/1000.0}k" }
-                                .joinToString(", ")
-                        } else "--"
-                        Text(formattedRates, color = MaterialTheme.colorScheme.primary, fontFamily = TerminalFont)
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                        Text("Supp. Bit: ", color = TerminalWhite, fontFamily = TerminalFont)
-                        Text(if (supportedBitDepths.isNotEmpty()) supportedBitDepths else "--", color = MaterialTheme.colorScheme.primary, fontFamily = TerminalFont)
-                    }
-                } else {
-                    Text("No diagnostics available", color = TerminalGray, fontFamily = TerminalFont)
-                }
-                Text("-----------------------------", color = TerminalGray, fontFamily = TerminalFont)
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // 4. REFUSED TRACKS
-                if (refusedTrackHistory.isNotEmpty()) {
-                    Text("[ REFUSED TRACKS ]", color = Color.Red, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
-                    refusedTrackHistory.forEachIndexed { index, track ->
-                        Text("${index + 1}. \"${track.filename}\" - ${track.bitDepth}-Bit/${track.sampleRate/1000.0}kHz", color = TerminalWhite, fontFamily = TerminalFont)
-                        Text("   ${track.reason}", color = Color.Red, fontFamily = TerminalFont, fontSize = 12.sp)
-                    }
-                    Text("-----------------------------", color = Color.Red, fontFamily = TerminalFont)
-                    Spacer(modifier = Modifier.height(24.dp))
-                }
-                
-                // 5. MEMORY & DSP
-                Text("[ ENGINE CONFIGURATION ]", color = TerminalGray, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
-                Text("RAM Play: ON (Zero Jitter)", color = MaterialTheme.colorScheme.primary, fontFamily = TerminalFont)
-                Text("Gapless : ON (Pre-Loaded)", color = MaterialTheme.colorScheme.primary, fontFamily = TerminalFont)
-                Text("DSP     : BYPASSED", color = MaterialTheme.colorScheme.primary, fontFamily = TerminalFont)
-                Text("-----------------------------", color = TerminalGray, fontFamily = TerminalFont)
-
-                
-                Spacer(modifier = Modifier.height(32.dp))
-                
-                if (isDacConnected) {
-                    Button(
-                        onClick = { showExitDialog = true },
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color.Red.copy(alpha = 0.7f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "KILL ENGINE & RELEASE DAC",
-                            fontFamily = TerminalFont,
-                            color = Color.White
-                        )
-                    }
-
-                    if (showExitDialog) {
-                        androidx.compose.material3.AlertDialog(
-                            onDismissRequest = { showExitDialog = false },
-                            title = { Text(text = "WARNING", fontFamily = TerminalFont, fontWeight = FontWeight.Bold) },
-                            text = { Text(text = "Are you sure you want to release the DAC and exit the audio engine?", fontFamily = TerminalFont) },
-                            confirmButton = {
-                                androidx.compose.material3.TextButton(
-                                    onClick = {
-                                        showExitDialog = false
-                                        val intent = Intent(context, com.yuka.musicplayer.audio.AudioForegroundService::class.java).apply {
-                                            action = "ACTION_STOP"
-                                        }
-                                        context.startService(intent)
-                                    }
-                                ) {
-                                    Text("YES", fontFamily = TerminalFont, color = Color.Red)
-                                }
-                            },
-                            dismissButton = {
-                                androidx.compose.material3.TextButton(onClick = { showExitDialog = false }) {
-                                    Text("CANCEL", fontFamily = TerminalFont)
-                                }
-                            }
-                        )
-                    }
-                }
-            }
-        }
-        
-        if (currentTrack != null && (viewState == ViewState.LIBRARY || viewState == ViewState.PLAYLIST)) {
-            Divider(color = Color(0xFF1a3a26), thickness = 1.dp, modifier = Modifier.padding(vertical = 10.dp))
-            MiniPlayerView(
-                track = currentTrack!!,
-                isPlaying = isPlaying,
-                onTogglePlay = sharedOnTogglePlay,
-                onNavigateToNowPlaying = { viewState = ViewState.TRACK }
+            SettingsView(
+                prefs = sharedPref,
+                bgMode = bgMode,
+                onBgModeChange = { bgMode = it },
+                fontScale = fontScale,
+                onFontScaleChange = { fontScale = it },
+                hapticEnabled = hapticEnabled,
+                onHapticChange = { hapticEnabled = it },
+                keepAwake = keepAwake,
+                onKeepAwakeChange = { keepAwake = it },
+                defaultScreen = defaultScreenStr,
+                onDefaultScreenChange = { defaultScreenStr = it },
+                accentMode = accentMode,
+                onAccentModeChange = { accentMode = it },
+                accentFixedColorStr = accentFixedColorStr,
+                onAccentFixedColorChange = { accentFixedColorStr = it },
+                modifier = Modifier.weight(1f)
             )
         }
         
@@ -1069,8 +1402,958 @@ fun KewApp(audioEngine: AudioEngine) {
             onNavClick = { viewState = it }
         )
     }
+        } // End Box wrapper
+    } // End CompositionLocalProvider
+} // End KewApp
+
+
+@Composable
+fun AppHeader(
+    viewState: ViewState,
+    isHardwareVolumeActive: Boolean,
+    isForceSoftwareVolume: Boolean,
+    isHardwareVolumeLockedBySystem: Boolean,
+    onToggleLogs: () -> Unit,
+    onToggleHelp: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+    ) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            val tsrossaAscii = """
+                 _                                
+                | |_ ___ _ __ ___  ___ ___  __ _  
+                | __/ __| '__/ _ \/ __/ __|/ _` | 
+                | |_\__ \ | | (_) \__ \__ \ (_| | 
+                 \__|___/_|  \___/|___/___/\__,_| 
+            """.trimIndent()
+            
+            Text(
+                text = tsrossaAscii,
+                fontFamily = TerminalFont,
+                fontWeight = FontWeight.Normal,
+                color = LocalAccentColor.current,
+                lineHeight = 12.sp,
+                fontSize = 11.sp,
+                softWrap = false,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, bottom = 14.dp),
+                textAlign = TextAlign.Center
+            )
+            
+            Row(
+                modifier = Modifier.align(Alignment.TopEnd),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                        .background(LocalAccentColor.current.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+                        .clickable { onToggleHelp() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("?", color = LocalAccentColor.current, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("HELP", color = TerminalWhite, fontSize = 10.sp, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                        .background(LocalAccentColor.current.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+                        .clickable { onToggleLogs() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("⚙", color = LocalAccentColor.current, fontSize = 11.sp)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("LOGS", color = TerminalWhite, fontSize = 10.sp, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+        val hwVolumeText = if (isForceSoftwareVolume) {
+            "Software Attenuation (Dithered)"
+        } else if (isHardwareVolumeActive) {
+            "Hardware Bit-Perfect Volume"
+        } else if (isHardwareVolumeLockedBySystem) {
+            "Software Attenuation (Hardware Volume unavailable — Audio Control locked by system)"
+        } else {
+            "Software Attenuation (Dithered)"
+        }
+        val isBitPerfect = isHardwareVolumeActive && !isForceSoftwareVolume
+        val statusColor = if (isBitPerfect) androidx.compose.ui.graphics.Color(0xFFFFD700) else androidx.compose.ui.graphics.Color(0xFFf87171)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 4.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .background(statusColor, CircleShape)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = hwVolumeText,
+                fontFamily = TerminalFont,
+                fontSize = 10.sp,
+                color = statusColor,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        
+        val hintText = when (viewState) {
+            ViewState.LIBRARY -> "Tap:Play · Long-press:Add to playlist · ★=in playlist"
+            ViewState.PLAYLIST -> "Tap:Play · Order:added time"
+            else -> ""
+        }
+        if (hintText.isNotEmpty()) {
+            Text(
+                text = hintText,
+                fontFamily = TerminalFont,
+                fontSize = 9.sp,
+                color = LocalAccentColor.current.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+        }
+    }
+    Divider(color = LocalAccentColor.current.copy(alpha = 0.25f), thickness = 1.dp)
 }
 
+@Composable
+fun LogSectionHeader(title: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 14.dp, bottom = 4.dp)
+    ) {
+        Text(
+            text = "— $title —",
+            color = LocalAccentColor.current,
+            fontFamily = TerminalFont,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Divider(
+            modifier = Modifier.weight(1f),
+            color = LocalAccentColor.current.copy(alpha = 0.25f),
+            thickness = 1.dp
+        )
+    }
+}
+
+@Composable
+fun LogItem(label: String, value: String, valueColor: Color = TerminalWhite) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = TerminalGray,
+            fontFamily = TerminalFont,
+            fontSize = 11.sp
+        )
+        Text(
+            text = value,
+            color = valueColor,
+            fontFamily = TerminalFont,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.End,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+fun LogMultilineItem(label: String, value: String, valueColor: Color = LocalAccentColor.current) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+    ) {
+        Text(
+            text = label,
+            color = TerminalGray,
+            fontFamily = TerminalFont,
+            fontSize = 11.sp
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = value,
+            color = valueColor,
+            fontFamily = TerminalFont,
+            fontSize = 10.sp,
+            lineHeight = 14.sp
+        )
+    }
+}
+
+@Composable
+fun SystemLogsPanel(
+    audioEngine: AudioEngine,
+    viewState: ViewState,
+    context: android.content.Context,
+    usbManager: android.hardware.usb.UsbManager,
+    isDeviceWedged: Boolean,
+    isDacConnected: Boolean,
+    isPlaying: Boolean,
+    sourceSampleRate: Int,
+    sourceBitDepth: Int,
+    outputSampleRate: Int,
+    outputBitDepth: Int,
+    uacVersion: Int,
+    claimedInterfaces: String,
+    isSampleRateUnverified: Boolean,
+    negotiatedSampleRate: Int,
+    recentErrorCount: Int,
+    supportedSampleRates: String,
+    supportedBitDepths: String,
+    refusedTrackHistory: List<RefusedTrackEntry>,
+    onClose: () -> Unit
+) {
+    var showExitDialog by remember { mutableStateOf(false) }
+    val dacName = remember(viewState) {
+        val devices = usbManager.deviceList.values
+        val audioDevice = devices.find { device ->
+            var hasAudioInterface = false
+            for (i in 0 until device.interfaceCount) {
+                if (device.getInterface(i).interfaceClass == android.hardware.usb.UsbConstants.USB_CLASS_AUDIO) {
+                    hasAudioInterface = true
+                    break
+                }
+            }
+            hasAudioInterface
+        }
+        audioDevice?.productName ?: "Unknown DAC"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // --- Header Bar ---
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(
+                            if (isDacConnected && !isDeviceWedged) LocalAccentColor.current else androidx.compose.ui.graphics.Color.Red,
+                            shape = CircleShape
+                        )
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "SYSTEM LOGS & DIAGNOSTICS", 
+                    color = TerminalWhite, 
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont,
+                    letterSpacing = 0.5.sp
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .border(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                    .clickable { onClose() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "✕ CLOSE",
+                    color = androidx.compose.ui.graphics.Color.Red,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont
+                )
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(10.dp))
+        Divider(color = LocalAccentColor.current.copy(alpha = 0.2f), thickness = 1.dp)
+        
+        // --- Scrollable Diagnostics Body ---
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.Start,
+            verticalArrangement = Arrangement.Top
+        ) {
+            // Section 1: Hardware & Device
+            LogSectionHeader("DEVICE & HARDWARE")
+            LogItem("DAC Model", dacName, TerminalWhite)
+            if (isDeviceWedged) {
+                LogItem("USB Status", "ERROR / WEDGED", androidx.compose.ui.graphics.Color.Red)
+            } else if (isDacConnected) {
+                LogItem("USB Status", "ACTIVE (Exclusive)", LocalAccentColor.current)
+                LogItem("Driver Engine", "libusb UAC2 (Native)", TerminalWhite)
+                LogItem("UAC Protocol", "UAC$uacVersion", TerminalWhite)
+                LogItem("Claimed Ifaces", if (claimedInterfaces.isNotEmpty()) claimedInterfaces else "--", TerminalWhite)
+            } else {
+                LogItem("USB Status", "DISCONNECTED", TerminalGray)
+            }
+
+            // Section 2: Signal Path
+            LogSectionHeader("SIGNAL PATH")
+            if (isPlaying) {
+                LogItem("Stream State", "PLAYING", LocalAccentColor.current)
+                val srcStr = if (sourceSampleRate > 0) "$sourceBitDepth-Bit / ${sourceSampleRate / 1000.0} kHz" else "--"
+                val outStr = if (outputSampleRate > 0) "$outputBitDepth-Bit / ${outputSampleRate / 1000.0} kHz" else "--"
+                LogItem("Input Stream", srcStr, TerminalWhite)
+                LogItem("DAC Output", outStr, TerminalWhite)
+                
+                if (sourceSampleRate > 0 && sourceSampleRate == outputSampleRate && sourceBitDepth == outputBitDepth) {
+                    LogItem("Transmission", "[ ✓ BIT-PERFECT ]", androidx.compose.ui.graphics.Color(0xFF55FF55))
+                } else if (sourceSampleRate > 0) {
+                    LogItem("Transmission", "[ ✗ RESAMPLED ]", androidx.compose.ui.graphics.Color(0xFFFF5555))
+                }
+                
+                val rateText = if (isSampleRateUnverified) {
+                    "${negotiatedSampleRate / 1000.0} kHz (Unverified)"
+                } else {
+                    "${negotiatedSampleRate / 1000.0} kHz"
+                }
+                LogItem("Hardware Clock", rateText, if (isSampleRateUnverified) LocalAccentColor.current else TerminalWhite)
+                LogItem("I/O Error Count", "$recentErrorCount", if (recentErrorCount == 0) TerminalWhite else androidx.compose.ui.graphics.Color.Red)
+            } else {
+                LogItem("Stream State", "STOPPED / STANDBY", TerminalGray)
+                if (isDacConnected && negotiatedSampleRate > 0) {
+                    LogItem("Last Active Clock", "${negotiatedSampleRate / 1000.0} kHz", TerminalGray)
+                }
+                LogItem("I/O Error Count", "$recentErrorCount", if (recentErrorCount == 0) TerminalGray else androidx.compose.ui.graphics.Color.Red)
+            }
+
+            // Section 3: DAC Capabilities
+            if (isDacConnected) {
+                LogSectionHeader("DAC CAPABILITIES")
+                val formattedRates = if (supportedSampleRates.isNotEmpty()) {
+                    supportedSampleRates.split(",").mapNotNull { it.trim().toIntOrNull() }
+                        .map { if (it % 1000 == 0) "${it / 1000}k" else "${it / 1000.0}k" }
+                        .joinToString(", ")
+                } else "--"
+                LogMultilineItem("Supported Rates", formattedRates, LocalAccentColor.current)
+                LogItem("Supported Bit", if (supportedBitDepths.isNotEmpty()) supportedBitDepths else "--", LocalAccentColor.current)
+            }
+
+            // Section 4: Engine Config
+            LogSectionHeader("ENGINE CONFIGURATION")
+            LogItem("RAM Playback", "ACTIVE (Zero Jitter)", LocalAccentColor.current)
+            LogItem("Gapless Engine", "ACTIVE (Direct Handover)", LocalAccentColor.current)
+            LogItem("DSP Pipeline", "BYPASSED (Bit-Perfect)", LocalAccentColor.current)
+
+            // Section 5: Refused Tracks (if any)
+            if (refusedTrackHistory.isNotEmpty()) {
+                LogSectionHeader("REFUSED TRACKS (${refusedTrackHistory.size})")
+                refusedTrackHistory.forEachIndexed { index, track ->
+                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Text(
+                            text = "${index + 1}. \"${track.filename}\"",
+                            color = TerminalWhite,
+                            fontFamily = TerminalFont,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "   Format: ${track.bitDepth}-Bit / ${track.sampleRate / 1000.0} kHz",
+                            color = TerminalGray,
+                            fontFamily = TerminalFont,
+                            fontSize = 10.sp
+                        )
+                        Text(
+                            text = "   Reason: ${track.reason}",
+                            color = androidx.compose.ui.graphics.Color.Red,
+                            fontFamily = TerminalFont,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(20.dp))
+            
+            // Section 6: Kill Engine Action
+            if (isDacConnected) {
+                Button(
+                    onClick = { showExitDialog = true },
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.75f)),
+                    shape = RoundedCornerShape(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "KILL ENGINE & RELEASE DAC",
+                        fontFamily = TerminalFont,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = androidx.compose.ui.graphics.Color.White
+                    )
+                }
+
+                if (showExitDialog) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { showExitDialog = false },
+                        title = { Text(text = "RELEASE DAC & STOP", fontFamily = TerminalFont, fontWeight = FontWeight.Bold) },
+                        text = { Text(text = "Are you sure you want to release the USB DAC interface and stop audio service?", fontFamily = TerminalFont, fontSize = 12.sp) },
+                        confirmButton = {
+                            androidx.compose.material3.TextButton(
+                                onClick = {
+                                    showExitDialog = false
+                                    val intent = Intent(context, com.yuka.musicplayer.audio.AudioForegroundService::class.java).apply {
+                                        action = "ACTION_STOP"
+                                    }
+                                    context.startService(intent)
+                                }
+                            ) {
+                                Text("RELEASE", fontFamily = TerminalFont, color = androidx.compose.ui.graphics.Color.Red, fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        dismissButton = {
+                            androidx.compose.material3.TextButton(onClick = { showExitDialog = false }) {
+                                Text("CANCEL", fontFamily = TerminalFont)
+                            }
+                        }
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+
+@Composable
+fun HelpItem(title: String, desc: String) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(
+            text = "• $title",
+            color = LocalAccentColor.current,
+            fontFamily = TerminalFont,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = desc,
+            color = TerminalWhite.copy(alpha = 0.85f),
+            fontFamily = TerminalFont,
+            fontSize = 10.sp,
+            lineHeight = 14.sp,
+            modifier = Modifier.padding(start = 10.dp, top = 2.dp)
+        )
+    }
+}
+
+@Composable
+fun HelpPanel(onClose: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .border(1.dp, LocalAccentColor.current, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("?", color = LocalAccentColor.current, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "TSROSSA USER MANUAL",
+                    color = TerminalWhite,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont,
+                    letterSpacing = 0.5.sp
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .border(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                    .background(androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
+                    .clickable { onClose() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text("✕ CLOSE", color = androidx.compose.ui.graphics.Color.Red, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(LocalAccentColor.current.copy(alpha = 0.25f)))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            item {
+                LogSectionHeader("01. USB DAC & AUDIO BIT-PERFECT")
+                HelpItem("Bit-Perfect UAC2 Streaming", "Audio dialirkan langsung ke hardware DAC eksternal melalui USB Isochronous libusb eksklusif, melewati audio mixer & resampler Android demi kemurnian sinyal 100%.")
+                HelpItem("Indikator Titik Volume (Dot)", "🟡 Emas: 32-bit hardware volume control di chip DAC aktif.\n🔴 Merah: 64-bit dithered software attenuation.")
+                HelpItem("Mode DND (Do Not Disturb)", "Mengheningkan notifikasi suara sistem secara otomatis saat musik diputar untuk mencegah gangguan audio pada stream bit-perfect.")
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            item {
+                LogSectionHeader("02. KONTROL TRANSPORT & VOLUME")
+                HelpItem("Navigasi Playback", "[ |<< ] Track Sebelumnya / Replay | [ ▶ / ❚❚ ] Play/Pause | [ >>| ] Track Berikutnya.")
+                HelpItem("Kontrol Volume Presisi", "Tombol [-] dan [+] mengatur level volume secara presisi bertahap 5%.")
+                HelpItem("Gapless Playback Engine", "Engine C++ otomatis me-load lagu berikutnya ke memori buffer sebelum lagu saat ini selesai untuk transisi 0-jeda tanpa jeda hening.")
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            item {
+                LogSectionHeader("03. SHUFFLE, REPEAT & QUEUE")
+                HelpItem("🔀 Shuffle (Acak)", "Mengacak urutan putar lagu secara non-destruktif tanpa merusak urutan asli file atau daftar putar.")
+                HelpItem("🔁 Repeat (3 Mode)", "• OFF: Memutar hingga lagu terakhir dan berhenti.\n• ALL: Mengulang daftar playlist dari awal saat lagu terakhir usai.\n• 1: Mengulang lagu saat ini terus-menerus.")
+                HelpItem("☰ Playback Queue (Antrean Prioritas)", "Lagu di antrean ini akan selalu diputar terlebih dahulu sebelum kembali ke urutan normal. Ketuk tombol [ ☰ QUEUE ] untuk melihat & mengelola antrean.")
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            item {
+                LogSectionHeader("04. LIBRARY & PLAYLIST GESTURES")
+                HelpItem("Pemutaran Lagu", "Ketuk sekali pada file audio untuk langsung memutarnya.")
+                HelpItem("Menu Aksi Cepat (Long-Press)", "Tekan dan tahan (long-press) lagu apa pun di Library atau Playlist untuk membuka menu: Play Now, Play Next, Add to Queue, atau Add/Remove Playlist.")
+                HelpItem("Navigasi Folder & Pencarian", "Ketuk 📁 [ .. ] untuk naik satu tingkat folder. Gunakan search bar > SEARCH FILES... untuk memfilter file seketika.")
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            item {
+                LogSectionHeader("05. TEMA TAMPILAN & PENGATURAN")
+                HelpItem("Warna Aksen Terminal", "• DYNAMIC: Mengekstrak warna aksen dari cover art album.\n• FIXED: Memilih warna tema terminal tetap (Matrix Green, Amber, Cyan, dll.).")
+                HelpItem("Wallpaper Blur", "Memburamkan wallpaper latar HP Anda di belakang interface cyber HUD.")
+                HelpItem("Keep Screen Awake", "Menjaga layar tetap menyala khusus saat berada di layar Now Playing selagi lagu berputar.")
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            item {
+                LogSectionHeader("06. DIAGNOSTIK & SYSTEM LOGS")
+                HelpItem("Panel Log [ ⚙ LOGS ]", "Ketuk tombol [ ⚙ LOGS ] di header atas kapan saja untuk memeriksa detail hardware DAC, sample rate yang ternegosiasi, status clock, dan riwayat file yang tidak kompatibel.")
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun QueuePanel(
+    currentTrack: TrackInfo?,
+    priorityQueue: List<File>,
+    upcomingTracks: List<File>,
+    onRemoveFromQueue: (Int) -> Unit,
+    onClearQueue: () -> Unit,
+    onSelectTrack: (File) -> Unit,
+    onClose: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("☰", color = LocalAccentColor.current, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "PLAY QUEUE & UP NEXT (${priorityQueue.size})",
+                    color = TerminalWhite,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont,
+                    letterSpacing = 0.5.sp
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (priorityQueue.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .border(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                            .clickable { onClearQueue() }
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                    ) {
+                        Text("CLEAR", color = androidx.compose.ui.graphics.Color.Red, fontSize = 9.sp, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .background(androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
+                        .clickable { onClose() }
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text("✕", color = androidx.compose.ui.graphics.Color.Red, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(LocalAccentColor.current.copy(alpha = 0.25f)))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            item {
+                LogSectionHeader("NOW PLAYING")
+                if (currentTrack != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                            .background(LocalAccentColor.current.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("▶", color = LocalAccentColor.current, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(currentTrack.title, color = TerminalWhite, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(currentTrack.artist, color = LocalAccentColor.current, fontSize = 10.sp, fontFamily = TerminalFont, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                } else {
+                    Text("No track actively playing", color = TerminalGray, fontFamily = TerminalFont, fontSize = 10.sp)
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+            }
+
+            item {
+                LogSectionHeader("UP NEXT (PRIORITY QUEUE) [${priorityQueue.size}]")
+            }
+
+            if (priorityQueue.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, TerminalGray.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                            .padding(14.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "[ PRIORITY QUEUE EMPTY ]\nLong-press any track to 'Play Next' or 'Add to Queue'",
+                            color = TerminalGray,
+                            fontFamily = TerminalFont,
+                            fontSize = 10.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
+            } else {
+                items(priorityQueue.mapIndexed { idx, f -> idx to f }) { (idx, file) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp)
+                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                            .background(LocalAccentColor.current.copy(alpha = 0.06f), RoundedCornerShape(4.dp))
+                            .clickable { onSelectTrack(file) }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = String.format("#%02d", idx + 1),
+                            color = LocalAccentColor.current,
+                            fontFamily = TerminalFont,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = file.nameWithoutExtension.ifEmpty { file.name },
+                            color = TerminalWhite,
+                            fontFamily = TerminalFont,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clickable { onRemoveFromQueue(idx) }
+                                .padding(4.dp)
+                        ) {
+                            Text("✕", color = androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.8f), fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+                        }
+                    }
+                }
+                item { Spacer(modifier = Modifier.height(14.dp)) }
+            }
+
+            if (upcomingTracks.isNotEmpty()) {
+                item {
+                    LogSectionHeader("UPCOMING IN PLAYLIST / FOLDER")
+                }
+                items(upcomingTracks.take(8).mapIndexed { idx, f -> idx to f }) { (idx, file) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp)
+                            .clickable { onSelectTrack(file) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "•",
+                            color = TerminalGray,
+                            fontFamily = TerminalFont,
+                            fontSize = 10.sp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = file.nameWithoutExtension.ifEmpty { file.name },
+                            color = TerminalGray.copy(alpha = 0.85f),
+                            fontFamily = TerminalFont,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RetroActionItem(
+    icon: String,
+    label: String,
+    isDestructive: Boolean = false,
+    onClick: () -> Unit
+) {
+    val accent = if (isDestructive) androidx.compose.ui.graphics.Color.Red else LocalAccentColor.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+            .background(accent.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(icon, color = accent, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(label, color = if (isDestructive) accent else TerminalWhite, fontSize = 11.sp, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+fun SettingsView(
+    prefs: android.content.SharedPreferences,
+    bgMode: String,
+    onBgModeChange: (String) -> Unit,
+    fontScale: Float,
+    onFontScaleChange: (Float) -> Unit,
+    hapticEnabled: Boolean,
+    onHapticChange: (Boolean) -> Unit,
+    keepAwake: Boolean,
+    onKeepAwakeChange: (Boolean) -> Unit,
+    defaultScreen: String,
+    onDefaultScreenChange: (String) -> Unit,
+    accentMode: String,
+    onAccentModeChange: (String) -> Unit,
+    accentFixedColorStr: String,
+    onAccentFixedColorChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Text(
+            text = "— SYSTEM & UI PREFERENCES —",
+            color = TerminalWhite,
+            fontSize = 12.sp,
+            letterSpacing = 1.sp,
+            fontFamily = TerminalFont,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        
+        // --- Category 1: THEME & DISPLAY ---
+        LogSectionHeader("THEME & DISPLAY")
+        
+        Text("BACKGROUND STYLE", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RetroButton("SOLID BLACK", {
+                onBgModeChange("BLACK")
+                prefs.edit().putString("bg_mode", "BLACK").apply()
+            }, isSelected = bgMode == "BLACK", modifier = Modifier.weight(1f))
+            
+            RetroButton("BLUR WALLPAPER", {
+                onBgModeChange("BLUR")
+                prefs.edit().putString("bg_mode", "BLUR").apply()
+            }, isSelected = bgMode == "BLUR", modifier = Modifier.weight(1f))
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("ACCENT COLOR MODE", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RetroButton("DYNAMIC (ALBUM)", {
+                onAccentModeChange("DYNAMIC")
+                prefs.edit().putString("accent_mode", "DYNAMIC").apply()
+            }, isSelected = accentMode == "DYNAMIC", modifier = Modifier.weight(1f))
+            
+            RetroButton("FIXED PALETTE", {
+                onAccentModeChange("FIXED")
+                prefs.edit().putString("accent_mode", "FIXED").apply()
+            }, isSelected = accentMode == "FIXED", modifier = Modifier.weight(1f))
+        }
+        
+        if (accentMode == "FIXED") {
+            val colors = listOf("#00FF00", "#00FFFF", "#FF00FF", "#FFFF00", "#FF5555", "#5555FF")
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                colors.forEach { hex ->
+                    val colorObj = try { androidx.compose.ui.graphics.Color(android.graphics.Color.parseColor(hex)) } catch(e:Exception) { androidx.compose.ui.graphics.Color.White }
+                    val isCurrent = accentFixedColorStr == hex
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .border(
+                                2.dp,
+                                if (isCurrent) Color.White else Color.Transparent,
+                                RoundedCornerShape(4.dp)
+                            )
+                            .background(colorObj, RoundedCornerShape(4.dp))
+                            .clickable {
+                                onAccentFixedColorChange(hex)
+                                prefs.edit().putString("accent_fixed_color", hex).apply()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isCurrent) {
+                            Text("✓", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        // --- Category 2: TYPOGRAPHY & TOUCH ---
+        LogSectionHeader("TYPOGRAPHY & TOUCH")
+        
+        Text("GLOBAL FONT SCALE", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            RetroButton("-", { 
+                val newScale = (fontScale - 0.1f).coerceAtLeast(0.8f)
+                onFontScaleChange(newScale)
+                prefs.edit().putFloat("font_scale", newScale).apply()
+            }, modifier = Modifier.width(50.dp))
+            
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .border(1.dp, LocalAccentColor.current.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                    .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "${String.format("%.1f", fontScale)}x",
+                    color = LocalAccentColor.current,
+                    fontFamily = TerminalFont,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp
+                )
+            }
+            
+            RetroButton("+", { 
+                val newScale = (fontScale + 0.1f).coerceAtMost(1.5f)
+                onFontScaleChange(newScale)
+                prefs.edit().putFloat("font_scale", newScale).apply()
+            }, modifier = Modifier.width(50.dp))
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("HAPTIC FEEDBACK (BUTTON TOUCH)", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+            RetroButton(
+                if (hapticEnabled) "[✓] HAPTIC ENABLED" else "[ ] HAPTIC DISABLED",
+                {
+                    onHapticChange(!hapticEnabled)
+                    prefs.edit().putBoolean("haptic_enabled", !hapticEnabled).apply()
+                },
+                isSelected = hapticEnabled,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        // --- Category 3: PLAYBACK & LAUNCH ---
+        LogSectionHeader("PLAYBACK & LAUNCH")
+        
+        Text("KEEP SCREEN AWAKE", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+            RetroButton(
+                if (keepAwake) "[✓] ACTIVE (NOW PLAYING)" else "[ ] DISABLED",
+                {
+                    onKeepAwakeChange(!keepAwake)
+                    prefs.edit().putBoolean("keep_awake", !keepAwake).apply()
+                },
+                isSelected = keepAwake,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("DEFAULT SCREEN ON LAUNCH", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val screens = listOf("LIBRARY", "PLAYLIST", "TRACK")
+            screens.forEach { screen ->
+                val label = if (screen == "TRACK") "NOW PLAYING" else screen
+                RetroButton(
+                    label,
+                    {
+                        onDefaultScreenChange(screen)
+                        prefs.edit().putString("default_screen", screen).apply()
+                    },
+                    isSelected = defaultScreen == screen,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(24.dp))
+    }
+}
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LibraryView(
@@ -1094,49 +2377,74 @@ fun LibraryView(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black)
-            .padding(16.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
-            text = "— LIBRARY —",
+            text = "— FILE LIBRARY —",
             color = Color.White,
             fontSize = 11.sp,
             letterSpacing = 1.sp,
             fontFamily = TerminalFont,
-            modifier = Modifier.padding(bottom = 8.dp)
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 6.dp)
         )
-        TextField(
-            value = searchQuery,
-            onValueChange = onSearchChange,
+        
+        // Styled Search Box
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 16.dp),
-            textStyle = TextStyle(color = Color(0xFF00FF00), fontFamily = TerminalFont),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.Transparent,
-                unfocusedContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color(0xFF00FF00),
-                unfocusedIndicatorColor = Color(0xFF005500),
-                cursorColor = Color(0xFF00FF00)
-            ),
-            placeholder = { Text("[ SEARCH LIBRARY ]", color = Color(0xFF005500), fontFamily = TerminalFont) },
-            singleLine = true
-        )
+                .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                .background(LocalAccentColor.current.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 10.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(">", color = LocalAccentColor.current, fontFamily = TerminalFont, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Spacer(modifier = Modifier.width(6.dp))
+            TextField(
+                value = searchQuery,
+                onValueChange = onSearchChange,
+                modifier = Modifier.weight(1f),
+                textStyle = TextStyle(color = LocalAccentColor.current, fontFamily = TerminalFont, fontSize = 11.sp),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    cursorColor = LocalAccentColor.current
+                ),
+                placeholder = { Text("SEARCH FILES...", color = TerminalGray.copy(alpha = 0.6f), fontFamily = TerminalFont, fontSize = 11.sp) },
+                singleLine = true
+            )
+            if (searchQuery.isNotEmpty()) {
+                Text(
+                    "✕",
+                    color = TerminalGray,
+                    fontSize = 12.sp,
+                    fontFamily = TerminalFont,
+                    modifier = Modifier.clickable { onSearchChange("") }.padding(4.dp)
+                )
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(6.dp))
 
         LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (searchQuery.isEmpty() && currentDirectory.absolutePath != Environment.getExternalStorageDirectory().absolutePath) {
                 item {
-                    Text(
-                        text = "  [..]  (Up to parent)",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = TerminalFont,
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .padding(vertical = 3.dp)
+                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                            .background(LocalAccentColor.current.copy(alpha = 0.06f), RoundedCornerShape(4.dp))
                             .clickable { onFileSelected(File("..")) }
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("📁 [ .. ]", color = LocalAccentColor.current, fontWeight = FontWeight.Bold, fontFamily = TerminalFont, fontSize = 11.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Up to parent folder", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp)
+                    }
                 }
             }
 
@@ -1144,115 +2452,318 @@ fun LibraryView(
                 val isDir = file.isDirectory
                 val isPlaying = file.absolutePath == playingFile?.absolutePath
                 val inPlaylist = playlistSet.contains(file.absolutePath)
-                val prefixStr = if (isDir) "[ DIR ]" else if (inPlaylist) "★" else "☆"
+                val ext = if (isDir) "DIR" else file.extension.uppercase().ifEmpty { "FILE" }
                 val displayName = file.name
                 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .padding(vertical = 2.5.dp)
+                        .border(
+                            1.dp,
+                            if (isPlaying) LocalAccentColor.current.copy(alpha = 0.5f) else Color.Transparent,
+                            RoundedCornerShape(4.dp)
+                        )
+                        .background(
+                            if (isPlaying) LocalAccentColor.current.copy(alpha = 0.12f) else Color.Transparent,
+                            RoundedCornerShape(4.dp)
+                        )
                         .combinedClickable(
                             onClick = { onFileSelected(file) },
                             onLongClick = {
-                                if (!isDir && !inPlaylist) {
+                                if (!isDir) {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onFileLongPressed(file)
                                 }
                             }
                         )
-                        .background(if (isPlaying) Color(0xFF123b25) else Color.Transparent)
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val prefixColor = if (isDir) TerminalWhite else if (isPlaying || inPlaylist) Color(0xFF4ade80) else Color(0xFF3a5a48)
-                    Text(
-                        text = prefixStr,
-                        color = prefixColor,
-                        fontFamily = TerminalFont,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .border(
+                                1.dp,
+                                (if (isDir) TerminalWhite else if (isPlaying) LocalAccentColor.current else TerminalGray).copy(alpha = 0.4f),
+                                RoundedCornerShape(2.dp)
+                            )
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = ext,
+                            color = if (isDir) TerminalWhite else if (isPlaying) LocalAccentColor.current else TerminalGray,
+                            fontSize = 9.sp,
+                            fontFamily = TerminalFont
+                        )
+                    }
                     
-                    val textColor = if (isPlaying) Color(0xFFa7f3c8) else TerminalWhite
-                    val suffix = if (isPlaying && !isDir) " ▶" else ""
+                    Spacer(modifier = Modifier.width(8.dp))
+                    
                     Text(
-                        text = "$displayName$suffix",
-                        color = textColor,
+                        text = displayName,
+                        color = if (isPlaying) LocalAccentColor.current.blendWithWhite(0.7f) else TerminalWhite,
                         style = MaterialTheme.typography.bodyMedium,
                         fontFamily = TerminalFont,
+                        fontSize = 11.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
+                    
+                    if (inPlaylist && !isDir) {
+                        Text("★", color = LocalAccentColor.current, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                    }
+                    
+                    if (isPlaying && !isDir) {
+                        Text("▶", color = LocalAccentColor.current, fontSize = 10.sp, modifier = Modifier.padding(start = 4.dp))
+                    }
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PlaylistView(
     playlistPaths: List<String>,
     playingFile: File?,
+    isShuffleEnabled: Boolean,
+    repeatMode: RepeatMode,
+    priorityQueueSize: Int,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit,
+    onOpenQueue: () -> Unit,
     onFileSelected: (File) -> Unit,
     onFileRemoved: (String) -> Unit,
+    onClearPlaylist: () -> Unit = {},
+    onTrackLongPressed: (File) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black)
-            .padding(16.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        Text(
-            text = "— PLAYLIST —",
-            color = Color.White,
-            fontSize = 11.sp,
-            letterSpacing = 1.sp,
-            fontFamily = TerminalFont,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "— PLAYLIST (${playlistPaths.size}) —",
+                color = Color.White,
+                fontSize = 11.sp,
+                letterSpacing = 1.sp,
+                fontFamily = TerminalFont,
+                fontWeight = FontWeight.Bold
+            )
+            if (playlistPaths.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .clickable { onClearPlaylist() }
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "CLEAR ALL",
+                        color = androidx.compose.ui.graphics.Color.Red,
+                        fontSize = 9.sp,
+                        fontFamily = TerminalFont,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // Playlist Quick Controls Row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .border(
+                        1.dp,
+                        if (isShuffleEnabled) LocalAccentColor.current else LocalAccentColor.current.copy(alpha = 0.25f),
+                        RoundedCornerShape(4.dp)
+                    )
+                    .background(
+                        if (isShuffleEnabled) LocalAccentColor.current.copy(alpha = 0.15f) else Color.Transparent,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .clickable { onToggleShuffle() }
+                    .padding(vertical = 5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (isShuffleEnabled) "🔀 SHUF" else "🔀 OFF",
+                    color = if (isShuffleEnabled) LocalAccentColor.current else TerminalGray,
+                    fontSize = 10.sp,
+                    fontFamily = TerminalFont,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .border(
+                        1.dp,
+                        if (repeatMode != RepeatMode.OFF) LocalAccentColor.current else LocalAccentColor.current.copy(alpha = 0.25f),
+                        RoundedCornerShape(4.dp)
+                    )
+                    .background(
+                        if (repeatMode != RepeatMode.OFF) LocalAccentColor.current.copy(alpha = 0.15f) else Color.Transparent,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .clickable { onCycleRepeat() }
+                    .padding(vertical = 5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                val rText = when (repeatMode) {
+                    RepeatMode.OFF -> "🔁 OFF"
+                    RepeatMode.ALL -> "🔁 ALL"
+                    RepeatMode.ONE -> "🔂 ONE"
+                }
+                Text(
+                    text = rText,
+                    color = if (repeatMode != RepeatMode.OFF) LocalAccentColor.current else TerminalGray,
+                    fontSize = 10.sp,
+                    fontFamily = TerminalFont,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1.3f)
+                    .border(
+                        1.dp,
+                        if (priorityQueueSize > 0) LocalAccentColor.current else LocalAccentColor.current.copy(alpha = 0.25f),
+                        RoundedCornerShape(4.dp)
+                    )
+                    .background(
+                        if (priorityQueueSize > 0) LocalAccentColor.current.copy(alpha = 0.15f) else Color.Transparent,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .clickable { onOpenQueue() }
+                    .padding(vertical = 5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "☰ QUEUE ($priorityQueueSize)",
+                    color = if (priorityQueueSize > 0) LocalAccentColor.current else TerminalWhite,
+                    fontSize = 10.sp,
+                    fontFamily = TerminalFont,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
         
         if (playlistPaths.isEmpty()) {
-            Text(
-                text = "Belum ada lagu di playlist — long-press lagu di Library untuk menambah",
-                color = TerminalGray,
-                fontFamily = TerminalFont,
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 40.dp)
+                    .border(1.dp, TerminalGray.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("[ PLAYLIST EMPTY ]", color = TerminalGray, fontFamily = TerminalFont, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Long-press any audio track in Library\nto add it to your playback queue.",
+                        color = TerminalGray.copy(alpha = 0.7f),
+                        fontFamily = TerminalFont,
+                        fontSize = 10.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
         } else {
             LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 items(playlistPaths.mapIndexed { index, path -> index to path }) { (index, path) ->
                     val file = File(path)
                     val isPlaying = file.absolutePath == playingFile?.absolutePath
-                    val prefix = "[FLAC]"
-                    val displayName = file.name
-                    
-                    val indexStr = (index + 1).toString().padStart(2, ' ')
+                    val ext = file.extension.uppercase().ifEmpty { "AUDIO" }
+                    val displayName = file.nameWithoutExtension.ifEmpty { file.name }
                     
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onFileSelected(file) }
-                            .background(if (isPlaying) Color(0xFF123b25) else Color.Transparent)
-                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                            .padding(vertical = 2.5.dp)
+                            .border(
+                                1.dp,
+                                if (isPlaying) LocalAccentColor.current.copy(alpha = 0.5f) else Color.Transparent,
+                                RoundedCornerShape(4.dp)
+                            )
+                            .background(
+                                if (isPlaying) LocalAccentColor.current.copy(alpha = 0.12f) else Color.Transparent,
+                                RoundedCornerShape(4.dp)
+                            )
+                            .combinedClickable(
+                                onClick = { onFileSelected(file) },
+                                onLongClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onTrackLongPressed(file)
+                                }
+                            )
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val textColor = if (isPlaying) Color(0xFFa7f3c8) else TerminalWhite
-                        val suffix = if (isPlaying) " ▶" else ""
                         Text(
-                            text = "$indexStr. $prefix $displayName$suffix",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = textColor,
+                            text = String.format("%02d.", index + 1),
+                            color = if (isPlaying) LocalAccentColor.current else TerminalGray,
                             fontFamily = TerminalFont,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(end = 6.dp)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .border(1.dp, (if (isPlaying) LocalAccentColor.current else TerminalGray).copy(alpha = 0.4f), RoundedCornerShape(2.dp))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = ext,
+                                color = if (isPlaying) LocalAccentColor.current else TerminalGray,
+                                fontSize = 9.sp,
+                                fontFamily = TerminalFont
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = displayName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isPlaying) LocalAccentColor.current.blendWithWhite(0.7f) else TerminalWhite,
+                            fontFamily = TerminalFont,
+                            fontSize = 11.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
-                        IconButton(
-                            onClick = { onFileRemoved(path) },
-                            modifier = Modifier.size(32.dp)
+                        if (isPlaying) {
+                            Text(
+                                "▶",
+                                color = LocalAccentColor.current,
+                                fontSize = 10.sp,
+                                fontFamily = TerminalFont,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clickable { onFileRemoved(path) }
+                                .padding(4.dp)
                         ) {
-                            Text("X", color = Color.Red, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+                            Text("✕", color = androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.7f), fontWeight = FontWeight.Bold, fontFamily = TerminalFont, fontSize = 11.sp)
                         }
                     }
                 }
@@ -1262,126 +2773,33 @@ fun PlaylistView(
 }
 
 @Composable
-fun SettingsView(
-    audioEngine: AudioEngine,
-    modifier: Modifier = Modifier
+fun RetroButton(
+    text: String,
+    onClick: () -> Unit,
+    color: Color = TerminalWhite,
+    modifier: Modifier = Modifier,
+    isSelected: Boolean = false
 ) {
-    var dacInfoJson by remember { mutableStateOf("{}") }
-    
-    LaunchedEffect(Unit) {
-        while(true) {
-            dacInfoJson = audioEngine.getDacInfo()
-            kotlinx.coroutines.delay(1000)
-        }
-    }
-
-    var productName = "Unknown"
-    var manufacturer = "Unknown"
-    var vid = 0
-    var pid = 0
-    var isHardwareVolumeActive = false
-    var isForceSoftwareVolume = false
-    var uacVersion = 0
-    var isConnected = false
-
-    try {
-        val json = org.json.JSONObject(dacInfoJson)
-        if (json.has("productName")) {
-            isConnected = true
-            productName = json.getString("productName")
-            manufacturer = json.getString("manufacturerName")
-            vid = json.getInt("vid")
-            pid = json.getInt("pid")
-            isHardwareVolumeActive = json.getBoolean("isHardwareVolumeActive")
-            isForceSoftwareVolume = json.getBoolean("isForceSoftwareVolume")
-            uacVersion = json.getInt("uacVersion")
-        }
-    } catch (e: Exception) {
-        // Ignored
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState())
-    ) {
-        Text(
-            text = "— SYSTEM MONITOR —",
-            color = Color.White,
-            fontSize = 11.sp,
-            letterSpacing = 1.sp,
-            fontFamily = TerminalFont,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        val statusColor = if (isConnected) Color(0xFF4CAF50) else Color(0xFFF44336)
-        val statusText = if (isConnected) "CONNECTED" else "DISCONNECTED"
-
-        Text(
-            text = "DAC Status: $statusText",
-            color = statusColor,
-            fontWeight = FontWeight.Bold,
-            fontFamily = TerminalFont,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-
-        if (isConnected) {
-            Text(text = "Manufacturer: $manufacturer", color = TerminalWhite, fontFamily = TerminalFont)
-            Text(text = "Product: $productName", color = TerminalWhite, fontFamily = TerminalFont)
-            Text(text = "VID:PID: 0x${vid.toString(16).uppercase()}:0x${pid.toString(16).uppercase()}", color = TerminalWhite, fontFamily = TerminalFont)
-            Text(text = "UAC Version: UAC$uacVersion", color = TerminalWhite, fontFamily = TerminalFont)
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            val hwVolText = if (isForceSoftwareVolume) {
-                "BLACKLISTED (Forced Software Volume)"
-            } else if (!isHardwareVolumeActive) {
-                "NOT SUPPORTED (Missing UAC2 Volume Feature Unit)"
-            } else {
-                "ACTIVE (Bit-Perfect)"
-            }
-            val hwVolColor = if (isHardwareVolumeActive) Color(0xFF4CAF50) else Color(0xFFF44336)
-            
-            Text(
-                text = "Hardware Volume Control: $hwVolText",
-                color = hwVolColor,
-                fontFamily = TerminalFont,
-                fontWeight = FontWeight.Bold
-            )
-            
-            if (isForceSoftwareVolume) {
-                Text(
-                    text = "Reason: This DAC is known to crash when receiving volume commands while streaming. System has forced standard software volume processing for stability.",
-                    color = TerminalGray,
-                    fontFamily = TerminalFont,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            } else if (!isHardwareVolumeActive) {
-                Text(
-                    text = "Reason: No recognized volume control interfaces were found on this DAC.",
-                    color = TerminalGray,
-                    fontFamily = TerminalFont,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun RetroButton(text: String, onClick: () -> Unit, color: Color = TerminalWhite, modifier: Modifier = Modifier) {
+    val isAccent = isSelected || color == LocalAccentColor.current
     Box(
         modifier = modifier
+            .border(1.dp, if (isAccent) LocalAccentColor.current else color.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+            .background(
+                if (isAccent) LocalAccentColor.current.copy(alpha = 0.15f) else Color.Transparent,
+                RoundedCornerShape(4.dp)
+            )
             .clickable(onClick = onClick)
-            .border(1.dp, color)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(text, color = color, fontFamily = TerminalFont, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Text(
+            text = text,
+            color = if (isAccent) LocalAccentColor.current else color,
+            fontFamily = TerminalFont,
+            fontWeight = if (isAccent) FontWeight.Bold else FontWeight.Normal,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -1391,32 +2809,46 @@ fun TrackView(
     playbackPosition: Double,
     isPlaying: Boolean,
     currentVolume: Float,
+    isShuffleEnabled: Boolean,
+    repeatMode: RepeatMode,
+    priorityQueueSize: Int,
     onTogglePlay: () -> Unit,
     onVolumeChange: (Float) -> Unit,
     onPlayNext: () -> Unit,
     onPlayPrev: () -> Unit,
     onStop: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit,
+    onOpenQueue: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val dynamicColor = MaterialTheme.colorScheme.primary
+    val dynamicColor = LocalAccentColor.current
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         if (track == null) {
-            Text("NO TRACK SELECTED", color = TerminalGray, style = MaterialTheme.typography.titleLarge)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.85f)
+                    .border(1.dp, TerminalGray.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("NO TRACK SELECTED", color = TerminalGray, style = MaterialTheme.typography.titleMedium, fontFamily = TerminalFont)
+            }
             return
         }
 
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.75f)
+                .fillMaxWidth(0.65f)
                 .aspectRatio(1f)
-                .border(BorderStroke(2.dp, dynamicColor.copy(alpha = 0.5f)))
+                .border(1.5.dp, dynamicColor.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
                 .padding(4.dp)
         ) {
             if (track.coverArt != null) {
@@ -1424,93 +2856,252 @@ fun TrackView(
                     bitmap = track.coverArt.asImageBitmap(),
                     contentDescription = "Album Art",
                     contentScale = ContentScale.Crop,
-                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
-                        color = MaterialTheme.colorScheme.primary,
-                        blendMode = androidx.compose.ui.graphics.BlendMode.Multiply
-                    ),
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(6.dp))
                 )
             } else {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black),
+                        .background(Color(0xFF141414), RoundedCornerShape(6.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("[ NO COVER ]", color = TerminalGray, style = MaterialTheme.typography.titleMedium)
+                    Text("[ NO COVER ART ]", color = TerminalGray, style = MaterialTheme.typography.titleMedium, fontFamily = TerminalFont)
                 }
             }
         }
         
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         Text(
             text = track.title,
             color = TerminalWhite,
-            fontSize = 24.sp,
+            fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = TerminalFont,
             textAlign = TextAlign.Center,
             maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = track.artist,
             color = dynamicColor,
-            fontSize = 18.sp,
+            fontSize = 13.sp,
             fontFamily = TerminalFont,
             textAlign = TextAlign.Center,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
         
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         
         val curMin = (playbackPosition / 60).toInt()
         val curSec = (playbackPosition % 60).toInt()
         val totMin = (track.durationSeconds / 60).toInt()
         val totSec = (track.durationSeconds % 60).toInt()
-        val volPercent = (currentVolume * 100).roundToInt()
-
         val posStr = String.format("%d:%02d", curMin, curSec)
         val durStr = String.format("%d:%02d", totMin, totSec)
-        
-        Spacer(modifier = Modifier.height(12.dp))
-        
-        val progress = if (track.durationSeconds > 0) (playbackPosition / track.durationSeconds) else 0.0
+        val progress = if (track.durationSeconds > 0) (playbackPosition / track.durationSeconds).coerceIn(0.0, 1.0) else 0.0
+
         val barLength = 20
         val filled = (progress * barLength).toInt().coerceIn(0, barLength)
         val empty = barLength - filled
-        val barStr = "[" + "▓".repeat(filled) + "░".repeat(empty) + "]"
-        
-        Text(barStr, color = TerminalWhite, fontFamily = TerminalFont, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        Spacer(modifier = Modifier.height(12.dp))
+        val barStr = "▓".repeat(filled) + "░".repeat(empty)
         
         Row(
-            modifier = Modifier.fillMaxWidth(0.9f),
-            horizontalArrangement = Arrangement.SpaceBetween
+            modifier = Modifier.fillMaxWidth(0.92f),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(posStr, color = TerminalWhite, fontFamily = TerminalFont)
-            Text("VOL: $volPercent%", color = dynamicColor, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
-            Text(durStr, color = TerminalGray, fontFamily = TerminalFont)
+            Text(posStr, color = TerminalWhite, fontFamily = TerminalFont, fontSize = 11.sp)
+            Text("[$barStr]", color = dynamicColor, fontFamily = TerminalFont, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text(durStr, color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp)
         }
 
-        Spacer(modifier = Modifier.height(40.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // Media Controls Panel
+        // Dedicated Volume Control Row
+        val volPercent = (currentVolume * 100).roundToInt()
         Row(
-            modifier = Modifier.fillMaxWidth(0.9f),
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .border(1.dp, dynamicColor.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                    .clickable { onVolumeChange((currentVolume - 0.05f).coerceAtLeast(0.0f)) }
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text("-", color = TerminalWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Box(
+                modifier = Modifier
+                    .border(1.dp, dynamicColor.copy(alpha = 0.25f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 14.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "VOL: $volPercent%",
+                    color = dynamicColor,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont,
+                    fontSize = 11.sp
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Box(
+                modifier = Modifier
+                    .border(1.dp, dynamicColor.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                    .clickable { onVolumeChange((currentVolume + 0.05f).coerceAtMost(1.0f)) }
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text("+", color = TerminalWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Transport Media Controls Row
+        Row(
+            modifier = Modifier.fillMaxWidth(0.85f),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val controlColor = dynamicColor
-            Text("|<<", modifier = Modifier.clickable { onPlayPrev() }, color = controlColor, fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
-            val playText = if (isPlaying) "❚❚" else "▶"
-            Text(playText, modifier = Modifier.clickable { onTogglePlay() }, color = controlColor, fontSize = 32.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
-            Text(">>|", modifier = Modifier.clickable { onPlayNext() }, color = controlColor, fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
-            Text("+", modifier = Modifier.clickable { onVolumeChange((currentVolume + 0.05f).coerceAtMost(1.0f)) }, color = controlColor, fontSize = 32.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
-            Text("-", modifier = Modifier.clickable { onVolumeChange((currentVolume - 0.05f).coerceAtLeast(0.0f)) }, color = controlColor, fontSize = 32.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+            Box(
+                modifier = Modifier
+                    .border(1.dp, dynamicColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                    .clickable { onPlayPrev() }
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("|<<", color = dynamicColor, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+            }
+            
+            Box(
+                modifier = Modifier
+                    .border(1.5.dp, dynamicColor, RoundedCornerShape(8.dp))
+                    .background(dynamicColor.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                    .clickable { onTogglePlay() }
+                    .padding(horizontal = 28.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    if (isPlaying) "❚❚" else "▶",
+                    color = dynamicColor,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont
+                )
+            }
+            
+            Box(
+                modifier = Modifier
+                    .border(1.dp, dynamicColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                    .clickable { onPlayNext() }
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(">>|", color = dynamicColor, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Secondary Playback Modes Row: Shuffle, Queue, Repeat
+        Row(
+            modifier = Modifier.fillMaxWidth(0.85f),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .border(
+                        1.dp,
+                        if (isShuffleEnabled) dynamicColor else dynamicColor.copy(alpha = 0.3f),
+                        RoundedCornerShape(4.dp)
+                    )
+                    .background(
+                        if (isShuffleEnabled) dynamicColor.copy(alpha = 0.15f) else Color.Transparent,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .clickable { onToggleShuffle() }
+                    .padding(vertical = 7.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (isShuffleEnabled) "🔀 SHUF: ON" else "🔀 SHUF: OFF",
+                    color = if (isShuffleEnabled) dynamicColor else TerminalGray,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont
+                )
+            }
+            
+            Spacer(modifier = Modifier.width(6.dp))
+
+            Box(
+                modifier = Modifier
+                    .weight(1.1f)
+                    .border(
+                        1.dp,
+                        if (priorityQueueSize > 0) dynamicColor else dynamicColor.copy(alpha = 0.3f),
+                        RoundedCornerShape(4.dp)
+                    )
+                    .background(
+                        if (priorityQueueSize > 0) dynamicColor.copy(alpha = 0.15f) else Color.Transparent,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .clickable { onOpenQueue() }
+                    .padding(vertical = 7.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "☰ QUEUE ($priorityQueueSize)",
+                    color = if (priorityQueueSize > 0) dynamicColor else TerminalWhite,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont
+                )
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .border(
+                        1.dp,
+                        if (repeatMode != RepeatMode.OFF) dynamicColor else dynamicColor.copy(alpha = 0.3f),
+                        RoundedCornerShape(4.dp)
+                    )
+                    .background(
+                        if (repeatMode != RepeatMode.OFF) dynamicColor.copy(alpha = 0.15f) else Color.Transparent,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .clickable { onCycleRepeat() }
+                    .padding(vertical = 7.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                val repText = when (repeatMode) {
+                    RepeatMode.OFF -> "🔁 REP: OFF"
+                    RepeatMode.ALL -> "🔁 REP: ALL"
+                    RepeatMode.ONE -> "🔂 REP: 1"
+                }
+                Text(
+                    text = repText,
+                    color = if (repeatMode != RepeatMode.OFF) dynamicColor else TerminalGray,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont
+                )
+            }
         }
     }
 }
@@ -1527,14 +3118,14 @@ fun MiniPlayerView(
         modifier = modifier
             .fillMaxWidth()
             .clickable { onNavigateToNowPlaying() }
-            .background(Color(0xFF0a1f14), shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+            .background(LocalAccentColor.current.copy(alpha = 0.15f), shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         val modifierImage = Modifier
             .size(28.dp)
-            .border(1.dp, Color(0xFF2a5a3f))
-            .background(Color(0xFF123b25))
+            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f))
+            .background(LocalAccentColor.current.copy(alpha = 0.2f))
             
         if (track.coverArt != null) {
             Image(
@@ -1551,7 +3142,7 @@ fun MiniPlayerView(
         
         Text(
             text = "${track.title} — ${track.artist}",
-            color = Color(0xFFa7f3c8),
+            color = LocalAccentColor.current.blendWithWhite(0.7f),
             style = MaterialTheme.typography.bodyMedium,
             fontSize = 10.sp,
             fontFamily = TerminalFont,
@@ -1564,7 +3155,7 @@ fun MiniPlayerView(
         
         Text(
             text = if (isPlaying) "❚❚" else "▶",
-            color = Color(0xFF4ade80),
+            color = LocalAccentColor.current.blendWithWhite(0.4f),
             fontFamily = TerminalFont,
             fontSize = 13.sp,
             modifier = Modifier
@@ -1576,54 +3167,52 @@ fun MiniPlayerView(
 
 @Composable
 fun BottomNavigationBar(currentView: ViewState, onNavClick: (ViewState) -> Unit) {
+    val items = listOf(
+        ViewState.LIBRARY to "LIBRARY",
+        ViewState.PLAYLIST to "PLAYLIST",
+        ViewState.TRACK to "NOW PLAYING",
+        ViewState.SETTINGS to "SETTINGS"
+    )
+
     Column(modifier = Modifier.fillMaxWidth()) {
-        Divider(color = Color(0xFF1a3a26), thickness = 1.dp, modifier = Modifier.padding(bottom = 6.dp))
+        Divider(color = LocalAccentColor.current.copy(alpha = 0.25f), thickness = 1.dp)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 16.dp, horizontal = 8.dp),
+                .padding(horizontal = 6.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val libText = if (currentView == ViewState.LIBRARY) "[[ LIBRARY ]]" else "[ LIBRARY ]"
-            Text(
-                text = libText, 
-                color = if (currentView == ViewState.LIBRARY) TerminalWhite else TerminalGray,
-                fontSize = 11.sp,
-                fontFamily = TerminalFont,
-                fontWeight = if (currentView == ViewState.LIBRARY) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.clickable { onNavClick(ViewState.LIBRARY) }
-            )
-
-            val playText = if (currentView == ViewState.PLAYLIST) "[[ PLAYLIST ]]" else "[ PLAYLIST ]"
-            Text(
-                text = playText, 
-                color = if (currentView == ViewState.PLAYLIST) TerminalWhite else TerminalGray,
-                fontSize = 11.sp,
-                fontFamily = TerminalFont,
-                fontWeight = if (currentView == ViewState.PLAYLIST) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.clickable { onNavClick(ViewState.PLAYLIST) }
-            )
-            
-            val trackText = if (currentView == ViewState.TRACK) "[[ NOW PLAYING ]]" else "[ NOW PLAYING ]"
-            Text(
-                text = trackText, 
-                color = if (currentView == ViewState.TRACK) TerminalWhite else TerminalGray,
-                fontSize = 11.sp,
-                fontFamily = TerminalFont,
-                fontWeight = if (currentView == ViewState.TRACK) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.clickable { onNavClick(ViewState.TRACK) }
-            )
-            
-            val setText = if (currentView == ViewState.SETTINGS) "[[ SETTINGS ]]" else "[ SETTINGS ]"
-            Text(
-                text = setText, 
-                color = if (currentView == ViewState.SETTINGS) TerminalWhite else TerminalGray,
-                fontSize = 11.sp,
-                fontFamily = TerminalFont,
-                fontWeight = if (currentView == ViewState.SETTINGS) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.clickable { onNavClick(ViewState.SETTINGS) }
-            )
+            items.forEach { (view, label) ->
+                val isSelected = currentView == view
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 2.dp)
+                        .border(
+                            1.dp,
+                            if (isSelected) LocalAccentColor.current else Color.Transparent,
+                            RoundedCornerShape(4.dp)
+                        )
+                        .background(
+                            if (isSelected) LocalAccentColor.current.copy(alpha = 0.15f) else Color.Transparent,
+                            RoundedCornerShape(4.dp)
+                        )
+                        .clickable { onNavClick(view) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (isSelected) "[$label]" else label,
+                        color = if (isSelected) LocalAccentColor.current else TerminalGray,
+                        fontSize = 10.sp,
+                        fontFamily = TerminalFont,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1
+                    )
+                }
+            }
         }
     }
 }

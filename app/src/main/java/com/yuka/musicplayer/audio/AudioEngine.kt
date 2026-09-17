@@ -24,6 +24,8 @@ class AudioEngine {
     external fun isHardwareVolumeActive(): Boolean
     external fun getPosition(): Double
     external fun isFinished(): Boolean
+    external fun isPlaying(): Boolean
+    external fun isDacConnected(): Boolean
     external fun getSampleRate(): Int
     
     // Gapless Playback JNI
