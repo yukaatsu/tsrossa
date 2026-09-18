@@ -147,10 +147,10 @@ Standard Android Audio Path (Resampled & Degraded):
 
 
 tsrossa Bit-Perfect Direct USB Pipeline (100% Unaltered):
-[ FLAC File (96kHz/24-bit) ]
+[ FLAC / WAV File (16/24/32-bit, up to 384kHz) ]
        │
        ▼
- [ dr_flac C++17 Decoder ] 
+ [ dr_flac & dr_wav Native C++17 Decoders ] 
        │ (Direct Memory Transfer)
        ▼
  [ Native Direct Memory Pipe ] ──> 0% Floating Point Math / 0% Resampling
@@ -159,7 +159,7 @@ tsrossa Bit-Perfect Direct USB Pipeline (100% Unaltered):
  [ libusb-1.0 Native Isochronous Engine ]
        │ (Direct USB Host endpoint submission via /dev/bus/usb)
        ▼
- [ Hardware USB DAC ] (Bit-Perfect 96kHz/24-bit Authenticated Output ✅)
+ [ Hardware USB DAC ] (Bit-Perfect Native Master Clock Authenticated Output ✅)
 ```
 
 ### Empirical Verification Telemetry (Hardware Test: SNOWSKY Melody USB DAC)
@@ -200,13 +200,11 @@ if (target_subslot == 4 && in_subslot == 4) {
 
 ---
 
-
-
 ## ✨ Full Feature Overview
 
 ### 🎵 Audiophile Core
 - **Direct USB Audio Class 1.0 & 2.0 Drivers**: High-speed asynchronous isochronous streaming implemented directly in C++17 with Android NDK and `libusb-1.0`.
-- **Pure Bit-Perfect Playback**: Directly stream FLAC files ranging from 16-bit/44.1kHz up to 32-bit/384kHz to your DAC with zero OS manipulation.
+- **Multi-Codec Bit-Perfect Playback**: Directly stream **FLAC** (`.flac`) and uncompressed **WAV** (`.wav`, `.wave`) files ranging from 16-bit/44.1kHz up to 32-bit/384kHz (Linear PCM 16/24/32-bit & IEEE 32-bit Float) to your external USB DAC with zero OS manipulation.
 - **Hardware Volume Support**: Communicates directly with USB Audio Feature Units for native hardware gain adjustment with smooth, logarithmic attenuation.
 - **True Gapless Engine**: Pre-buffers upcoming tracks in native memory (`prepareNextTrack`), enabling gap-free listening for classical concerts, live recordings, and concept albums.
 - **Do Not Disturb (DND) Integration**: Automatically mutes notification ringtones during bit-perfect playback to protect external amplification chains from unexpected loud sounds.
@@ -219,16 +217,40 @@ if (target_subslot == 4 && in_subslot == 4) {
 - **Tactile Volume Buttons**: Precise step-by-step 5% volume control increments with haptic vibration confirmation.
 
 ### 🎨 User Interface & Customization
-- **Cyberpunk / Retro Audiophile Terminal Aesthetic**: Distinctive ASCII art headers, monospaced typography, and clean contrast.
+- **Cyberpunk / Retro Audiophile Terminal Aesthetic**: Distinctive ASCII art headers, monospaced typography, dynamic format badges (`[FLAC]`, `[WAV]`), and clean contrast.
 - **Adaptive Blur Wallpaper & Solid Black**: Toggle between an immersive blurred background extracted from your system wallpaper or a pitch-black battery-saving AMOLED canvas.
 - **Dynamic Palette Color Extraction**: Vibrant accent colors dynamically extracted from currently playing album art using AndroidX Palette.
 - **Global Font Scaler**: Adjust text scale from 0.8x up to 1.3x for optimal readability across any screen density.
 - **Keep Screen Awake**: Optional wake lock keeps Now Playing visible on desk stands during listening sessions.
 
-### 🛡️ Reliability & Diagnostics
-- **Background Playback Immunity**: `AudioForegroundService` manages Android wake locks and foreground notifications so your music never drops out when multitasking or locking your screen.
-- **Floating System Logs**: Real-time diagnostic modal displaying current USB DAC status, VID/PID, claimed interfaces, active sample rate, buffer health, and an emergency DAC disconnect kill-switch.
+### 🛡️ Reliability & Diagnostics (Beta 1)
+- **MediaStyle Notification & Lockscreen Controls**: Interactive notification drawer & lockscreen player with dynamic Play/Pause toggle, Previous/Next track skipping, Stop button, and album art display.
+- **Safe USB Unplug (Hotplug Resilience)**: Real-time hotplug handling that gracefully terminates isochronous DMA transfers and cleans up USB resources when the DAC cable is disconnected, completely preventing `SIGSEGV` fatal crashes.
+- **Telemetry Export (`📋 COPY` & `↗ SHARE`)**: Real-time diagnostic modal displaying current USB DAC status (VID/PID, claimed interfaces, sample rates, buffer health). Includes one-tap Copy to clipboard and Android Share Sheet Intent for instant community bug reporting.
+- **Background Playback Immunity**: `AudioForegroundService` manages Android wake locks so music plays continuously when multitasking or locking your screen.
 - **Built-in User Manual**: Instant help modal explaining bit-perfect streaming concepts, volume indicator dots (Gold = Hardware Volume, Red = Dithered Software Volume), and transport shortcuts.
+
+---
+
+## 🧪 Panduan Penguji & Cakupan Dukungan (Beta Tester Guide)
+
+Agar para penguji (*beta testers*) tidak mengalami kebingungan mengenai kapabilitas aplikasi pada rilis **Beta 1**, berikut adalah rincian cakupan fitur dan dukungan format:
+
+### ✅ Yang Didukung di Versi Ini (Supported Scope):
+| Kategori | Spesifikasi Yang Didukung |
+| :--- | :--- |
+| **Format Audio** | • **FLAC** (`.flac`): 16-bit, 24-bit, 32-bit integer PCM (44.1 kHz s/d 384 kHz)<br/>• **WAV** (`.wav`, `.wave`): 16-bit, 24-bit, 32-bit Linear PCM, dan 32-bit IEEE Float |
+| **Output Jalur Audio** | **Khusus USB DAC Eksternal** via USB-C / OTG (Dongle DAC, Portable DAC/Amp, Desktop DAC) yang mendukung standar USB Audio Class (UAC1 atau UAC2). |
+| **Bypass AudioFlinger** | **100% Direct Kernel USB** — Tidak melalui mixer Android, tidak ada resampling 48kHz paksaan OS, tidak ada pemrosesan efek sistem. |
+| **Kontrol Audio** | Kontrol Play/Pause/Skip di aplikasi dan di **Lockscreen / Bar Notifikasi Android** (`MediaStyle`). |
+| **Diagnostik Hardware** | Buka menu **`[LOGS]`** untuk melihat status negosiasi DAC secara live, lalu gunakan **`[📋 COPY]`** atau **`[↗ SHARE]`** untuk mengirim laporan ke pengembang jika terjadi masalah. |
+
+### ❌ Yang Belum / Tidak Didukung di Versi Beta 1:
+- ❌ **Format Lossy Terkompresi**: Format seperti **MP3, AAC, M4A, OGG, WMA** sengaja tidak dimasukkan ke dalam engine bit-perfect murni ini pada tahap Beta 1.
+- ❌ **Format DSD / DSF / DFF**: Format DSD murni direncanakan untuk pembaruan berikutnya (melalui transmisi DoP - *DSD over PCM*).
+- ❌ **Format Lossless Lain (AIFF, ALAC)**: Akan ditambahkan pada siklus rilis berikutnya (Beta 2).
+- ❌ **Speaker Internal Ponsel & Lubang Jack 3.5mm Bawaan Ponsel**: Aplikasi ini dirancang spesifik sebagai pemutar audio kelas audiophile untuk **USB DAC eksternal**. Jika tidak ada USB DAC yang terhubung, aplikasi akan meminta Anda mencolokkan USB DAC.
+- ❌ **Tombol Remote Kabel Earphone / Headset (Inline Remote Buttons)**: Fitur pembaca tombol kabel earphone/IEM sengaja dinonaktifkan pada versi ini guna memastikan stabilitas isochronous DMA kernel tidak terganggu oleh interupsi input OS.
 
 ---
 
@@ -239,8 +261,8 @@ if (target_subslot == 4 && in_subslot == 4) {
 | **Android Version** | Android 8.0 (Oreo, API 26) through Android 14+ (API 34) |
 | **USB Host Capability** | USB OTG (On-The-Go) supported hardware |
 | **Supported DAC Protocols** | USB Audio Class 1.0 (UAC1), USB Audio Class 2.0 (UAC2) |
-| **Audio File Formats** | Lossless FLAC (16/24/32-bit, 44.1kHz up to 384kHz) |
-| **Tested DAC Chipsets** | ESS Sabre (ES9038, ES9281, ES9068), AKM (AK4493, AK4499), Cirrus Logic (CS43131, CS43198), Realtek ALC5686, Conexant CX31993 |
+| **Audio File Formats** | Lossless FLAC (`.flac`) & Uncompressed WAV (`.wav`, `.wave`) — 16/24/32-bit, 44.1kHz up to 384kHz |
+| **Tested DAC Chipsets** | ESS Sabre (ES9038, ES9281, ES9068), AKM (AK4493, AK4499), Cirrus Logic (CS43131, CS43198), Realtek ALC5686, Conexant CX31993, Savitech SA9123L |
 
 ---
 
