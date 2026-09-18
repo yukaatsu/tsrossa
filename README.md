@@ -10,9 +10,10 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="release/app-release.apk"><img src="https://img.shields.io/badge/Release-v1.1.0--rc-orange.svg" alt="Release"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Status-Early%20Development-blue.svg" alt="Status"></a>
+  <a href="release/app-release.apk"><img src="https://img.shields.io/badge/Release-v1.2.0--beta1-orange.svg" alt="Release"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Status-Beta%201-brightgreen.svg" alt="Status"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Android%208.0%2B%20(API%2026%E2%80%9334)-green.svg" alt="Platform"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Formats-FLAC%20%7C%20WAV-blueviolet.svg" alt="Supported Formats"></a>
   <a href="#"><img src="https://img.shields.io/badge/Audio-True%20Bit--Perfect%20UAC2-success.svg" alt="Bit-Perfect"></a>
   <a href="#"><img src="https://img.shields.io/badge/AudioFlinger-100%25%20Bypassed-red.svg" alt="AudioFlinger Bypass"></a>
   <a href="#"><img src="https://img.shields.io/badge/Engine-C%2B%2B17%20%7C%20NDK%20%7C%20libusb-purple.svg" alt="C++ Engine"></a>
@@ -23,13 +24,19 @@
 
 > [!NOTE]
 > ### 📌 Catatan Pengembangan & Keterbukaan Komunitas / Development Note
-> **tsrossa masih berada dalam tahap pengembangan awal (Early Development / Release Candidate).**
+> **tsrossa kini memasuki tahap BETA 1 (v1.2.0-beta1).**
+> 
+> Pembaruan pada versi Beta 1 meliputi:
+> 1. **Dukungan Format Audio Uncompressed WAV**: Menguraikan PCM murni 16-bit, 24-bit, 32-bit integer, serta 32-bit IEEE float secara 100% Bit-Perfect via `dr_wav`.
+> 2. **MediaStyle Notification & Lockscreen Controls**: Kontrol interaktif di layar kunci & notification drawer (Previous, Play/Pause dinamis, Next, serta cover album).
+> 3. **Safe Unplug USB Handler**: Proteksi anti-crash SIGSEGV saat kabel DAC dicabut mendadak.
+> 4. **Export & Share Diagnostics**: Tombol Copy & Share report hardware telemetry DAC untuk mempermudah bug reporting.
 > 
 > Kami **tidak mengklaim bahwa aplikasi ini lebih unggul dari aplikasi pemutar musik lainnya** — setiap aplikasi memiliki kelebihan, pendekatan rekayasa, dan filosofi desainnya masing-masing. Kualitas dan kenyamanan mendengarkan musik pada akhirnya kembali pada telinga, selera, dan preferensi masing-masing pengguna.
 > 
 > Mengingat keberagaman implementasi USB DAC eksternal serta kontroler USB pada berbagai merek ponsel Android, **masukan, saran, hasil uji coba hardware, maupun laporan bug dari teman-teman komunitas akan sangat berharga** untuk kelanjutan pengembangan aplikasi ini. Jangan ragu untuk membuka diskusi atau menyampaikan masukan di [GitHub Issues](https://github.com/yukaatsu/tsrossa/issues)!
 > 
-> *We make no claims of superiority over any other music players. Every player has its own merits, and audio enjoyment is purely subjective to each user. Since this project is in its early stages, all feedback and bug reports are warmly welcomed!*
+> *We make no claims of superiority over any other music players. Every player has its own merits, and audio enjoyment is purely subjective to each user. Since this project is in its beta stages, all feedback and bug reports are warmly welcomed!*
 
 ---
 

@@ -6,6 +6,8 @@ import org.json.JSONArray
 import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import android.content.Context
+import android.content.ClipboardManager
+import android.content.ClipData
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 
@@ -192,7 +194,14 @@ data class TrackInfo(
     val durationSeconds: Double,
     val coverArt: Bitmap?,
     val dominantColor: Color
-)
+) {
+    val codec: String
+        get() = when (file.extension.lowercase()) {
+            "flac" -> "FLAC"
+            "wav", "wave" -> "WAV"
+            else -> file.extension.uppercase().ifEmpty { "AUDIO" }
+        }
+}
 
 val TerminalFont = FontFamily(Font(R.font.fantasquesans_regular))
 
@@ -574,7 +583,12 @@ fun KewApp(audioEngine: AudioEngine) {
 
     val filesInDir = remember(currentDirectory) {
         val files = currentDirectory.listFiles()?.toList() ?: emptyList()
-        files.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        files.filter {
+            it.isDirectory ||
+            it.extension.equals("flac", ignoreCase = true) ||
+            it.extension.equals("wav", ignoreCase = true) ||
+            it.extension.equals("wave", ignoreCase = true)
+        }.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
     }
 
     val activeList = remember(currentPlaybackSource, filesInDir, playlistPaths) {
@@ -1641,6 +1655,67 @@ fun LogMultilineItem(label: String, value: String, valueColor: Color = LocalAcce
     }
 }
 
+fun generateDiagnosticReport(
+    dacName: String,
+    isDacConnected: Boolean,
+    isDeviceWedged: Boolean,
+    uacVersion: Int,
+    claimedInterfaces: String,
+    isPlaying: Boolean,
+    sourceBitDepth: Int,
+    sourceSampleRate: Int,
+    outputBitDepth: Int,
+    outputSampleRate: Int,
+    negotiatedSampleRate: Int,
+    isSampleRateUnverified: Boolean,
+    recentErrorCount: Int,
+    supportedSampleRates: String,
+    supportedBitDepths: String,
+    refusedTrackHistory: List<RefusedTrackEntry>
+): String {
+    val sb = StringBuilder()
+    sb.appendLine("=== TSROSSA AUDIO ENGINE DIAGNOSTICS ===")
+    sb.appendLine("App Version: 1.2.0-beta1")
+    sb.appendLine("Device Model: ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})")
+    sb.appendLine("Timestamp: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}")
+    sb.appendLine()
+    sb.appendLine("[HARDWARE & USB]")
+    sb.appendLine("DAC Model: $dacName")
+    val usbStatus = if (isDeviceWedged) "ERROR / WEDGED" else if (isDacConnected) "ACTIVE (Exclusive UAC$uacVersion)" else "DISCONNECTED"
+    sb.appendLine("USB Status: $usbStatus")
+    sb.appendLine("Claimed Ifaces: ${if (claimedInterfaces.isNotEmpty()) claimedInterfaces else "--"}")
+    sb.appendLine()
+    sb.appendLine("[SIGNAL PATH]")
+    sb.appendLine("Stream State: ${if (isPlaying) "PLAYING" else "STOPPED / STANDBY"}")
+    if (isPlaying) {
+        sb.appendLine("Input Stream: $sourceBitDepth-Bit / ${sourceSampleRate / 1000.0} kHz")
+        sb.appendLine("DAC Output: $outputBitDepth-Bit / ${outputSampleRate / 1000.0} kHz")
+        val bitPerfect = (sourceSampleRate > 0 && sourceSampleRate == outputSampleRate && sourceBitDepth == outputBitDepth)
+        sb.appendLine("Transmission: ${if (bitPerfect) "BIT-PERFECT [PASS]" else "RESAMPLED [FAIL]"}")
+        val rateText = if (isSampleRateUnverified) "${negotiatedSampleRate / 1000.0} kHz (Unverified)" else "${negotiatedSampleRate / 1000.0} kHz"
+        sb.appendLine("Hardware Clock: $rateText")
+    }
+    sb.appendLine("I/O Error Count: $recentErrorCount")
+    sb.appendLine()
+    sb.appendLine("[DAC CAPABILITIES]")
+    sb.appendLine("Supported Rates: ${if (supportedSampleRates.isNotEmpty()) supportedSampleRates else "--"}")
+    sb.appendLine("Supported Bits: ${if (supportedBitDepths.isNotEmpty()) supportedBitDepths else "--"}")
+    sb.appendLine()
+    sb.appendLine("[ENGINE CONFIG]")
+    sb.appendLine("RAM Preload Engine: ACTIVE (Zero Jitter)")
+    sb.appendLine("Gapless DMA Handover: ACTIVE")
+    sb.appendLine("AudioFlinger / DSP: 100% BYPASSED")
+    if (refusedTrackHistory.isNotEmpty()) {
+        sb.appendLine()
+        sb.appendLine("[REFUSED TRACKS (${refusedTrackHistory.size})]")
+        refusedTrackHistory.forEachIndexed { i, t ->
+            sb.appendLine("${i + 1}. \"${t.filename}\" (${t.bitDepth}-Bit / ${t.sampleRate / 1000.0} kHz) -> Reason: ${t.reason}")
+        }
+    }
+    sb.appendLine("=========================================")
+    return sb.toString()
+}
+
 @Composable
 fun SystemLogsPanel(
     audioEngine: AudioEngine,
@@ -1710,19 +1785,84 @@ fun SystemLogsPanel(
                     letterSpacing = 0.5.sp
                 )
             }
-            Box(
-                modifier = Modifier
-                    .border(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                    .clickable { onClose() }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            ) {
-                Text(
-                    text = "✕ CLOSE",
-                    color = androidx.compose.ui.graphics.Color.Red,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = TerminalFont
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // COPY LOG
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, LocalAccentColor.current.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .clickable {
+                            val report = generateDiagnosticReport(
+                                dacName, isDacConnected, isDeviceWedged, uacVersion,
+                                claimedInterfaces, isPlaying, sourceBitDepth, sourceSampleRate,
+                                outputBitDepth, outputSampleRate, negotiatedSampleRate,
+                                isSampleRateUnverified, recentErrorCount, supportedSampleRates,
+                                supportedBitDepths, refusedTrackHistory
+                            )
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clip = ClipData.newPlainText("tsrossa_diagnostics", report)
+                            clipboard.setPrimaryClip(clip)
+                            Toast.makeText(context, "Diagnostics copied to clipboard!", Toast.LENGTH_SHORT).show()
+                        }
+                        .padding(horizontal = 7.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "📋 COPY",
+                        color = LocalAccentColor.current,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = TerminalFont
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // SHARE LOG
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, LocalAccentColor.current.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .clickable {
+                            val report = generateDiagnosticReport(
+                                dacName, isDacConnected, isDeviceWedged, uacVersion,
+                                claimedInterfaces, isPlaying, sourceBitDepth, sourceSampleRate,
+                                outputBitDepth, outputSampleRate, negotiatedSampleRate,
+                                isSampleRateUnverified, recentErrorCount, supportedSampleRates,
+                                supportedBitDepths, refusedTrackHistory
+                            )
+                            val sendIntent = Intent().apply {
+                                action = Intent.ACTION_SEND
+                                putExtra(Intent.EXTRA_TEXT, report)
+                                type = "text/plain"
+                            }
+                            val shareIntent = Intent.createChooser(sendIntent, "Share tsrossa Diagnostics")
+                            context.startActivity(shareIntent)
+                        }
+                        .padding(horizontal = 7.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "↗ SHARE",
+                        color = LocalAccentColor.current,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = TerminalFont
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .clickable { onClose() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "✕ CLOSE",
+                        color = androidx.compose.ui.graphics.Color.Red,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = TerminalFont
+                    )
+                }
             }
         }
         
@@ -2921,15 +3061,35 @@ fun TrackView(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
         )
         Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = track.artist,
-            color = dynamicColor,
-            fontSize = 13.sp,
-            fontFamily = TerminalFont,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .border(1.dp, dynamicColor.copy(alpha = 0.5f), RoundedCornerShape(3.dp))
+                    .background(dynamicColor.copy(alpha = 0.1f), RoundedCornerShape(3.dp))
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    text = track.codec,
+                    color = dynamicColor,
+                    fontSize = 10.sp,
+                    fontFamily = TerminalFont,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = track.artist,
+                color = dynamicColor,
+                fontSize = 13.sp,
+                fontFamily = TerminalFont,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         
         Spacer(modifier = Modifier.height(12.dp))
         

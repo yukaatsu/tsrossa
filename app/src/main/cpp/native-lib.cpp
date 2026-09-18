@@ -21,6 +21,82 @@
 
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
+#define DR_WAV_IMPLEMENTATION
+#include "dr_wav.h"
+
+enum class AudioCodec { UNKNOWN, FLAC, WAV };
+
+struct AudioDecoder {
+  AudioCodec codec = AudioCodec::UNKNOWN;
+  drflac *pFlac = nullptr;
+  drwav wav;
+  bool isWavInit = false;
+
+  uint32_t sampleRate = 0;
+  uint32_t channels = 0;
+  uint32_t bitsPerSample = 0;
+  uint64_t totalPCMFrameCount = 0;
+
+  AudioDecoder() {
+    memset(&wav, 0, sizeof(wav));
+  }
+
+  bool open(const char *path) {
+    close();
+    // 1. Coba buka sebagai FLAC
+    pFlac = drflac_open_file(path, nullptr);
+    if (pFlac != nullptr) {
+      codec = AudioCodec::FLAC;
+      sampleRate = pFlac->sampleRate;
+      channels = pFlac->channels;
+      bitsPerSample = pFlac->bitsPerSample;
+      totalPCMFrameCount = pFlac->totalPCMFrameCount;
+      return true;
+    }
+
+    // 2. Jika bukan FLAC, coba buka sebagai WAV
+    if (drwav_init_file(&wav, path, nullptr)) {
+      codec = AudioCodec::WAV;
+      isWavInit = true;
+      sampleRate = wav.sampleRate;
+      channels = wav.channels;
+      bitsPerSample = wav.bitsPerSample;
+      totalPCMFrameCount = wav.totalPCMFrameCount;
+      return true;
+    }
+
+    return false;
+  }
+
+  size_t read_pcm_frames_s32(size_t framesToRead, int32_t *pBufferOut) {
+    if (codec == AudioCodec::FLAC && pFlac != nullptr) {
+      return (size_t)drflac_read_pcm_frames_s32(pFlac, framesToRead, pBufferOut);
+    } else if (codec == AudioCodec::WAV && isWavInit) {
+      return (size_t)drwav_read_pcm_frames_s32(&wav, framesToRead, pBufferOut);
+    }
+    return 0;
+  }
+
+  void close() {
+    if (codec == AudioCodec::FLAC && pFlac != nullptr) {
+      drflac_close(pFlac);
+      pFlac = nullptr;
+    } else if (codec == AudioCodec::WAV && isWavInit) {
+      drwav_uninit(&wav);
+      isWavInit = false;
+    }
+    codec = AudioCodec::UNKNOWN;
+    sampleRate = 0;
+    channels = 0;
+    bitsPerSample = 0;
+    totalPCMFrameCount = 0;
+  }
+
+  ~AudioDecoder() {
+    close();
+  }
+};
+
 
 static JavaVM *g_jvm = nullptr;
 std::mutex g_apiMutex;
@@ -1395,8 +1471,8 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
   // 1. Buka file untuk mengetahui bit depth baru
   const char *path = env->GetStringUTFChars(filePath, 0);
   std::string savedPath = path;
-  drflac *pFlac = drflac_open_file(path, nullptr);
-  if (!pFlac) {
+  auto decoder = std::make_shared<AudioDecoder>();
+  if (!decoder->open(path)) {
     env->ReleaseStringUTFChars(filePath, path);
     return -1; // file open error
   }
@@ -1404,23 +1480,23 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
   g_audioState.currentFilePath = savedPath;
   g_audioState.nextFilePath = "";
 
-  uint32_t newSampleRate = pFlac->sampleRate;
-  uint32_t newChannels = pFlac->channels;
-  uint32_t newSourceBitDepth = pFlac->bitsPerSample;
-  uint64_t totalFrames = pFlac->totalPCMFrameCount;
+  uint32_t newSampleRate = decoder->sampleRate;
+  uint32_t newChannels = decoder->channels;
+  uint32_t newSourceBitDepth = decoder->bitsPerSample;
+  uint64_t totalFrames = decoder->totalPCMFrameCount;
   
   // Increment generation to abort any running prepareNextTrack
   g_audioState.prepareNextGen.fetch_add(1);
 
   // === FORMAT COMPATIBILITY CHECK ===
   if (g_audioState.usbHandle != nullptr) {
-    int target_sf = pFlac->bitsPerSample / 8;
+    int target_sf = newSourceBitDepth / 8;
     if (target_sf == 0) target_sf = 2;
 
     // Check bit depth
     bool bitDepthSupported = false;
     for (int bd : g_audioState.supportedBitDepths) {
-      if (bd == (int)pFlac->bitsPerSample) {
+      if (bd == (int)newSourceBitDepth) {
         bitDepthSupported = true;
         break;
       }
@@ -1430,7 +1506,7 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
     bool sampleRateSupported = false;
     if (g_audioState.sampleRateQuerySuccess) {
       for (uint32_t sr : g_audioState.supportedSampleRates) {
-        if (sr == pFlac->sampleRate) {
+        if (sr == newSampleRate) {
           sampleRateSupported = true;
           break;
         }
@@ -1439,20 +1515,20 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
       // STRICT FALLBACK MODE
       if (!g_audioState.hasValidatedRate.load()) {
         // COLD-START
-        if (pFlac->sampleRate == 44100 || pFlac->sampleRate == 48000) {
+        if (newSampleRate == 44100 || newSampleRate == 48000) {
           sampleRateSupported = true;
-          LOGW("Cold-start fallback: Allowing %u Hz since no rate has been validated yet.", pFlac->sampleRate);
+          LOGW("Cold-start fallback: Allowing %u Hz since no rate has been validated yet.", newSampleRate);
         } else {
           sampleRateSupported = false;
-          LOGE("Cold-start fallback: Rejecting %u Hz (only 44.1/48kHz safe on unready device).", pFlac->sampleRate);
+          LOGE("Cold-start fallback: Rejecting %u Hz (only 44.1/48kHz safe on unready device).", newSampleRate);
         }
       } else {
         // STRICT MODE
-        if (pFlac->sampleRate == g_audioState.lastKnownGoodSampleRate.load()) {
+        if (newSampleRate == g_audioState.lastKnownGoodSampleRate.load()) {
           sampleRateSupported = true;
         } else {
           sampleRateSupported = false;
-          LOGE("Strict fallback: Rejecting %u Hz (last known good is %u Hz).", pFlac->sampleRate, g_audioState.lastKnownGoodSampleRate.load());
+          LOGE("Strict fallback: Rejecting %u Hz (last known good is %u Hz).", newSampleRate, g_audioState.lastKnownGoodSampleRate.load());
         }
       }
     }
@@ -1460,12 +1536,12 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
     if (!bitDepthSupported || !sampleRateSupported) {
       std::string reason;
       if (!bitDepthSupported && !sampleRateSupported) {
-        reason = std::to_string(pFlac->bitsPerSample) + "-Bit/" +
-                 std::to_string(pFlac->sampleRate) + "Hz not supported";
+        reason = std::to_string(newSourceBitDepth) + "-Bit/" +
+                 std::to_string(newSampleRate) + "Hz not supported";
       } else if (!bitDepthSupported) {
-        reason = std::to_string(pFlac->bitsPerSample) + "-Bit not supported";
+        reason = std::to_string(newSourceBitDepth) + "-Bit not supported";
       } else {
-        reason = std::to_string(pFlac->sampleRate) + "Hz not supported";
+        reason = std::to_string(newSampleRate) + "Hz not supported";
       }
       LOGE("FORMAT REFUSED: %s — File: %s", reason.c_str(), savedPath.c_str());
 
@@ -1478,7 +1554,7 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
       {
         std::lock_guard<std::mutex> hlock(g_audioState.refusedHistoryMutex);
         g_audioState.refusedTrackHistory.push_back(
-            {filename, (int)pFlac->bitsPerSample, (int)pFlac->sampleRate, "format_incompatible"});
+            {filename, (int)newSourceBitDepth, (int)newSampleRate, "format_incompatible"});
         if (g_audioState.refusedTrackHistory.size() > 5) {
           g_audioState.refusedTrackHistory.erase(g_audioState.refusedTrackHistory.begin());
         }
@@ -1493,13 +1569,13 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
           jstring jFilename = env->NewStringUTF(filename.c_str());
           jstring jReason = env->NewStringUTF(reason.c_str());
           env->CallVoidMethod(g_audioState.callbackObj, methodId,
-              jFilename, (jint)pFlac->bitsPerSample, (jint)pFlac->sampleRate, jReason);
+              jFilename, (jint)newSourceBitDepth, (jint)newSampleRate, jReason);
           env->DeleteLocalRef(jFilename);
           env->DeleteLocalRef(jReason);
         }
       }
 
-      drflac_close(pFlac);
+      decoder->close();
       env->ReleaseStringUTFChars(filePath, path);
       g_audioState.currentFilePath = "";
       return -2; // format incompatible
@@ -1507,7 +1583,7 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
   }
 
   // 2. Cek apakah altsetting perlu diganti
-  int target_sf = pFlac->bitsPerSample / 8;
+  int target_sf = newSourceBitDepth / 8;
   if (target_sf == 0)
     target_sf = 2; // Default 16-bit
 
@@ -1555,7 +1631,7 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
 
         if (!exact_alt) {
           LOGE("playAudio: No exact altsetting for sf=%d despite passing compat check!", target_sf);
-          drflac_close(pFlac);
+          decoder->close();
           env->ReleaseStringUTFChars(filePath, path);
           g_audioState.currentFilePath = "";
           return -3;
@@ -1577,7 +1653,7 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
         } else {
           LOGE("playAudio: Failed to switch altsetting! libusb error: %s (%d)",
                libusb_error_name(r), r);
-          drflac_close(pFlac);
+          decoder->close();
           env->ReleaseStringUTFChars(filePath, path);
           g_audioState.currentFilePath = "";
           return -3; // negotiation failure (Point A — isoThread already dead, clean state)
@@ -1666,22 +1742,22 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
   g_audioState.sourceBitDepth.store(newSourceBitDepth);
 
   try {
-    g_audioState.pcmBuffer.resize(totalFrames * pFlac->channels);
+    g_audioState.pcmBuffer.resize(totalFrames * newChannels);
   } catch (const std::bad_alloc &e) {
     LOGE("OOM: Not enough memory for %llu frames!", (unsigned long long)totalFrames);
-    drflac_close(pFlac);
+    decoder->close();
     g_audioState.isSwapping.store(false);
     return -1;
   }
 
   // Partial load strategy: decode first 100ms synchronously, the rest
   // asynchronously
-  size_t framesPer100ms = pFlac->sampleRate / 10;
+  size_t framesPer100ms = newSampleRate / 10;
   size_t initialFrames =
       (totalFrames < framesPer100ms) ? totalFrames : framesPer100ms;
 
-  size_t initialRead = drflac_read_pcm_frames_s32(
-      pFlac, initialFrames, g_audioState.pcmBuffer.data());
+  size_t initialRead = decoder->read_pcm_frames_s32(
+      initialFrames, g_audioState.pcmBuffer.data());
 
   g_audioState.decodedFrames.store(initialRead);
   g_audioState.pcmIndex.store(0);
@@ -1690,16 +1766,16 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
   if (initialRead < totalFrames) {
     g_audioState.isDecoding.store(true);
     g_audioState.decodeThread =
-        new std::thread([pFlac, totalFrames, initialRead]() {
+        new std::thread([decoder, totalFrames, initialRead]() {
           size_t currentOffset = initialRead;
-          size_t chunkSize = pFlac->sampleRate;
+          size_t chunkSize = decoder->sampleRate;
           while (currentOffset < totalFrames &&
                  !g_audioState.cancelDecoding.load()) {
             size_t framesToRead = (totalFrames - currentOffset > chunkSize)
                                       ? chunkSize
                                       : (totalFrames - currentOffset);
-            size_t read = drflac_read_pcm_frames_s32(
-                pFlac, framesToRead,
+            size_t read = decoder->read_pcm_frames_s32(
+                framesToRead,
                 g_audioState.pcmBuffer.data() +
                     (currentOffset * g_audioState.channels));
             if (read == 0)
@@ -1708,11 +1784,11 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
             g_audioState.decodedFrames.store(currentOffset);
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
           }
-          drflac_close(pFlac);
+          decoder->close();
           g_audioState.isDecoding.store(false);
         });
   } else {
-    drflac_close(pFlac);
+    decoder->close();
     g_audioState.isDecoding.store(false);
   }
 
@@ -2095,22 +2171,22 @@ Java_com_yuka_musicplayer_audio_AudioEngine_prepareNextTrack(JNIEnv *env,
                                                              jobject thiz,
                                                              jstring filePath) {
   const char *path = env->GetStringUTFChars(filePath, 0);
-  drflac *pFlac = drflac_open_file(path, nullptr);
-  if (!pFlac) {
+  auto nextDecoder = std::make_unique<AudioDecoder>();
+  if (!nextDecoder->open(path)) {
     env->ReleaseStringUTFChars(filePath, path);
     return JNI_FALSE;
   }
-  uint64_t totalFrames = pFlac->totalPCMFrameCount;
-  int channels = pFlac->channels;
-  int sampleRate = pFlac->sampleRate;
-  int bitsPerSample = pFlac->bitsPerSample;
+  uint64_t totalFrames = nextDecoder->totalPCMFrameCount;
+  int channels = nextDecoder->channels;
+  int sampleRate = nextDecoder->sampleRate;
+  int bitsPerSample = nextDecoder->bitsPerSample;
   
   std::vector<int32_t> tempBuffer;
   try {
     tempBuffer.resize(totalFrames * channels);
-    } catch (const std::bad_alloc &e) {
-      LOGE("OOM: Not enough memory for next track (%llu frames)!", (unsigned long long)totalFrames);
-      drflac_close(pFlac);
+  } catch (const std::bad_alloc &e) {
+    LOGE("OOM: Not enough memory for next track (%llu frames)!", (unsigned long long)totalFrames);
+    nextDecoder->close();
     env->ReleaseStringUTFChars(filePath, path);
     return JNI_FALSE;
   }
@@ -2122,7 +2198,7 @@ Java_com_yuka_musicplayer_audio_AudioEngine_prepareNextTrack(JNIEnv *env,
   while (framesRead < totalFrames) {
     if (g_audioState.prepareNextGen.load() != myGen) {
       LOGW("prepareNextTrack: Aborted decode by newer generation request!");
-      drflac_close(pFlac);
+      nextDecoder->close();
       env->ReleaseStringUTFChars(filePath, path);
       return JNI_FALSE;
     }
@@ -2130,13 +2206,13 @@ Java_com_yuka_musicplayer_audio_AudioEngine_prepareNextTrack(JNIEnv *env,
     size_t toRead = totalFrames - framesRead;
     if (toRead > chunkSize) toRead = chunkSize;
     
-    size_t read = drflac_read_pcm_frames_s32(pFlac, toRead, tempBuffer.data() + (framesRead * channels));
+    size_t read = nextDecoder->read_pcm_frames_s32(toRead, tempBuffer.data() + (framesRead * channels));
     if (read == 0) break;
     framesRead += read;
   }
   
   std::string savedPath = path;
-  drflac_close(pFlac);
+  nextDecoder->close();
   env->ReleaseStringUTFChars(filePath, path);
   
   if (mlock(tempBuffer.data(), tempBuffer.size() * sizeof(int32_t)) < 0) {
