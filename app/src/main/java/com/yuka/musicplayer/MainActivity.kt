@@ -122,6 +122,21 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (isFinishing) {
+            val isStillPlaying = com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying ||
+                (com.yuka.musicplayer.audio.AudioPlayerManager.isInitialized && com.yuka.musicplayer.audio.AudioPlayerManager.audioEngine.isPlaying())
+            if (!isStillPlaying) {
+                android.util.Log.i("MainActivity", "onDestroy: Activity is finishing and playback is paused. Stopping AudioForegroundService.")
+                val stopIntent = Intent(this, com.yuka.musicplayer.audio.AudioForegroundService::class.java).apply {
+                    action = com.yuka.musicplayer.audio.AudioForegroundService.ACTION_STOP
+                }
+                startService(stopIntent)
+            }
+        }
+    }
 }
 
 enum class ViewState { LIBRARY, PLAYLIST, TRACK, SETTINGS }

@@ -80,8 +80,13 @@ object AudioPlayerManager {
 
     fun release() {
         if (!isInitialized) return
+        try {
+            audioEngine.pauseAudio()
+            audioEngine.closeUsbDac()
+        } catch (e: Exception) {
+            Log.w("AudioPlayerManager", "Error closing audio engine during release: ${e.message}")
+        }
         usbAudioController.release()
-        audioEngine.pauseAudio()
         currentTrack = null
         isPlaying = false
         isDacConnected = false

@@ -155,8 +155,23 @@ class AudioForegroundService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Do NOT call stopSelf() here so audio keeps playing when swiped from recents
         super.onTaskRemoved(rootIntent)
+        val isStillPlaying = AudioPlayerManager.isPlaying ||
+            (AudioPlayerManager.isInitialized && AudioPlayerManager.audioEngine.isPlaying())
+        
+        if (!isStillPlaying) {
+            android.util.Log.i("AudioForegroundService", "onTaskRemoved: Playback is paused/stopped. Gracefully releasing DAC and stopping service.")
+            AudioPlayerManager.release()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            stopSelf()
+        } else {
+            android.util.Log.i("AudioForegroundService", "onTaskRemoved: Playback is active. Maintaining background service.")
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? {
