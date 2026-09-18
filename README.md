@@ -137,7 +137,7 @@ The latest signed, production-ready release is available directly in this reposi
 
 ---
 
-## 🔬 Technical Audit & Bit-Perfect Empirical Proof
+## 🔬 Technical Architecture & Verification
 
 ### The Bit-Perfect Audio Pipeline
 By default, audio streams routed through the Android OS framework pass through the system mixer (`AudioFlinger`), where sample rates are resampled and mixed before reaching the hardware.
@@ -145,20 +145,20 @@ By default, audio streams routed through the Android OS framework pass through t
 **tsrossa** addresses this by establishing an exclusive, direct USB communication channel with the external DAC via `libusb-1.0` and Android USB Host APIs, delivering unadulterated PCM data directly to the hardware endpoints:
 
 ```
-Standard Android Audio Path (Resampled & Degraded):
+Standard Android Audio Path (OS Resampled):
 [ FLAC File (96kHz/24-bit) ] 
        │
        ▼
  [ Android MediaCodec / AudioTrack ] 
        │
        ▼
- [ Android AudioFlinger OS Mixer ] ──> Resamples to 48kHz (Quantization Distortion)
+ [ Android AudioFlinger OS Mixer ] ──> Resamples to 48kHz (System Mixer)
        │
        ▼
  [ Linux ALSA USB Driver ] ──> [ USB DAC ] (Output locked at 48kHz ❌)
 
 
-tsrossa Bit-Perfect Direct USB Pipeline (100% Unaltered):
+tsrossa Direct USB Audio Pipeline (Bit-Perfect):
 [ FLAC / WAV File (16/24/32-bit, up to 384kHz) ]
        │
        ▼
@@ -171,7 +171,7 @@ tsrossa Bit-Perfect Direct USB Pipeline (100% Unaltered):
  [ libusb-1.0 Native Isochronous Engine ]
        │ (Direct USB Host endpoint submission via /dev/bus/usb)
        ▼
- [ Hardware USB DAC ] (Bit-Perfect Native Master Clock Authenticated Output ✅)
+ [ Hardware USB DAC ] (Bit-Perfect Native Master Clock Verified ✅)
 ```
 
 ### Empirical Verification Telemetry (Hardware Test: SNOWSKY Melody USB DAC)
@@ -311,7 +311,7 @@ This project is licensed under the **Apache License 2.0** — see the [LICENSE](
 ---
 
 <p align="center">
-  <b>tsrossa</b> — Built with ❤️ for audiophiles who refuse to compromise on sound quality.
+  <b>tsrossa</b> — A lightweight, open-source Bit-Perfect USB audio player for Android.
   <br/><br/>
   <a href="https://bagibagi.co/Yukaatsu">
     <img src="https://img.shields.io/badge/☕%20buy%20me%20some%20coffee-bagibagi.co%2FYukaatsu-FFDD00?style=for-the-badge&logoColor=black" alt="Buy me some coffee on BagiBagi"/>
