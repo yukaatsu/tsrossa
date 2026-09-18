@@ -76,8 +76,20 @@ The latest signed, production-ready release is available directly in this reposi
   <tr>
     <td align="center" width="50%">
       <img src="screenshots/01_now_playing.png" alt="Now Playing Screen" width="100%"/>
-      <br/><b>Now Playing Screen</b><br/>
-      <i>Dynamic album palette, ASCII waveform progress bar, 32-bit hardware volume, shuffle, repeat, and queue controls.</i>
+      <br/><b>Now Playing Screen (FLAC Playback)</b><br/>
+      <i>Dynamic album palette, codec format badge [FLAC], ASCII waveform progress bar, 32-bit hardware volume, shuffle, repeat, and queue controls.</i>
+    </td>
+    <td align="center" width="50%">
+      <img src="screenshots/10_wav_playback.png" alt="WAV Playback Screen" width="100%"/>
+      <br/><b>Uncompressed WAV Bit-Perfect Playback</b><br/>
+      <i>Direct bit-perfect streaming of raw Linear PCM / IEEE Float WAV files with dedicated [WAV] codec badge and real-time progress bar.</i>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="screenshots/03_library.png" alt="Library Browser" width="100%"/>
+      <br/><b>Storage Library Browser (Multi-Codec)</b><br/>
+      <i>Folder navigation, live search filter, dynamic codec badges ([WAV] & [FLAC]), and star indicators (★) for playlist items.</i>
     </td>
     <td align="center" width="50%">
       <img src="screenshots/02_playlist.png" alt="Playlist Screen" width="100%"/>
@@ -87,26 +99,14 @@ The latest signed, production-ready release is available directly in this reposi
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="screenshots/03_library.png" alt="Library Browser" width="100%"/>
-      <br/><b>Storage Library Browser</b><br/>
-      <i>Subfolder navigation, live search filter, star indicators (★) for items already in playlist, and instant FLAC scanner.</i>
-    </td>
-    <td align="center" width="50%">
-      <img src="screenshots/04_settings.png" alt="Settings Screen" width="100%"/>
-      <br/><b>Settings & Preferences</b><br/>
-      <i>Background style (Solid Black vs. Blurred Wallpaper), Accent Color Mode (Dynamic vs. Fixed), Font Scale, and Haptic feedback.</i>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
       <img src="screenshots/05_system_logs.png" alt="System Logs & Diagnostics" width="100%"/>
-      <br/><b>System Logs & Live Diagnostics</b><br/>
-      <i>Real-time DAC telemetry (VID/PID, claimed interfaces, sample rates, bit depths, RAM buffer state, and DAC release button).</i>
+      <br/><b>System Logs & Live Diagnostics (Copy & Share)</b><br/>
+      <i>Real-time DAC telemetry, Bit-Perfect verification, hardware clock negotiation, [📋 COPY] to clipboard, and [↗ SHARE] export.</i>
     </td>
     <td align="center" width="50%">
-      <img src="screenshots/06_help_manual.png" alt="Help User Manual" width="100%"/>
-      <br/><b>tsrossa User Manual (Help)</b><br/>
-      <i>In-app user documentation detailing bit-perfect audio streaming, volume dot indicators, transport shortcuts, and queue mechanics.</i>
+      <img src="screenshots/09_mediastyle_notification.png" alt="MediaStyle Notification" width="100%"/>
+      <br/><b>MediaStyle Notification & Lockscreen Player</b><br/>
+      <i>Interactive notification drawer & lockscreen player with dynamic Play/Pause toggle, Previous/Next transport controls, and album art.</i>
     </td>
   </tr>
   <tr>
@@ -119,6 +119,18 @@ The latest signed, production-ready release is available directly in this reposi
       <img src="screenshots/08_track_options.png" alt="Track Options Menu" width="100%"/>
       <br/><b>Long-Press Track Options Menu</b><br/>
       <i>Haptic long-press context modal: Play Now, Play Next, Add to Queue, and Remove from Playlist.</i>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="screenshots/04_settings.png" alt="Settings Screen" width="100%"/>
+      <br/><b>Settings & Preferences</b><br/>
+      <i>Background style (Solid Black vs. Blurred Wallpaper), Accent Color Mode (Dynamic vs. Fixed), Font Scale, and Haptic feedback.</i>
+    </td>
+    <td align="center" width="50%">
+      <img src="screenshots/06_help_manual.png" alt="Help User Manual" width="100%"/>
+      <br/><b>tsrossa User Manual (Help)</b><br/>
+      <i>In-app user documentation detailing bit-perfect audio streaming, volume dot indicators, transport shortcuts, and queue mechanics.</i>
     </td>
   </tr>
 </table>
