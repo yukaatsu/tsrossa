@@ -381,29 +381,22 @@ fun KewApp(audioEngine: AudioEngine) {
 
     LaunchedEffect(isPlaying) {
         com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying = isPlaying
+        com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
         val intent = Intent(context, com.yuka.musicplayer.audio.AudioForegroundService::class.java).apply {
             action = if (isPlaying) "ACTION_PLAY" else "ACTION_PAUSE"
         }
-        if (isPlaying) {
-            try {
+        try {
+            if (isPlaying) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
                 } else {
                     context.startService(intent)
                 }
-            } catch (e: Exception) {
-                // ForegroundServiceStartNotAllowedException (API 31+) or
-                // IllegalStateException on older versions.
-                // App is in background — service start denied by OS.
-                // Non-fatal: playback continues via C++ engine without wakelock protection.
-                android.util.Log.w("KewApp", "FG service start denied (app in background): ${e.message}")
+            } else {
+                context.startService(intent)
             }
-        } else {
-            try {
-                context.stopService(intent)
-            } catch (e: Exception) {
-                // Extremely unlikely, but defensive
-            }
+        } catch (e: Exception) {
+            android.util.Log.w("MusicPlayer", "Service intent error: ${e.message}")
         }
     }
 
@@ -452,13 +445,25 @@ fun KewApp(audioEngine: AudioEngine) {
     DisposableEffect(usbAudioController) {
         usbAudioController.onDeviceReady = { fd ->
             isDacConnected = audioEngine.initUsbDac(fd)
+            com.yuka.musicplayer.audio.AudioPlayerManager.isDacConnected = isDacConnected
+            com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
         }
         usbAudioController.onDeviceDetached = {
-            audioEngine.closeUsbDac()
-            setDndMode(false)
-            audioEngine.pauseAudio()
-            isPlaying = false
-            isDacConnected = false
+            com.yuka.musicplayer.audio.AudioPlayerManager.handleDacDetached()
+        }
+        usbAudioController.onDeviceAttached = {
+            coroutineScope.launch(Dispatchers.Main) {
+                Toast.makeText(context, "USB DAC detected. Initializing...", Toast.LENGTH_SHORT).show()
+                usbAudioController.scanAndRequestPermission()
+            }
+        }
+        com.yuka.musicplayer.audio.AudioPlayerManager.onDacDetached = {
+            coroutineScope.launch(Dispatchers.Main) {
+                setDndMode(false)
+                isPlaying = false
+                isDacConnected = false
+                Toast.makeText(context, "USB DAC disconnected. Playback paused.", Toast.LENGTH_SHORT).show()
+            }
         }
         audioEngine.onUsbStallFaultCallback = {
             // C++ reported a hard stall. Re-init the DAC.
@@ -468,12 +473,7 @@ fun KewApp(audioEngine: AudioEngine) {
         }
         audioEngine.onDeviceForceDisconnectedCallback = {
             // C++ reported surprise removal (hotplug).
-            coroutineScope.launch(Dispatchers.Main) {
-                setDndMode(false)
-                audioEngine.pauseAudio()
-                isPlaying = false
-                isDacConnected = false
-            }
+            com.yuka.musicplayer.audio.AudioPlayerManager.handleDacDetached()
         }
         audioEngine.onFormatIncompatibleCallback = { filename, bitDepth, sampleRate, reason ->
             coroutineScope.launch(Dispatchers.Main) {
@@ -482,6 +482,7 @@ fun KewApp(audioEngine: AudioEngine) {
         }
         onDispose {
             setDndMode(false)
+            com.yuka.musicplayer.audio.AudioPlayerManager.onDacDetached = null
             audioEngine.onUsbStallFaultCallback = null
             audioEngine.onDeviceForceDisconnectedCallback = null
             audioEngine.onFormatIncompatibleCallback = null
@@ -752,6 +753,37 @@ fun KewApp(audioEngine: AudioEngine) {
     val currentActiveList by rememberUpdatedState(activeList)
     
     DisposableEffect(Unit) {
+        com.yuka.musicplayer.audio.AudioPlayerManager.onPlayNext = {
+            coroutineScope.launch(Dispatchers.Main) {
+                playNext(false)
+            }
+        }
+        com.yuka.musicplayer.audio.AudioPlayerManager.onPlayPrev = {
+            coroutineScope.launch(Dispatchers.Main) {
+                playPrev()
+            }
+        }
+        com.yuka.musicplayer.audio.AudioPlayerManager.onTogglePlay = {
+            coroutineScope.launch(Dispatchers.Main) {
+                if (isPlaying) {
+                    audioEngine.pauseAudio()
+                    isPlaying = false
+                } else {
+                    currentTrack?.file?.let { file ->
+                        playTrack(file, false)
+                    } ?: run {
+                        val active = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
+                            filesInDir.filter { !it.isDirectory }
+                        } else {
+                            playlistPaths.map { File(it) }
+                        }
+                        if (active.isNotEmpty()) {
+                            playTrack(active.first(), false)
+                        }
+                    }
+                }
+            }
+        }
         audioEngine.onTrackFinishedCallback = { 
             coroutineScope.launch(Dispatchers.Main) {
                 currentPlayNext(true) 
@@ -806,6 +838,9 @@ fun KewApp(audioEngine: AudioEngine) {
             }
         }
         onDispose {
+            com.yuka.musicplayer.audio.AudioPlayerManager.onPlayNext = null
+            com.yuka.musicplayer.audio.AudioPlayerManager.onPlayPrev = null
+            com.yuka.musicplayer.audio.AudioPlayerManager.onTogglePlay = null
             audioEngine.onTrackFinishedCallback = null
             audioEngine.onTrackTransitionCallback = null
         }

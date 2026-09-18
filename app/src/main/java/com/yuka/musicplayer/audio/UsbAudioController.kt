@@ -20,6 +20,7 @@ class UsbAudioController(context: Context) {
     // Callback when a valid USB Audio device is ready (permission granted and opened)
     var onDeviceReady: ((Int) -> Unit)? = null
     var onDeviceDetached: (() -> Unit)? = null
+    var onDeviceAttached: (() -> Unit)? = null
 
     private val permissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -54,6 +55,7 @@ class UsbAudioController(context: Context) {
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
                     Log.i("UsbAudioController", "USB Device attached event received.")
+                    onDeviceAttached?.invoke()
                     scanAndRequestPermission()
                 }
             }

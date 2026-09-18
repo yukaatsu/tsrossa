@@ -126,6 +126,7 @@ struct AudioEngineState {
   std::atomic<uint32_t> sampleRate{0};
   std::atomic<int> subframeSize{0}; // 2=16-bit, 3=24-bit, 4=32-bit
   std::atomic<int> activeIsoTransfers{0};
+  std::atomic<int> usb_frames_per_sec{1000};
 
   // Gapless pre-loading buffers
   std::vector<int32_t> pcmBufferNext;
@@ -337,6 +338,7 @@ static void control_thread_func() {
 
 static void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
   if (g_audioState.stopIsoThread.load() ||
+      g_audioState.usbHandle == nullptr ||
       transfer->status == LIBUSB_TRANSFER_CANCELLED ||
       transfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
     g_audioState.activeIsoTransfers.fetch_sub(1);
@@ -348,6 +350,12 @@ static void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
       transfer->status == LIBUSB_TRANSFER_TIMED_OUT ||
       transfer->status == LIBUSB_TRANSFER_STALL ||
       transfer->status == LIBUSB_TRANSFER_OVERFLOW) {
+
+    // Fast exit if device disconnected or aborting
+    if (g_audioState.stopIsoThread.load() || g_audioState.usbHandle == nullptr) {
+      g_audioState.activeIsoTransfers.fetch_sub(1);
+      return;
+    }
 
     uint64_t now = get_time_ms();
     if (now - g_audioState.lastErrorTimeMs > 100) {
@@ -393,10 +401,8 @@ static void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
   int num_packets = transfer->num_iso_packets;
   uint8_t *buffer = transfer->buffer;
 
-  int speed =
-      libusb_get_device_speed(libusb_get_device(g_audioState.usbHandle));
-  int usb_frames_per_sec =
-      (speed == LIBUSB_SPEED_HIGH || speed == LIBUSB_SPEED_SUPER) ? 8000 : 1000;
+  int usb_frames_per_sec = g_audioState.usb_frames_per_sec.load();
+  if (usb_frames_per_sec <= 0) usb_frames_per_sec = 1000;
   double frames_per_packet =
       (double)g_audioState.sampleRate / usb_frames_per_sec;
 
@@ -897,6 +903,11 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
   }
 
   libusb_device *dev = libusb_get_device(g_audioState.usbHandle);
+  int dev_speed = libusb_get_device_speed(dev);
+  int dev_fps = (dev_speed == LIBUSB_SPEED_HIGH || dev_speed == LIBUSB_SPEED_SUPER) ? 8000 : 1000;
+  g_audioState.usb_frames_per_sec.store(dev_fps);
+  LOGI("initUsbDac: Device speed is %d -> cached usb_frames_per_sec set to %d", dev_speed, dev_fps);
+
   struct libusb_config_descriptor *config;
   if (libusb_get_active_config_descriptor(dev, &config) < 0)
     return JNI_FALSE;
@@ -1797,7 +1808,13 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
 
   // Start ISO Thread if not running
   if (g_audioState.isoThread == nullptr && g_audioState.usbHandle != nullptr) {
-    LOGI("[Thread] Spawning new isoThread");
+    libusb_device *dev = libusb_get_device(g_audioState.usbHandle);
+    if (dev) {
+      int dev_speed = libusb_get_device_speed(dev);
+      int dev_fps = (dev_speed == LIBUSB_SPEED_HIGH || dev_speed == LIBUSB_SPEED_SUPER) ? 8000 : 1000;
+      g_audioState.usb_frames_per_sec.store(dev_fps);
+    }
+    LOGI("[Thread] Spawning new isoThread (cached usb_frames_per_sec=%d)", g_audioState.usb_frames_per_sec.load());
     g_audioState.stopIsoThread.store(false);
     g_audioState.isoThreadExited.store(false);
     g_audioState.isoThread = new std::thread([]() {
