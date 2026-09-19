@@ -385,6 +385,15 @@ fun KewApp(audioEngine: AudioEngine) {
     
     LaunchedEffect(currentTrack) {
         com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack = currentTrack
+        com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
+        val intent = Intent(context, com.yuka.musicplayer.audio.AudioForegroundService::class.java).apply {
+            action = com.yuka.musicplayer.audio.AudioForegroundService.ACTION_UPDATE
+        }
+        try {
+            context.startService(intent)
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Service update error: ${e.message}")
+        }
     }
     
     val accentFixedColor = remember(accentFixedColorStr) {
@@ -764,7 +773,7 @@ fun KewApp(audioEngine: AudioEngine) {
         }
         
         // Tampilkan skeleton agar layar Now Playing tidak kosong selagi loading
-        currentTrack = TrackInfo(
+        val initialTrack = TrackInfo(
             file = file,
             title = file.nameWithoutExtension,
             artist = "Loading...",
@@ -774,6 +783,9 @@ fun KewApp(audioEngine: AudioEngine) {
             coverArt = null,
             dominantColor = Color(0xFF00FF00)
         )
+        currentTrack = initialTrack
+        com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack = initialTrack
+        com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
         isPlaying = true
         playbackPosition = 0.0
 
@@ -840,6 +852,8 @@ fun KewApp(audioEngine: AudioEngine) {
             val metadata = extractMetadata(file)
             withContext(Dispatchers.Main) {
                 currentTrack = metadata
+                com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack = metadata
+                com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
             }
             
             // Prepare next track for gapless playback
@@ -918,7 +932,7 @@ fun KewApp(audioEngine: AudioEngine) {
                 }
 
                 // INSTANT SKELETON UPDATE: Cegah delay UI saat gapless & fix tombol next mengulang
-                currentTrack = TrackInfo(
+                val initialTrack = TrackInfo(
                     file = nextFile,
                     title = nextFile.nameWithoutExtension,
                     artist = "Loading...",
@@ -928,6 +942,9 @@ fun KewApp(audioEngine: AudioEngine) {
                     coverArt = null,
                     dominantColor = Color(0xFF00FF00)
                 )
+                currentTrack = initialTrack
+                com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack = initialTrack
+                com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
                 
                 withContext(Dispatchers.IO) {
                     val nextMetadata = extractMetadata(nextFile)
@@ -939,6 +956,8 @@ fun KewApp(audioEngine: AudioEngine) {
                     
                     withContext(Dispatchers.Main) {
                         currentTrack = nextMetadata
+                        com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack = nextMetadata
+                        com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
 
                         playbackPosition = 0.0
                         

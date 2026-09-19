@@ -60,7 +60,8 @@ class AudioForegroundService : Service() {
         val stopPendingIntent = PendingIntent.getService(this, 4, stopIntent, flags)
 
         val track = AudioPlayerManager.currentTrack
-        val isPlaying = AudioPlayerManager.isPlaying
+        val isPlaying = AudioPlayerManager.isPlaying ||
+            (AudioPlayerManager.isInitialized && AudioPlayerManager.audioEngine.isPlaying())
         val isDac = AudioPlayerManager.isDacConnected
 
         val title = track?.title ?: "tsrossa Audiophile Player"
@@ -94,11 +95,7 @@ class AudioForegroundService : Service() {
             .addAction(playPauseIcon, playPauseTitle, togglePlayPendingIntent)
             .addAction(android.R.drawable.ic_media_next, "Next", nextPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPendingIntent)
-
-        // Attach Album Art if available
-        track?.coverArt?.let { bitmap ->
-            builder.setLargeIcon(bitmap)
-        }
+            .setLargeIcon(track?.coverArt)
 
         return builder.build()
     }
