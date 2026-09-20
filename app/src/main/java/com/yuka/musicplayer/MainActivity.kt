@@ -4151,12 +4151,12 @@ fun PacmanSeekBar(
     val pacmanColor = Color(0xFFFFD700) // Golden arcade neon yellow
 
     BoxWithConstraints(
-        modifier = modifier.fillMaxWidth(0.92f)
+        modifier = modifier.fillMaxWidth(0.80f)
     ) {
         val containerMaxWidth = maxWidth
         val totalWidthPx = constraints.maxWidth.toFloat()
         val density = LocalDensity.current
-        val pacmanRadiusPx = with(density) { 10.dp.toPx() }
+        val pacmanRadiusPx = with(density) { 7.5.dp.toPx() }
         val trackStart = pacmanRadiusPx
         val trackEnd = totalWidthPx - pacmanRadiusPx
         val trackWidth = (trackEnd - trackStart).coerceAtLeast(1f)
@@ -4172,14 +4172,14 @@ fun PacmanSeekBar(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(24.dp)
+                    .height(22.dp)
             ) {
                 if (isDragging) {
                     val jumpMin = (targetSeconds / 60).toInt()
                     val jumpSec = (targetSeconds % 60).toInt()
                     val jumpStr = String.format("[ JUMP: %02d:%02d ]", jumpMin, jumpSec)
 
-                    val badgeWidth = 100.dp
+                    val badgeWidth = 92.dp
                     val rawOffset = pacmanXDp - (badgeWidth / 2)
                     val clampedOffset = rawOffset.coerceIn(0.dp, (containerMaxWidth - badgeWidth).coerceAtLeast(0.dp))
 
@@ -4188,13 +4188,13 @@ fun PacmanSeekBar(
                             .offset(x = clampedOffset)
                             .background(Color(0xFF0D0D0D), RoundedCornerShape(3.dp))
                             .border(1.dp, pacmanColor.copy(alpha = 0.85f), RoundedCornerShape(3.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 5.dp, vertical = 1.5.dp)
                     ) {
                         Text(
                             text = jumpStr,
                             color = pacmanColor,
                             fontFamily = TerminalFont,
-                            fontSize = 10.sp,
+                            fontSize = 9.5.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -4207,7 +4207,7 @@ fun PacmanSeekBar(
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(28.dp)
+                    .height(22.dp)
                     .pointerInput(durationSeconds) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
@@ -4245,13 +4245,13 @@ fun PacmanSeekBar(
 
                 // Track Left: Played neon stream (behind Pac-Man)
                 if (pacmanXPx > trackStart) {
-                    val lineEnd = (pacmanXPx - pacmanRadiusPx * 0.4f).coerceAtLeast(trackStart)
+                    val lineEnd = (pacmanXPx - pacmanRadiusPx * 0.35f).coerceAtLeast(trackStart)
                     // Neon outer glow
                     drawLine(
                         color = dynamicColor.copy(alpha = 0.35f),
                         start = Offset(trackStart, cy),
                         end = Offset(lineEnd, cy),
-                        strokeWidth = 5.dp.toPx(),
+                        strokeWidth = 3.5.dp.toPx(),
                         cap = StrokeCap.Round
                     )
                     // Core neon line
@@ -4259,34 +4259,34 @@ fun PacmanSeekBar(
                         color = dynamicColor,
                         start = Offset(trackStart, cy),
                         end = Offset(lineEnd, cy),
-                        strokeWidth = 2.5.dp.toPx(),
+                        strokeWidth = 2.dp.toPx(),
                         cap = StrokeCap.Round
                     )
                 }
 
                 // Track Right Background Guideline (Subtle dark groove)
                 if (pacmanXPx < trackEnd) {
-                    val lineStart = (pacmanXPx + pacmanRadiusPx * 0.4f).coerceAtMost(trackEnd)
+                    val lineStart = (pacmanXPx + pacmanRadiusPx * 0.35f).coerceAtMost(trackEnd)
                     drawLine(
                         color = Color(0xFF222222),
                         start = Offset(lineStart, cy),
                         end = Offset(trackEnd, cy),
-                        strokeWidth = 1.5.dp.toPx(),
+                        strokeWidth = 1.2.dp.toPx(),
                         cap = StrokeCap.Round
                     )
                 }
 
                 // Pac-Dots (Food pellets awaiting Pac-Man in front of him)
-                val dotSpacingPx = 15.dp.toPx()
-                val dotRadiusPx = 2.2.dp.toPx()
-                val dotGlowRadiusPx = 3.8.dp.toPx()
+                val dotSpacingPx = 12.dp.toPx()
+                val dotRadiusPx = 1.6.dp.toPx()
+                val dotGlowRadiusPx = 2.6.dp.toPx()
 
                 var dotX = trackStart + dotSpacingPx
-                while (dotX <= trackEnd - 4.dp.toPx()) {
+                while (dotX <= trackEnd - 3.dp.toPx()) {
                     val threshold = if (isMovingBackward) {
-                        pacmanXPx - pacmanRadiusPx * 0.7f
+                        pacmanXPx - pacmanRadiusPx * 0.65f
                     } else {
-                        pacmanXPx + pacmanRadiusPx * 0.7f
+                        pacmanXPx + pacmanRadiusPx * 0.65f
                     }
                     if (dotX > threshold) {
                         // Dot glow
@@ -4316,7 +4316,7 @@ fun PacmanSeekBar(
                 // Pac-Man glow
                 drawCircle(
                     color = pacmanColor.copy(alpha = 0.22f),
-                    radius = pacmanRadiusPx + 3.dp.toPx(),
+                    radius = pacmanRadiusPx + 2.dp.toPx(),
                     center = Offset(pacmanXPx, cy)
                 )
 
@@ -4336,10 +4336,10 @@ fun PacmanSeekBar(
                 } else {
                     pacmanXPx + pacmanRadiusPx * 0.2f
                 }
-                val eyeY = cy - pacmanRadiusPx * 0.45f
+                val eyeY = cy - pacmanRadiusPx * 0.42f
                 drawCircle(
                     color = Color(0xFF111111),
-                    radius = 1.6.dp.toPx(),
+                    radius = 1.1.dp.toPx(),
                     center = Offset(eyeX, eyeY)
                 )
             }
@@ -4356,13 +4356,13 @@ fun PacmanSeekBar(
                     text = posStr,
                     color = TerminalWhite,
                     fontFamily = TerminalFont,
-                    fontSize = 11.sp
+                    fontSize = 10.5.sp
                 )
                 Text(
                     text = durStr,
                     color = TerminalGray,
                     fontFamily = TerminalFont,
-                    fontSize = 11.sp
+                    fontSize = 10.5.sp
                 )
             }
         }
