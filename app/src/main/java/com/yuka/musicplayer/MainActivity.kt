@@ -31,6 +31,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
+import com.yuka.musicplayer.update.*
 
 import android.media.AudioFocusRequest
 import androidx.compose.foundation.BorderStroke
@@ -339,6 +340,9 @@ fun KewApp(audioEngine: AudioEngine) {
     var showSystemLogs by remember { mutableStateOf(false) }
     var showHelpPanel by remember { mutableStateOf(false) }
     var showQueuePanel by remember { mutableStateOf(false) }
+    var showUpdatePanel by remember { mutableStateOf(false) }
+    var updateCheckState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
+    var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
     var trackActionTarget by remember { mutableStateOf<File?>(null) }
 
     var isShuffleEnabled by remember { mutableStateOf(sharedPref.getBoolean("shuffle_enabled", false)) }
@@ -494,6 +498,40 @@ fun KewApp(audioEngine: AudioEngine) {
     }
     
     val coroutineScope = rememberCoroutineScope()
+
+    val triggerCheckUpdate = {
+        coroutineScope.launch {
+            updateCheckState = UpdateCheckState.Checking
+            updateCheckState = AppUpdateManager.checkForUpdates(BuildConfig.VERSION_NAME)
+        }
+    }
+
+    val triggerDownloadAndInstall: (ReleaseInfo) -> Unit = { release ->
+        coroutineScope.launch {
+            downloadState = DownloadState.Downloading(0f, 0L, release.apkSize)
+            val result = AppUpdateManager.downloadApk(
+                context = context,
+                downloadUrl = release.apkDownloadUrl,
+                expectedSize = release.apkSize
+            ) { progress, downloadedBytes, totalBytes ->
+                downloadState = DownloadState.Downloading(progress, downloadedBytes, totalBytes)
+            }
+            result.onSuccess { apkFile ->
+                downloadState = DownloadState.ReadyToInstall(apkFile)
+                AppUpdateManager.installApk(context, apkFile)
+            }.onFailure { err ->
+                downloadState = DownloadState.Error(err.message ?: "Download failed")
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val autoCheck = sharedPref.getBoolean("auto_check_update", true)
+        if (autoCheck) {
+            updateCheckState = UpdateCheckState.Checking
+            updateCheckState = AppUpdateManager.checkForUpdates(BuildConfig.VERSION_NAME)
+        }
+    }
 
     var isPlaying by remember { mutableStateOf(com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying || audioEngine.isPlaying()) }
     var pausedByTransientLoss by remember { mutableStateOf(false) }
@@ -1238,7 +1276,13 @@ fun KewApp(audioEngine: AudioEngine) {
             isForceSoftwareVolume = isForceSoftwareVolume,
             isHardwareVolumeLockedBySystem = isHardwareVolumeLockedBySystem,
             onToggleLogs = { showSystemLogs = !showSystemLogs },
-            onToggleHelp = { showHelpPanel = !showHelpPanel }
+            onToggleUpdate = {
+                showUpdatePanel = !showUpdatePanel
+                if (updateCheckState is UpdateCheckState.Idle) {
+                    triggerCheckUpdate()
+                }
+            },
+            hasUpdateAvailable = updateCheckState is UpdateCheckState.UpdateAvailable
         )
         
         if (showSystemLogs) {
@@ -1325,6 +1369,50 @@ fun KewApp(audioEngine: AudioEngine) {
                             ) {}
                     ) {
                         HelpPanel(onClose = { showHelpPanel = false })
+                    }
+                }
+            }
+        }
+
+        if (showUpdatePanel) {
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.Center,
+                onDismissRequest = { showUpdatePanel = false },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.65f))
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null
+                        ) { showUpdatePanel = false }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(horizontal = 16.dp, vertical = 24.dp)
+                            .fillMaxWidth(0.94f)
+                            .fillMaxHeight(0.85f)
+                            .background(androidx.compose.ui.graphics.Color(0xFF0C0C0C), shape = RoundedCornerShape(8.dp))
+                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = null
+                            ) {}
+                    ) {
+                        UpdatePanel(
+                            currentVersion = BuildConfig.VERSION_NAME,
+                            updateCheckState = updateCheckState,
+                            downloadState = downloadState,
+                            onCheckForUpdate = { triggerCheckUpdate() },
+                            onDownloadAndInstall = { rel -> triggerDownloadAndInstall(rel) },
+                            onInstallFile = { file -> AppUpdateManager.installApk(context, file) },
+                            onOpenPermissionSettings = { AppUpdateManager.openInstallPermissionSettings(context) },
+                            canInstallPackages = AppUpdateManager.canInstallPackages(context),
+                            onClose = { showUpdatePanel = false }
+                        )
                     }
                 }
             }
@@ -1756,6 +1844,10 @@ fun KewApp(audioEngine: AudioEngine) {
                 onRequestStorage = requestStoragePermission,
                 onRequestDnd = requestDndPermission,
                 onOpenPermissionDialog = { showPermissionDialog = true },
+                onOpenHelp = { showHelpPanel = true },
+                updateCheckState = updateCheckState,
+                onCheckForUpdate = { triggerCheckUpdate() },
+                onOpenUpdateDialog = { showUpdatePanel = true },
                 modifier = Modifier.weight(1f)
             )
         }
@@ -1777,7 +1869,8 @@ fun AppHeader(
     isForceSoftwareVolume: Boolean,
     isHardwareVolumeLockedBySystem: Boolean,
     onToggleLogs: () -> Unit,
-    onToggleHelp: () -> Unit
+    onToggleUpdate: () -> Unit,
+    hasUpdateAvailable: Boolean = false
 ) {
     Column(
         modifier = Modifier
@@ -1812,20 +1905,7 @@ fun AppHeader(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                        .background(LocalAccentColor.current.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
-                        .clickable { onToggleHelp() }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("?", color = LocalAccentColor.current, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("HELP", color = TerminalWhite, fontSize = 10.sp, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
-                    }
-                }
-
+                // Button 1: LOGS (moved to the position previously held by HELP)
                 Box(
                     modifier = Modifier
                         .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
@@ -1837,6 +1917,26 @@ fun AppHeader(
                         Text("⚙", color = LocalAccentColor.current, fontSize = 11.sp)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("LOGS", color = TerminalWhite, fontSize = 10.sp, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // Button 2: UPD (in former LOGS spot)
+                val updBorder = if (hasUpdateAvailable) androidx.compose.ui.graphics.Color(0xFF00E676) else LocalAccentColor.current.copy(alpha = 0.4f)
+                val updBg = if (hasUpdateAvailable) androidx.compose.ui.graphics.Color(0xFF00E676).copy(alpha = 0.15f) else LocalAccentColor.current.copy(alpha = 0.08f)
+                val updColor = if (hasUpdateAvailable) androidx.compose.ui.graphics.Color(0xFF00E676) else TerminalWhite
+                val updIconColor = if (hasUpdateAvailable) androidx.compose.ui.graphics.Color(0xFF00E676) else LocalAccentColor.current
+
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, updBorder, RoundedCornerShape(4.dp))
+                        .background(updBg, RoundedCornerShape(4.dp))
+                        .clickable { onToggleUpdate() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (hasUpdateAvailable) "⚡" else "⬆", color = updIconColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (hasUpdateAvailable) "UPD!" else "UPD", color = updColor, fontSize = 10.sp, fontFamily = TerminalFont, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -2451,6 +2551,278 @@ fun HelpPanel(onClose: () -> Unit) {
 }
 
 @Composable
+fun UpdatePanel(
+    currentVersion: String,
+    updateCheckState: UpdateCheckState,
+    downloadState: DownloadState,
+    onCheckForUpdate: () -> Unit,
+    onDownloadAndInstall: (ReleaseInfo) -> Unit,
+    onInstallFile: (File) -> Unit,
+    onOpenPermissionSettings: () -> Unit,
+    canInstallPackages: Boolean,
+    onClose: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Header
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .border(1.dp, LocalAccentColor.current, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (updateCheckState is UpdateCheckState.UpdateAvailable) "⚡" else "⬆",
+                        color = LocalAccentColor.current,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "SOFTWARE UPDATER",
+                    color = TerminalWhite,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont,
+                    letterSpacing = 0.5.sp
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .border(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                    .background(androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
+                    .clickable { onClose() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text("✕ CLOSE", color = androidx.compose.ui.graphics.Color.Red, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(LocalAccentColor.current.copy(alpha = 0.25f)))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+        ) {
+            // Version Info Box
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, LocalAccentColor.current.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                    .background(androidx.compose.ui.graphics.Color(0xFF141414), RoundedCornerShape(4.dp))
+                    .padding(10.dp)
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("INSTALLED VERSION:", color = TerminalGray, fontFamily = TerminalFont, fontSize = 10.sp)
+                        Text("v$currentVersion", color = TerminalWhite, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    when (updateCheckState) {
+                        is UpdateCheckState.Checking -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("STATUS: ", color = TerminalGray, fontFamily = TerminalFont, fontSize = 10.sp)
+                                Text("CHECKING GITHUB RELEASES...", color = androidx.compose.ui.graphics.Color(0xFFFFD700), fontFamily = TerminalFont, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        is UpdateCheckState.UpToDate -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("STATUS: ", color = TerminalGray, fontFamily = TerminalFont, fontSize = 10.sp)
+                                Text("[✓] UP TO DATE (${updateCheckState.latestTag})", color = androidx.compose.ui.graphics.Color(0xFF00E676), fontFamily = TerminalFont, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        is UpdateCheckState.UpdateAvailable -> {
+                            val rel = updateCheckState.release
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("STATUS: ", color = TerminalGray, fontFamily = TerminalFont, fontSize = 10.sp)
+                                Text("[⚡ NEW UPDATE AVAILABLE!]", color = androidx.compose.ui.graphics.Color(0xFF00E676), fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("LATEST TAG:", color = TerminalGray, fontFamily = TerminalFont, fontSize = 10.sp)
+                                Text(rel.tagName, color = androidx.compose.ui.graphics.Color(0xFF00E676), fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("PACKAGE SIZE:", color = TerminalGray, fontFamily = TerminalFont, fontSize = 10.sp)
+                                Text(String.format("%.1f MB", rel.apkSize / (1024.0 * 1024.0)), color = TerminalWhite, fontFamily = TerminalFont, fontSize = 10.sp)
+                            }
+                        }
+                        is UpdateCheckState.Error -> {
+                            Text("STATUS: ERROR", color = androidx.compose.ui.graphics.Color.Red, fontFamily = TerminalFont, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text(updateCheckState.message, color = androidx.compose.ui.graphics.Color(0xFFFF8888), fontFamily = TerminalFont, fontSize = 9.sp)
+                        }
+                        is UpdateCheckState.Idle -> {
+                            Text("STATUS: READY TO CHECK", color = TerminalGray, fontFamily = TerminalFont, fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+
+            // Permission Warning if cannot install packages
+            if (!canInstallPackages) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, androidx.compose.ui.graphics.Color(0xFFFF9100).copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .background(androidx.compose.ui.graphics.Color(0xFF221600), RoundedCornerShape(4.dp))
+                        .padding(8.dp)
+                ) {
+                    Column {
+                        Text("⚠ PERMISSION REQUIRED: INSTALL UNKNOWN APPS", color = androidx.compose.ui.graphics.Color(0xFFFF9100), fontFamily = TerminalFont, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("Android requires permission to install APK updates from this app.", color = TerminalWhite, fontFamily = TerminalFont, fontSize = 9.sp)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .border(1.dp, androidx.compose.ui.graphics.Color(0xFFFF9100), RoundedCornerShape(4.dp))
+                                .clickable { onOpenPermissionSettings() }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text("GRANT IN SETTINGS →", color = androidx.compose.ui.graphics.Color(0xFFFF9100), fontFamily = TerminalFont, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            // Changelog Section if Update is Available
+            if (updateCheckState is UpdateCheckState.UpdateAvailable) {
+                val rel = updateCheckState.release
+                Spacer(modifier = Modifier.height(12.dp))
+                LogSectionHeader("RELEASE NOTES & CHANGELOG")
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 100.dp, max = 220.dp)
+                        .border(1.dp, LocalAccentColor.current.copy(alpha = 0.25f), RoundedCornerShape(4.dp))
+                        .background(androidx.compose.ui.graphics.Color(0xFF0A0A0A), RoundedCornerShape(4.dp))
+                        .padding(8.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = if (rel.changelog.isNotBlank()) rel.changelog else "No release notes provided.",
+                        color = TerminalWhite,
+                        fontFamily = TerminalFont,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Download & Progress Section
+            when (downloadState) {
+                is DownloadState.Downloading -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                            .background(androidx.compose.ui.graphics.Color(0xFF141414), RoundedCornerShape(4.dp))
+                            .padding(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("DOWNLOADING APK...", color = androidx.compose.ui.graphics.Color(0xFFFFD700), fontFamily = TerminalFont, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("${(downloadState.progress * 100).toInt()}%", color = androidx.compose.ui.graphics.Color(0xFF00E676), fontFamily = TerminalFont, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "${String.format("%.1f", downloadState.downloadedBytes / 1048576.0)} MB / ${String.format("%.1f", downloadState.totalBytes / 1048576.0)} MB",
+                            color = TerminalGray,
+                            fontFamily = TerminalFont,
+                            fontSize = 9.sp
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .background(androidx.compose.ui.graphics.Color(0xFF222222), RoundedCornerShape(4.dp))
+                                .border(1.dp, LocalAccentColor.current.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(downloadState.progress)
+                                    .fillMaxHeight()
+                                    .background(LocalAccentColor.current, RoundedCornerShape(4.dp))
+                            )
+                        }
+                    }
+                }
+                is DownloadState.ReadyToInstall -> {
+                    RetroButton(
+                        text = "[ ⚡ LAUNCH PACKAGE INSTALLER ]",
+                        onClick = { onInstallFile(downloadState.apkFile) },
+                        isSelected = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                is DownloadState.Error -> {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text("Download failed: ${downloadState.message}", color = androidx.compose.ui.graphics.Color.Red, fontFamily = TerminalFont, fontSize = 10.sp)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        if (updateCheckState is UpdateCheckState.UpdateAvailable) {
+                            RetroButton(
+                                text = "RETRY DOWNLOAD",
+                                onClick = { onDownloadAndInstall(updateCheckState.release) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+                is DownloadState.Idle -> {
+                    if (updateCheckState is UpdateCheckState.UpdateAvailable) {
+                        RetroButton(
+                            text = "[ ⬇ DOWNLOAD & INSTALL APK (${String.format("%.1f MB", updateCheckState.release.apkSize / (1024.0 * 1024.0))}) ]",
+                            onClick = { onDownloadAndInstall(updateCheckState.release) },
+                            isSelected = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            RetroButton(
+                text = if (updateCheckState is UpdateCheckState.Checking) "CHECKING RELEASES..." else "[ ⟳ CHECK GITHUB FOR UPDATES ]",
+                onClick = onCheckForUpdate,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
 fun QueuePanel(
     currentTrack: TrackInfo?,
     priorityQueue: List<File>,
@@ -2685,6 +3057,10 @@ fun SettingsView(
     onRequestStorage: () -> Unit = {},
     onRequestDnd: () -> Unit = {},
     onOpenPermissionDialog: () -> Unit = {},
+    onOpenHelp: () -> Unit = {},
+    updateCheckState: UpdateCheckState = UpdateCheckState.Idle,
+    onCheckForUpdate: () -> Unit = {},
+    onOpenUpdateDialog: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -2893,6 +3269,80 @@ fun SettingsView(
             onClick = onOpenPermissionDialog,
             modifier = Modifier.fillMaxWidth()
         )
+
+        Spacer(modifier = Modifier.height(14.dp))
+        LogSectionHeader("DOCUMENTATION & USER MANUAL")
+        Text("PANDUAN LENGKAP & FITUR AUDIO", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(6.dp))
+        RetroButton(
+            text = "[ ? ] USER GUIDE & SYSTEM MANUAL",
+            onClick = onOpenHelp,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+        LogSectionHeader("APPLICATION UPDATES")
+        Text("STATUS & PEMBARUAN APLIKASI", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(
+                    1.dp,
+                    if (updateCheckState is UpdateCheckState.UpdateAvailable) androidx.compose.ui.graphics.Color(0xFF00E676).copy(alpha = 0.5f) else LocalAccentColor.current.copy(alpha = 0.3f),
+                    RoundedCornerShape(4.dp)
+                )
+                .background(androidx.compose.ui.graphics.Color(0xFF141414), RoundedCornerShape(4.dp))
+                .clickable { onOpenUpdateDialog() }
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Text("CURRENT: v${BuildConfig.VERSION_NAME}", color = TerminalWhite, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                val statusDesc = when (updateCheckState) {
+                    is UpdateCheckState.Checking -> "Checking GitHub releases..."
+                    is UpdateCheckState.UpToDate -> "Application is up to date"
+                    is UpdateCheckState.UpdateAvailable -> "New version ${updateCheckState.release.tagName} available!"
+                    is UpdateCheckState.Error -> "Check failed: ${updateCheckState.message}"
+                    is UpdateCheckState.Idle -> "Tap to scan for updates"
+                }
+                Text(
+                    text = statusDesc,
+                    color = when (updateCheckState) {
+                        is UpdateCheckState.UpdateAvailable -> androidx.compose.ui.graphics.Color(0xFF00E676)
+                        is UpdateCheckState.Checking -> androidx.compose.ui.graphics.Color(0xFFFFD700)
+                        is UpdateCheckState.Error -> androidx.compose.ui.graphics.Color.Red
+                        else -> TerminalGray
+                    },
+                    fontFamily = TerminalFont,
+                    fontSize = 10.sp
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .border(
+                        1.dp,
+                        if (updateCheckState is UpdateCheckState.UpdateAvailable) androidx.compose.ui.graphics.Color(0xFF00E676) else LocalAccentColor.current.copy(alpha = 0.5f),
+                        RoundedCornerShape(4.dp)
+                    )
+                    .background(
+                        if (updateCheckState is UpdateCheckState.UpdateAvailable) androidx.compose.ui.graphics.Color(0xFF00E676).copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .clickable { onOpenUpdateDialog() }
+                    .padding(horizontal = 8.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = if (updateCheckState is UpdateCheckState.UpdateAvailable) "VIEW" else "CHECK",
+                    color = if (updateCheckState is UpdateCheckState.UpdateAvailable) androidx.compose.ui.graphics.Color(0xFF00E676) else LocalAccentColor.current,
+                    fontFamily = TerminalFont,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(24.dp))
     }
