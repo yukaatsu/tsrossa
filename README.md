@@ -71,6 +71,31 @@ Looking for lossless FLAC tracks to test bit-perfect playback with your DAC setu
 
 ---
 
+## 🧪 Beta Tester Guide & Testing Scope
+
+To provide clarity for community testers during the **Beta (v1.2.0-beta2)** phase, here is the scope of supported capabilities and recommended testing workflows:
+
+### ✅ Supported in This Version:
+| Category | Supported Specification & Testing Notes |
+| :--- | :--- |
+| **Audio Formats** | • **FLAC** (`.flac`): 16-bit, 24-bit, 32-bit integer PCM (44.1 kHz to 384 kHz)<br/>• **WAV** (`.wav`, `.wave`): 16-bit, 24-bit, 32-bit Linear PCM, and 32-bit IEEE Float |
+| **Audio Output** | **Dedicated to External USB DACs** via USB-C / OTG (Dongle DAC, Portable DAC/Amp, Desktop DAC) adhering to USB Audio Class (UAC1 / UAC2). |
+| **AudioFlinger Bypass** | **100% Direct Kernel USB** — Bypasses Android OS mixer; zero 48kHz forced resampling, zero DSP alterations. |
+| **Audio & Seek Controls** | In-app playback controls, Pac-Man animated seek bar, and **Android Lockscreen / MediaStyle notification drawer**. |
+| **Hardware Diagnostics** | Open **`[LOGS]`** to inspect real-time DAC negotiation, clock locking, and use **`[📋 COPY REPORT]`** or **`[↗ SHARE REPORT]`** to submit telemetry with bug reports. |
+| **In-App Updates** | Tap **`[UPD]`** in the top header or in Settings to automatically check and install new GitHub releases. |
+
+### ❌ Out of Scope / Not Supported in Beta:
+- ❌ **Lossy Compressed Formats**: Formats such as **MP3, AAC, M4A, OGG, WMA** are intentionally omitted from this bit-perfect engine.
+- ❌ **Native DSD / DSF / DFF**: Planned for a future release via DoP (DSD over PCM).
+- ❌ **Built-in Phone Speakers & 3.5mm Headphone Jack**: This application is strictly an audiophile driver for **external USB DACs**. An external USB DAC is required for playback.
+- ❌ **Inline Headset Cable Remote Buttons**: Intentionally bypassed to ensure kernel isochronous DMA streaming stability is not interrupted by OS input events.
+
+### 💬 Feedback & Bug Reports
+Since Android USB host implementations and external DAC chipsets vary widely across devices, your feedback and test reports are invaluable! Please share diagnostic logs or feedback on [GitHub Issues](https://github.com/yukaatsu/tsrossa/issues).
+
+---
+
 ## 📥 Installation
 
 1. Download the latest signed APK:
