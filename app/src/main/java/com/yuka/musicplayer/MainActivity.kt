@@ -35,6 +35,20 @@ import com.yuka.musicplayer.update.*
 
 import android.media.AudioFocusRequest
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode as AnimRepeatMode
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1817,6 +1831,10 @@ fun KewApp(audioEngine: AudioEngine) {
                     }
                 },
                 onOpenQueue = { showQueuePanel = true },
+                onSeekTo = { targetSec ->
+                    playbackPosition = targetSec
+                    audioEngine.seekTo(targetSec)
+                },
                 modifier = Modifier.weight(1f)
             )
         } else {
@@ -4044,6 +4062,275 @@ fun RetroButton(
 }
 
 @Composable
+fun PacmanSeekBar(
+    playbackPosition: Double,
+    durationSeconds: Double,
+    isPlaying: Boolean,
+    dynamicColor: Color,
+    onSeekTo: (Double) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var isDragging by remember { mutableStateOf(false) }
+    var dragProgress by remember { mutableStateOf(0f) }
+    var isMovingBackward by remember { mutableStateOf(false) }
+    var lastDragX by remember { mutableStateOf(0f) }
+
+    val currentFraction = if (durationSeconds > 0) {
+        (playbackPosition / durationSeconds).toFloat().coerceIn(0f, 1f)
+    } else 0f
+
+    val displayProgress = if (isDragging) dragProgress else currentFraction
+    val targetSeconds = displayProgress.toDouble() * durationSeconds
+
+    // Pacman chomping mouth animation
+    val infiniteTransition = rememberInfiniteTransition(label = "pacmanChomp")
+    val animatedMouthAngle by infiniteTransition.animateFloat(
+        initialValue = 10f,
+        targetValue = 55f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(220, easing = LinearEasing),
+            repeatMode = AnimRepeatMode.Reverse
+        ),
+        label = "mouthAngle"
+    )
+
+    // When playing or dragging, mouth actively chomps; when paused and still, mouth rests slightly open
+    val mouthAngle = if (isPlaying || isDragging) animatedMouthAngle else 16f
+
+    // Format timestamps
+    val curPosSec = if (isDragging) targetSeconds else playbackPosition
+    val curMin = (curPosSec / 60).toInt()
+    val curSec = (curPosSec % 60).toInt()
+    val posStr = String.format("%d:%02d", curMin, curSec)
+
+    // Remaining duration formatted as -mm:ss
+    val remainingSec = (durationSeconds - curPosSec).coerceAtLeast(0.0)
+    val remMin = (remainingSec / 60).toInt()
+    val remSec = (remainingSec % 60).toInt()
+    val durStr = String.format("-%d:%02d", remMin, remSec)
+
+    val pacmanColor = Color(0xFFFFD700) // Golden arcade neon yellow
+
+    BoxWithConstraints(
+        modifier = modifier.fillMaxWidth(0.92f)
+    ) {
+        val containerMaxWidth = maxWidth
+        val totalWidthPx = constraints.maxWidth.toFloat()
+        val density = LocalDensity.current
+        val pacmanRadiusPx = with(density) { 10.dp.toPx() }
+        val trackStart = pacmanRadiusPx
+        val trackEnd = totalWidthPx - pacmanRadiusPx
+        val trackWidth = (trackEnd - trackStart).coerceAtLeast(1f)
+
+        val pacmanXPx = trackStart + displayProgress * trackWidth
+        val pacmanXDp = with(density) { pacmanXPx.toDp() }
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // 1. Floating HUD Tooltip Row (Height reserved to avoid layout jumping)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(24.dp)
+            ) {
+                if (isDragging) {
+                    val jumpMin = (targetSeconds / 60).toInt()
+                    val jumpSec = (targetSeconds % 60).toInt()
+                    val jumpStr = String.format("[ JUMP: %d:%02d ]", jumpMin, jumpSec)
+
+                    val badgeWidth = 100.dp
+                    val rawOffset = pacmanXDp - (badgeWidth / 2)
+                    val clampedOffset = rawOffset.coerceIn(0.dp, (containerMaxWidth - badgeWidth).coerceAtLeast(0.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .offset(x = clampedOffset)
+                            .background(Color(0xFF0D0D0D), RoundedCornerShape(3.dp))
+                            .border(1.dp, pacmanColor.copy(alpha = 0.85f), RoundedCornerShape(3.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = jumpStr,
+                            color = pacmanColor,
+                            fontFamily = TerminalFont,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            // 2. Interactive Pac-Man Canvas Bar
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(28.dp)
+                    .pointerInput(durationSeconds) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            isDragging = true
+                            lastDragX = down.position.x
+                            isMovingBackward = false
+                            dragProgress = ((down.position.x - trackStart) / trackWidth).coerceIn(0f, 1f)
+
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) {
+                                    change.consume()
+                                    break
+                                }
+                                change.consume()
+                                val currentX = change.position.x
+                                if (currentX < lastDragX - 1f) {
+                                    isMovingBackward = true
+                                } else if (currentX > lastDragX + 1f) {
+                                    isMovingBackward = false
+                                }
+                                lastDragX = currentX
+                                dragProgress = ((currentX - trackStart) / trackWidth).coerceIn(0f, 1f)
+                            }
+
+                            val finalSeekSec = dragProgress.toDouble() * durationSeconds
+                            isDragging = false
+                            isMovingBackward = false
+                            onSeekTo(finalSeekSec)
+                        }
+                    }
+            ) {
+                val cy = size.height / 2f
+
+                // Track Left: Played neon stream (behind Pac-Man)
+                if (pacmanXPx > trackStart) {
+                    val lineEnd = (pacmanXPx - pacmanRadiusPx * 0.4f).coerceAtLeast(trackStart)
+                    // Neon outer glow
+                    drawLine(
+                        color = dynamicColor.copy(alpha = 0.35f),
+                        start = Offset(trackStart, cy),
+                        end = Offset(lineEnd, cy),
+                        strokeWidth = 5.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                    // Core neon line
+                    drawLine(
+                        color = dynamicColor,
+                        start = Offset(trackStart, cy),
+                        end = Offset(lineEnd, cy),
+                        strokeWidth = 2.5.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+
+                // Track Right Background Guideline (Subtle dark groove)
+                if (pacmanXPx < trackEnd) {
+                    val lineStart = (pacmanXPx + pacmanRadiusPx * 0.4f).coerceAtMost(trackEnd)
+                    drawLine(
+                        color = Color(0xFF222222),
+                        start = Offset(lineStart, cy),
+                        end = Offset(trackEnd, cy),
+                        strokeWidth = 1.5.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+
+                // Pac-Dots (Food pellets awaiting Pac-Man in front of him)
+                val dotSpacingPx = 15.dp.toPx()
+                val dotRadiusPx = 2.2.dp.toPx()
+                val dotGlowRadiusPx = 3.8.dp.toPx()
+
+                var dotX = trackStart + dotSpacingPx
+                while (dotX <= trackEnd - 4.dp.toPx()) {
+                    val threshold = if (isMovingBackward) {
+                        pacmanXPx - pacmanRadiusPx * 0.7f
+                    } else {
+                        pacmanXPx + pacmanRadiusPx * 0.7f
+                    }
+                    if (dotX > threshold) {
+                        // Dot glow
+                        drawCircle(
+                            color = pacmanColor.copy(alpha = 0.3f),
+                            radius = dotGlowRadiusPx,
+                            center = Offset(dotX, cy)
+                        )
+                        // Core dot
+                        drawCircle(
+                            color = pacmanColor.copy(alpha = 0.9f),
+                            radius = dotRadiusPx,
+                            center = Offset(dotX, cy)
+                        )
+                    }
+                    dotX += dotSpacingPx
+                }
+
+                // Pac-Man Body
+                val startAngle = if (isMovingBackward) {
+                    180f + mouthAngle / 2f
+                } else {
+                    mouthAngle / 2f
+                }
+                val sweepAngle = 360f - mouthAngle
+
+                // Pac-Man glow
+                drawCircle(
+                    color = pacmanColor.copy(alpha = 0.22f),
+                    radius = pacmanRadiusPx + 3.dp.toPx(),
+                    center = Offset(pacmanXPx, cy)
+                )
+
+                // Pac-Man pie
+                drawArc(
+                    color = pacmanColor,
+                    startAngle = startAngle,
+                    sweepAngle = sweepAngle,
+                    useCenter = true,
+                    topLeft = Offset(pacmanXPx - pacmanRadiusPx, cy - pacmanRadiusPx),
+                    size = Size(pacmanRadiusPx * 2f, pacmanRadiusPx * 2f)
+                )
+
+                // Pac-Man Eye (Authentic retro detail)
+                val eyeX = if (isMovingBackward) {
+                    pacmanXPx - pacmanRadiusPx * 0.2f
+                } else {
+                    pacmanXPx + pacmanRadiusPx * 0.2f
+                }
+                val eyeY = cy - pacmanRadiusPx * 0.45f
+                drawCircle(
+                    color = Color(0xFF111111),
+                    radius = 1.6.dp.toPx(),
+                    center = Offset(eyeX, eyeY)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            // 3. Timestamps Row Below Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = posStr,
+                    color = TerminalWhite,
+                    fontFamily = TerminalFont,
+                    fontSize = 11.sp
+                )
+                Text(
+                    text = durStr,
+                    color = TerminalGray,
+                    fontFamily = TerminalFont,
+                    fontSize = 11.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun TrackView(
     track: TrackInfo?,
     playbackPosition: Double,
@@ -4060,6 +4347,7 @@ fun TrackView(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onOpenQueue: () -> Unit,
+    onSeekTo: (Double) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val dynamicColor = LocalAccentColor.current
@@ -4156,32 +4444,17 @@ fun TrackView(
             )
         }
         
-        Spacer(modifier = Modifier.height(12.dp))
-        
-        val curMin = (playbackPosition / 60).toInt()
-        val curSec = (playbackPosition % 60).toInt()
-        val totMin = (track.durationSeconds / 60).toInt()
-        val totSec = (track.durationSeconds % 60).toInt()
-        val posStr = String.format("%d:%02d", curMin, curSec)
-        val durStr = String.format("%d:%02d", totMin, totSec)
-        val progress = if (track.durationSeconds > 0) (playbackPosition / track.durationSeconds).coerceIn(0.0, 1.0) else 0.0
+        Spacer(modifier = Modifier.height(6.dp))
 
-        val barLength = 20
-        val filled = (progress * barLength).toInt().coerceIn(0, barLength)
-        val empty = barLength - filled
-        val barStr = "▓".repeat(filled) + "░".repeat(empty)
-        
-        Row(
-            modifier = Modifier.fillMaxWidth(0.92f),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(posStr, color = TerminalWhite, fontFamily = TerminalFont, fontSize = 11.sp)
-            Text("[$barStr]", color = dynamicColor, fontFamily = TerminalFont, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Text(durStr, color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp)
-        }
+        PacmanSeekBar(
+            playbackPosition = playbackPosition,
+            durationSeconds = track.durationSeconds,
+            isPlaying = isPlaying,
+            dynamicColor = dynamicColor,
+            onSeekTo = onSeekTo
+        )
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Dedicated Volume Control Row
         val volPercent = (currentVolume * 100).roundToInt()

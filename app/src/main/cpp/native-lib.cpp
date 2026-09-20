@@ -2084,6 +2084,28 @@ Java_com_yuka_musicplayer_audio_AudioEngine_getPosition(JNIEnv *env,
          (double)g_audioState.sampleRate.load();
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_seekTo(JNIEnv *env,
+                                                  jobject thiz,
+                                                  jdouble targetSeconds) {
+  uint32_t sr = g_audioState.sampleRate.load();
+  if (sr == 0)
+    return JNI_FALSE;
+
+  if (targetSeconds < 0.0)
+    targetSeconds = 0.0;
+
+  size_t targetFrame = static_cast<size_t>(targetSeconds * (double)sr);
+  size_t decoded = g_audioState.decodedFrames.load();
+
+  if (targetFrame >= decoded) {
+    targetFrame = (decoded > 0) ? (decoded - 1) : 0;
+  }
+
+  g_audioState.pcmIndex.store(targetFrame);
+  return JNI_TRUE;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_yuka_musicplayer_audio_AudioEngine_getSampleRate(JNIEnv *env,
                                                           jobject thiz) {

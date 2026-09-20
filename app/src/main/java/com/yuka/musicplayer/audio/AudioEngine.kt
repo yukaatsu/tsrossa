@@ -23,6 +23,7 @@ class AudioEngine {
     external fun setSoftwareVolume(volume: Float)
     external fun isHardwareVolumeActive(): Boolean
     external fun getPosition(): Double
+    external fun seekTo(positionSeconds: Double): Boolean
     external fun isFinished(): Boolean
     external fun isPlaying(): Boolean
     external fun isDacConnected(): Boolean
