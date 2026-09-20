@@ -352,6 +352,9 @@ fun KewApp(audioEngine: AudioEngine) {
         )
     }
     var priorityQueue by remember { mutableStateOf<List<File>>(com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue) }
+    var shuffledList by remember { mutableStateOf<List<File>>(emptyList()) }
+    var currentShuffleIndex by remember { mutableIntStateOf(-1) }
+    val playbackHistory = remember { mutableListOf<File>() }
 
     LaunchedEffect(isShuffleEnabled) {
         sharedPref.edit().putBoolean("shuffle_enabled", isShuffleEnabled).apply()
@@ -712,7 +715,36 @@ fun KewApp(audioEngine: AudioEngine) {
         else playlistPaths.map { File(it) }
     }
 
-    var playTrackRef: ((File, Boolean) -> Unit)? = null
+    fun ensureShuffleDeck(activeList: List<File>, currentFile: File?) {
+        if (activeList.isEmpty()) {
+            shuffledList = emptyList()
+            currentShuffleIndex = -1
+            return
+        }
+        val activePaths = activeList.map { it.absolutePath }.toSet()
+        val deckPaths = shuffledList.map { it.absolutePath }.toSet()
+
+        if (shuffledList.isNotEmpty() && deckPaths == activePaths) {
+            if (currentFile != null) {
+                val idx = shuffledList.indexOfFirst { it.absolutePath == currentFile.absolutePath }
+                if (idx != -1) {
+                    currentShuffleIndex = idx
+                    return
+                }
+            }
+        }
+
+        if (currentFile != null && activeList.any { it.absolutePath == currentFile.absolutePath }) {
+            val remaining = activeList.filter { it.absolutePath != currentFile.absolutePath }.shuffled()
+            shuffledList = listOf(currentFile) + remaining
+            currentShuffleIndex = 0
+        } else {
+            shuffledList = activeList.shuffled()
+            currentShuffleIndex = 0
+        }
+    }
+
+    var playTrackRef: ((File, Boolean, Boolean) -> Unit)? = null
 
     fun getNextTrackFile(isAutoAdvance: Boolean, consumeQueue: Boolean): File? {
         if (priorityQueue.isNotEmpty()) {
@@ -737,8 +769,32 @@ fun KewApp(audioEngine: AudioEngine) {
 
         if (isShuffleEnabled) {
             if (currentActiveList.size == 1) return currentActiveList.first()
-            val candidatePool = currentActiveList.filter { it.absolutePath != currentTrack?.file?.absolutePath }
-            return if (candidatePool.isNotEmpty()) candidatePool.random() else currentActiveList.random()
+
+            val activePaths = currentActiveList.map { it.absolutePath }.toSet()
+            val deckPaths = shuffledList.map { it.absolutePath }.toSet()
+            if (shuffledList.isEmpty() || deckPaths != activePaths) {
+                ensureShuffleDeck(currentActiveList, currentTrack?.file)
+            }
+
+            val nextIndex = currentShuffleIndex + 1
+            if (nextIndex < shuffledList.size) {
+                val nextFile = shuffledList[nextIndex]
+                if (consumeQueue) {
+                    currentShuffleIndex = nextIndex
+                }
+                return nextFile
+            } else if (repeatMode == RepeatMode.ALL) {
+                if (consumeQueue) {
+                    val newShuffled = currentActiveList.shuffled()
+                    shuffledList = newShuffled
+                    currentShuffleIndex = 0
+                    return newShuffled.firstOrNull()
+                } else {
+                    return shuffledList.firstOrNull()
+                }
+            } else {
+                return null
+            }
         }
 
         val currentIndex = currentActiveList.indexOfFirst { it.absolutePath == currentTrack?.file?.absolutePath }
@@ -756,14 +812,30 @@ fun KewApp(audioEngine: AudioEngine) {
     fun playNext(isAutoAdvance: Boolean) {
         val nextFile = getNextTrackFile(isAutoAdvance, consumeQueue = true)
         if (nextFile != null) {
-            playTrackRef?.invoke(nextFile, isAutoAdvance)
+            playTrackRef?.invoke(nextFile, isAutoAdvance, true)
         } else if (isAutoAdvance) {
             audioEngine.stopAudio()
             isPlaying = false
         }
     }
 
-    fun playTrack(file: File, isAutoAdvance: Boolean) {
+    fun playTrack(file: File, isAutoAdvance: Boolean, recordHistory: Boolean = true) {
+        if (recordHistory && currentTrack?.file != null && currentTrack?.file?.absolutePath != file.absolutePath) {
+            playbackHistory.add(currentTrack!!.file)
+            if (playbackHistory.size > 50) {
+                playbackHistory.removeAt(0)
+            }
+        }
+
+        if (isShuffleEnabled) {
+            val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
+                filesInDir.filter { !it.isDirectory }
+            } else {
+                playlistPaths.map { File(it) }
+            }
+            ensureShuffleDeck(currentActiveList, file)
+        }
+
         if (notificationManager.isNotificationPolicyAccessGranted) {
             setDndMode(true)
         }
@@ -802,9 +874,7 @@ fun KewApp(audioEngine: AudioEngine) {
             when {
                 result == 0 -> {
                     // Success
-                    val sRate = audioEngine.getSampleRate()
                     withContext(Dispatchers.Main) {
-
                         formatIncompatibleError = null
                         
                         if (isDacConnected) {
@@ -864,7 +934,7 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
     
-    playTrackRef = ::playTrack
+    playTrackRef = { f, auto, rec -> playTrack(f, auto, rec) }
 
     fun playPrev() {
         val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
@@ -873,11 +943,59 @@ fun KewApp(audioEngine: AudioEngine) {
             playlistPaths.map { File(it) }
         }
         if (currentActiveList.isEmpty()) return
+
+        // 1. Check history stack first (actual tracks user previously listened to)
+        if (playbackHistory.isNotEmpty()) {
+            val prevFile = playbackHistory.removeAt(playbackHistory.size - 1)
+            if (isShuffleEnabled && shuffledList.isNotEmpty()) {
+                val idx = shuffledList.indexOfFirst { it.absolutePath == prevFile.absolutePath }
+                if (idx != -1) {
+                    currentShuffleIndex = idx
+                }
+            }
+            playTrack(prevFile, isAutoAdvance = false, recordHistory = false)
+            return
+        }
+
+        // 2. Shuffle mode fallback if history is empty
+        if (isShuffleEnabled && shuffledList.isNotEmpty()) {
+            if (currentShuffleIndex > 0) {
+                currentShuffleIndex--
+                playTrack(shuffledList[currentShuffleIndex], isAutoAdvance = false, recordHistory = false)
+            } else if (repeatMode == RepeatMode.ALL && shuffledList.isNotEmpty()) {
+                currentShuffleIndex = shuffledList.lastIndex
+                playTrack(shuffledList[currentShuffleIndex], isAutoAdvance = false, recordHistory = false)
+            } else {
+                currentTrack?.file?.let { playTrack(it, isAutoAdvance = false, recordHistory = false) }
+            }
+            return
+        }
+
+        // 3. Normal sequential fallback
         val currentIndex = currentActiveList.indexOfFirst { it.absolutePath == currentTrack?.file?.absolutePath }
         if (currentIndex > 0) {
-            playTrack(currentActiveList[currentIndex - 1], false)
+            playTrack(currentActiveList[currentIndex - 1], false, recordHistory = false)
         } else if (repeatMode == RepeatMode.ALL && currentActiveList.isNotEmpty()) {
-            playTrack(currentActiveList.last(), false)
+            playTrack(currentActiveList.last(), false, recordHistory = false)
+        } else {
+            currentTrack?.file?.let { playTrack(it, false, recordHistory = false) }
+        }
+    }
+
+    val toggleShuffle = {
+        val newState = !isShuffleEnabled
+        isShuffleEnabled = newState
+        if (newState) {
+            val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
+                filesInDir.filter { !it.isDirectory }
+            } else {
+                playlistPaths.map { File(it) }
+            }
+            ensureShuffleDeck(currentActiveList, currentTrack?.file)
+            val nextFile = peekNextTrackFile()
+            if (nextFile != null && currentTrack != null) {
+                audioEngine.prepareNextTrack(nextFile.absolutePath)
+            }
         }
     }
 
@@ -925,6 +1043,20 @@ fun KewApp(audioEngine: AudioEngine) {
             coroutineScope.launch(Dispatchers.Main) {
                 audioEngine.cleanGarbage()
                 val nextFile = File(path)
+
+                if (currentTrack?.file != null && currentTrack?.file?.absolutePath != nextFile.absolutePath) {
+                    playbackHistory.add(currentTrack!!.file)
+                    if (playbackHistory.size > 50) {
+                        playbackHistory.removeAt(0)
+                    }
+                }
+
+                if (isShuffleEnabled && shuffledList.isNotEmpty()) {
+                    val idx = shuffledList.indexOfFirst { it.absolutePath == path }
+                    if (idx != -1) {
+                        currentShuffleIndex = idx
+                    }
+                }
                 
                 if (priorityQueue.isNotEmpty() && priorityQueue.first().absolutePath == path) {
                     priorityQueue = priorityQueue.drop(1)
@@ -1524,7 +1656,7 @@ fun KewApp(audioEngine: AudioEngine) {
                 isShuffleEnabled = isShuffleEnabled,
                 repeatMode = repeatMode,
                 priorityQueueSize = priorityQueue.size,
-                onToggleShuffle = { isShuffleEnabled = !isShuffleEnabled },
+                onToggleShuffle = toggleShuffle,
                 onCycleRepeat = {
                     repeatMode = when (repeatMode) {
                         RepeatMode.OFF -> RepeatMode.ALL
@@ -1588,7 +1720,7 @@ fun KewApp(audioEngine: AudioEngine) {
                         audioManager.abandonAudioFocus(focusChangeListener)
                     }
                 },
-                onToggleShuffle = { isShuffleEnabled = !isShuffleEnabled },
+                onToggleShuffle = toggleShuffle,
                 onCycleRepeat = {
                     repeatMode = when (repeatMode) {
                         RepeatMode.OFF -> RepeatMode.ALL
