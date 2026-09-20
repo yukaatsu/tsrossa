@@ -48,6 +48,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -1971,31 +1973,40 @@ fun AppHeader(
         val isBitPerfect = isHardwareVolumeActive && !isForceSoftwareVolume
         val statusColor = if (isBitPerfect) androidx.compose.ui.graphics.Color(0xFFFFD700) else androidx.compose.ui.graphics.Color(0xFFf87171)
         Row(
-            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 4.dp)
+                .padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .size(6.dp)
-                    .background(statusColor, CircleShape)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = hwVolumeText,
-                fontFamily = TerminalFont,
-                fontSize = 10.sp,
-                color = statusColor,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+                    .background(statusColor.copy(alpha = 0.08f), RoundedCornerShape(3.dp))
+                    .border(0.8.dp, statusColor.copy(alpha = 0.35f), RoundedCornerShape(3.dp))
+                    .padding(horizontal = 7.dp, vertical = 3.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .background(statusColor, CircleShape)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = hwVolumeText,
+                    fontFamily = TerminalFont,
+                    fontSize = 9.5.sp,
+                    color = statusColor,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
         
         val hintText = when (viewState) {
-            ViewState.LIBRARY -> "Tap:Play · Long-press:Add to playlist · ★=in playlist"
-            ViewState.PLAYLIST -> "Tap:Play · Order:added time"
+            ViewState.LIBRARY -> "[ TAP: PLAY · HOLD: ADD TO PLAYLIST · ★=SAVED ]"
+            ViewState.PLAYLIST -> "[ TAP: PLAY · SORT: ORDER ADDED ]"
             else -> ""
         }
         if (hintText.isNotEmpty()) {
@@ -2192,13 +2203,16 @@ fun SystemLogsPanel(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        // --- Header Bar ---
+        // --- Header Bar (Row 1: Title & Close) ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f, fill = false)
+            ) {
                 Box(
                     modifier = Modifier
                         .size(8.dp)
@@ -2214,92 +2228,102 @@ fun SystemLogsPanel(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = TerminalFont,
-                    letterSpacing = 0.5.sp
+                    letterSpacing = 0.5.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // COPY LOG
-                Box(
-                    modifier = Modifier
-                        .border(1.dp, LocalAccentColor.current.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                        .clickable {
-                            val report = generateDiagnosticReport(
-                                dacName, isDacConnected, isDeviceWedged, uacVersion,
-                                claimedInterfaces, isPlaying, sourceBitDepth, sourceSampleRate,
-                                outputBitDepth, outputSampleRate, negotiatedSampleRate,
-                                isSampleRateUnverified, recentErrorCount, supportedSampleRates,
-                                supportedBitDepths, refusedTrackHistory
-                            )
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            val clip = ClipData.newPlainText("tsrossa_diagnostics", report)
-                            clipboard.setPrimaryClip(clip)
-                            Toast.makeText(context, "Diagnostics copied to clipboard!", Toast.LENGTH_SHORT).show()
-                        }
-                        .padding(horizontal = 7.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = "📋 COPY",
-                        color = LocalAccentColor.current,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = TerminalFont
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                // SHARE LOG
-                Box(
-                    modifier = Modifier
-                        .border(1.dp, LocalAccentColor.current.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                        .clickable {
-                            val report = generateDiagnosticReport(
-                                dacName, isDacConnected, isDeviceWedged, uacVersion,
-                                claimedInterfaces, isPlaying, sourceBitDepth, sourceSampleRate,
-                                outputBitDepth, outputSampleRate, negotiatedSampleRate,
-                                isSampleRateUnverified, recentErrorCount, supportedSampleRates,
-                                supportedBitDepths, refusedTrackHistory
-                            )
-                            val sendIntent = Intent().apply {
-                                action = Intent.ACTION_SEND
-                                putExtra(Intent.EXTRA_TEXT, report)
-                                type = "text/plain"
-                            }
-                            val shareIntent = Intent.createChooser(sendIntent, "Share tsrossa Diagnostics")
-                            context.startActivity(shareIntent)
-                        }
-                        .padding(horizontal = 7.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = "↗ SHARE",
-                        color = LocalAccentColor.current,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = TerminalFont
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                Box(
-                    modifier = Modifier
-                        .border(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                        .clickable { onClose() }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = "✕ CLOSE",
-                        color = androidx.compose.ui.graphics.Color.Red,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = TerminalFont
-                    )
-                }
+            Box(
+                modifier = Modifier
+                    .border(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                    .background(androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
+                    .clickable { onClose() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "✕ CLOSE",
+                    color = androidx.compose.ui.graphics.Color.Red,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont
+                )
             }
         }
-        
+
         Spacer(modifier = Modifier.height(10.dp))
-        Divider(color = LocalAccentColor.current.copy(alpha = 0.2f), thickness = 1.dp)
+
+        // --- Action Toolbar (Row 2: Copy & Share Report) ---
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                    .background(LocalAccentColor.current.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+                    .clickable {
+                        val report = generateDiagnosticReport(
+                            dacName, isDacConnected, isDeviceWedged, uacVersion,
+                            claimedInterfaces, isPlaying, sourceBitDepth, sourceSampleRate,
+                            outputBitDepth, outputSampleRate, negotiatedSampleRate,
+                            isSampleRateUnverified, recentErrorCount, supportedSampleRates,
+                            supportedBitDepths, refusedTrackHistory
+                        )
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("tsrossa_diagnostics", report)
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "Diagnostics copied to clipboard!", Toast.LENGTH_SHORT).show()
+                    }
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "📋 COPY REPORT",
+                    color = LocalAccentColor.current,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                    .background(LocalAccentColor.current.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+                    .clickable {
+                        val report = generateDiagnosticReport(
+                            dacName, isDacConnected, isDeviceWedged, uacVersion,
+                            claimedInterfaces, isPlaying, sourceBitDepth, sourceSampleRate,
+                            outputBitDepth, outputSampleRate, negotiatedSampleRate,
+                            isSampleRateUnverified, recentErrorCount, supportedSampleRates,
+                            supportedBitDepths, refusedTrackHistory
+                        )
+                        val sendIntent = Intent().apply {
+                            action = Intent.ACTION_SEND
+                            putExtra(Intent.EXTRA_TEXT, report)
+                            type = "text/plain"
+                        }
+                        val shareIntent = Intent.createChooser(sendIntent, "Share tsrossa Diagnostics")
+                        context.startActivity(shareIntent)
+                    }
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "↗ SHARE REPORT",
+                    color = LocalAccentColor.current,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        Divider(color = LocalAccentColor.current.copy(alpha = 0.25f), thickness = 1.dp)
         
         // --- Scrollable Diagnostics Body ---
         Column(
@@ -2860,7 +2884,10 @@ fun QueuePanel(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f, fill = false)
+            ) {
                 Text("☰", color = LocalAccentColor.current, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
@@ -2869,7 +2896,9 @@ fun QueuePanel(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = TerminalFont,
-                    letterSpacing = 0.5.sp
+                    letterSpacing = 0.5.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3676,27 +3705,37 @@ fun LibraryView(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .height(34.dp)
                 .border(1.dp, LocalAccentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
                 .background(LocalAccentColor.current.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
-                .padding(horizontal = 10.dp, vertical = 2.dp),
+                .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(">", color = LocalAccentColor.current, fontFamily = TerminalFont, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            Spacer(modifier = Modifier.width(6.dp))
-            TextField(
+            Spacer(modifier = Modifier.width(8.dp))
+            BasicTextField(
                 value = searchQuery,
                 onValueChange = onSearchChange,
                 modifier = Modifier.weight(1f),
                 textStyle = TextStyle(color = LocalAccentColor.current, fontFamily = TerminalFont, fontSize = 11.sp),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    cursorColor = LocalAccentColor.current
-                ),
-                placeholder = { Text("SEARCH FILES...", color = TerminalGray.copy(alpha = 0.6f), fontFamily = TerminalFont, fontSize = 11.sp) },
-                singleLine = true
+                cursorBrush = SolidColor(LocalAccentColor.current),
+                singleLine = true,
+                decorationBox = { innerTextField ->
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (searchQuery.isEmpty()) {
+                            Text(
+                                "SEARCH FILES...",
+                                color = TerminalGray.copy(alpha = 0.6f),
+                                fontFamily = TerminalFont,
+                                fontSize = 11.sp
+                            )
+                        }
+                        innerTextField()
+                    }
+                }
             )
             if (searchQuery.isNotEmpty()) {
                 Text(
@@ -3860,6 +3899,7 @@ fun PlaylistView(
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    .height(32.dp)
                     .border(
                         1.dp,
                         if (isShuffleEnabled) LocalAccentColor.current else LocalAccentColor.current.copy(alpha = 0.25f),
@@ -3869,8 +3909,7 @@ fun PlaylistView(
                         if (isShuffleEnabled) LocalAccentColor.current.copy(alpha = 0.15f) else Color.Transparent,
                         RoundedCornerShape(4.dp)
                     )
-                    .clickable { onToggleShuffle() }
-                    .padding(vertical = 5.dp),
+                    .clickable { onToggleShuffle() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -3885,6 +3924,7 @@ fun PlaylistView(
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    .height(32.dp)
                     .border(
                         1.dp,
                         if (repeatMode != RepeatMode.OFF) LocalAccentColor.current else LocalAccentColor.current.copy(alpha = 0.25f),
@@ -3894,8 +3934,7 @@ fun PlaylistView(
                         if (repeatMode != RepeatMode.OFF) LocalAccentColor.current.copy(alpha = 0.15f) else Color.Transparent,
                         RoundedCornerShape(4.dp)
                     )
-                    .clickable { onCycleRepeat() }
-                    .padding(vertical = 5.dp),
+                    .clickable { onCycleRepeat() },
                 contentAlignment = Alignment.Center
             ) {
                 val rText = when (repeatMode) {
@@ -3914,7 +3953,8 @@ fun PlaylistView(
 
             Box(
                 modifier = Modifier
-                    .weight(1.3f)
+                    .weight(1f)
+                    .height(32.dp)
                     .border(
                         1.dp,
                         if (priorityQueueSize > 0) LocalAccentColor.current else LocalAccentColor.current.copy(alpha = 0.25f),
@@ -3924,8 +3964,7 @@ fun PlaylistView(
                         if (priorityQueueSize > 0) LocalAccentColor.current.copy(alpha = 0.15f) else Color.Transparent,
                         RoundedCornerShape(4.dp)
                     )
-                    .clickable { onOpenQueue() }
-                    .padding(vertical = 5.dp),
+                    .clickable { onOpenQueue() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -4101,13 +4140,13 @@ fun PacmanSeekBar(
     val curPosSec = if (isDragging) targetSeconds else playbackPosition
     val curMin = (curPosSec / 60).toInt()
     val curSec = (curPosSec % 60).toInt()
-    val posStr = String.format("%d:%02d", curMin, curSec)
+    val posStr = String.format("%02d:%02d", curMin, curSec)
 
     // Remaining duration formatted as -mm:ss
     val remainingSec = (durationSeconds - curPosSec).coerceAtLeast(0.0)
     val remMin = (remainingSec / 60).toInt()
     val remSec = (remainingSec % 60).toInt()
-    val durStr = String.format("-%d:%02d", remMin, remSec)
+    val durStr = String.format("-%02d:%02d", remMin, remSec)
 
     val pacmanColor = Color(0xFFFFD700) // Golden arcade neon yellow
 
@@ -4138,7 +4177,7 @@ fun PacmanSeekBar(
                 if (isDragging) {
                     val jumpMin = (targetSeconds / 60).toInt()
                     val jumpSec = (targetSeconds % 60).toInt()
-                    val jumpStr = String.format("[ JUMP: %d:%02d ]", jumpMin, jumpSec)
+                    val jumpStr = String.format("[ JUMP: %02d:%02d ]", jumpMin, jumpSec)
 
                     val badgeWidth = 100.dp
                     val rawOffset = pacmanXDp - (badgeWidth / 2)
@@ -4305,7 +4344,7 @@ fun PacmanSeekBar(
                 )
             }
 
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             // 3. Timestamps Row Below Bar
             Row(
@@ -4467,17 +4506,23 @@ fun TrackView(
         ) {
             Box(
                 modifier = Modifier
+                    .width(42.dp)
+                    .height(30.dp)
                     .border(1.dp, dynamicColor.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                    .clickable { onVolumeChange((currentVolume - 0.05f).coerceAtLeast(0.0f)) }
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .background(dynamicColor.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+                    .clickable { onVolumeChange((currentVolume - 0.05f).coerceAtLeast(0.0f)) },
+                contentAlignment = Alignment.Center
             ) {
-                Text("-", color = TerminalWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+                Text("-", color = TerminalWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
             }
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(10.dp))
             Box(
                 modifier = Modifier
+                    .height(30.dp)
                     .border(1.dp, dynamicColor.copy(alpha = 0.25f), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 14.dp, vertical = 4.dp)
+                    .background(dynamicColor.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 16.dp),
+                contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "VOL: $volPercent%",
@@ -4487,14 +4532,17 @@ fun TrackView(
                     fontSize = 11.sp
                 )
             }
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(10.dp))
             Box(
                 modifier = Modifier
+                    .width(42.dp)
+                    .height(30.dp)
                     .border(1.dp, dynamicColor.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                    .clickable { onVolumeChange((currentVolume + 0.05f).coerceAtMost(1.0f)) }
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .background(dynamicColor.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+                    .clickable { onVolumeChange((currentVolume + 0.05f).coerceAtMost(1.0f)) },
+                contentAlignment = Alignment.Center
             ) {
-                Text("+", color = TerminalWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+                Text("+", color = TerminalWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
             }
         }
 
@@ -4508,9 +4556,10 @@ fun TrackView(
         ) {
             Box(
                 modifier = Modifier
+                    .width(58.dp)
+                    .height(46.dp)
                     .border(1.dp, dynamicColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                    .clickable { onPlayPrev() }
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .clickable { onPlayPrev() },
                 contentAlignment = Alignment.Center
             ) {
                 Text("|<<", color = dynamicColor, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
@@ -4518,10 +4567,11 @@ fun TrackView(
             
             Box(
                 modifier = Modifier
+                    .width(84.dp)
+                    .height(46.dp)
                     .border(1.5.dp, dynamicColor, RoundedCornerShape(8.dp))
                     .background(dynamicColor.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
-                    .clickable { onTogglePlay() }
-                    .padding(horizontal = 28.dp, vertical = 10.dp),
+                    .clickable { onTogglePlay() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -4535,9 +4585,10 @@ fun TrackView(
             
             Box(
                 modifier = Modifier
+                    .width(58.dp)
+                    .height(46.dp)
                     .border(1.dp, dynamicColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                    .clickable { onPlayNext() }
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .clickable { onPlayNext() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(">>|", color = dynamicColor, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
@@ -4555,6 +4606,7 @@ fun TrackView(
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    .height(34.dp)
                     .border(
                         1.dp,
                         if (isShuffleEnabled) dynamicColor else dynamicColor.copy(alpha = 0.3f),
@@ -4564,8 +4616,7 @@ fun TrackView(
                         if (isShuffleEnabled) dynamicColor.copy(alpha = 0.15f) else Color.Transparent,
                         RoundedCornerShape(4.dp)
                     )
-                    .clickable { onToggleShuffle() }
-                    .padding(vertical = 7.dp),
+                    .clickable { onToggleShuffle() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -4581,7 +4632,8 @@ fun TrackView(
 
             Box(
                 modifier = Modifier
-                    .weight(1.1f)
+                    .weight(1f)
+                    .height(34.dp)
                     .border(
                         1.dp,
                         if (priorityQueueSize > 0) dynamicColor else dynamicColor.copy(alpha = 0.3f),
@@ -4591,8 +4643,7 @@ fun TrackView(
                         if (priorityQueueSize > 0) dynamicColor.copy(alpha = 0.15f) else Color.Transparent,
                         RoundedCornerShape(4.dp)
                     )
-                    .clickable { onOpenQueue() }
-                    .padding(vertical = 7.dp),
+                    .clickable { onOpenQueue() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -4609,6 +4660,7 @@ fun TrackView(
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    .height(34.dp)
                     .border(
                         1.dp,
                         if (repeatMode != RepeatMode.OFF) dynamicColor else dynamicColor.copy(alpha = 0.3f),
@@ -4618,8 +4670,7 @@ fun TrackView(
                         if (repeatMode != RepeatMode.OFF) dynamicColor.copy(alpha = 0.15f) else Color.Transparent,
                         RoundedCornerShape(4.dp)
                     )
-                    .clickable { onCycleRepeat() }
-                    .padding(vertical = 7.dp),
+                    .clickable { onCycleRepeat() },
                 contentAlignment = Alignment.Center
             ) {
                 val repText = when (repeatMode) {
