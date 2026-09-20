@@ -2431,26 +2431,26 @@ fun QueuePanel(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 2.dp)
-                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
-                            .background(LocalAccentColor.current.copy(alpha = 0.06f), RoundedCornerShape(4.dp))
+                            .padding(vertical = 1.dp)
+                            .background(LocalAccentColor.current.copy(alpha = 0.08f), RoundedCornerShape(3.dp))
                             .clickable { onSelectTrack(file) }
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = String.format("#%02d", idx + 1),
+                            text = String.format("#%02d. ", idx + 1),
                             color = LocalAccentColor.current,
                             fontFamily = TerminalFont,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Normal
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = file.nameWithoutExtension.ifEmpty { file.name },
                             color = TerminalWhite,
                             fontFamily = TerminalFont,
-                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 11.5.sp,
+                            lineHeight = 15.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
@@ -2458,13 +2458,13 @@ fun QueuePanel(
                         Box(
                             modifier = Modifier
                                 .clickable { onRemoveFromQueue(idx) }
-                                .padding(4.dp)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
-                            Text("✕", color = androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.8f), fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = TerminalFont)
+                            Text("✕", color = androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Normal, fontFamily = TerminalFont)
                         }
                     }
                 }
-                item { Spacer(modifier = Modifier.height(14.dp)) }
+                item { Spacer(modifier = Modifier.height(10.dp)) }
             }
 
             if (upcomingTracks.isNotEmpty()) {
@@ -2475,23 +2475,25 @@ fun QueuePanel(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 2.dp)
+                            .padding(vertical = 1.dp)
                             .clickable { onSelectTrack(file) }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "•",
+                            text = "• ",
                             color = TerminalGray,
                             fontFamily = TerminalFont,
-                            fontSize = 10.sp
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Normal
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = file.nameWithoutExtension.ifEmpty { file.name },
                             color = TerminalGray.copy(alpha = 0.85f),
                             fontFamily = TerminalFont,
-                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 11.5.sp,
+                            lineHeight = 15.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
@@ -3115,16 +3117,12 @@ fun LibraryView(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 3.dp)
-                            .border(1.dp, LocalAccentColor.current.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
-                            .background(LocalAccentColor.current.copy(alpha = 0.06f), RoundedCornerShape(4.dp))
+                            .padding(vertical = 1.dp)
                             .clickable { onFileSelected(File("..")) }
-                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("📁 [ .. ]", color = LocalAccentColor.current, fontWeight = FontWeight.Bold, fontFamily = TerminalFont, fontSize = 11.sp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Up to parent folder", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp)
+                        Text("📁 ..", color = LocalAccentColor.current, fontWeight = FontWeight.Normal, fontFamily = TerminalFont, fontSize = 11.5.sp)
                     }
                 }
             }
@@ -3133,21 +3131,15 @@ fun LibraryView(
                 val isDir = file.isDirectory
                 val isPlaying = file.absolutePath == playingFile?.absolutePath
                 val inPlaylist = playlistSet.contains(file.absolutePath)
-                val ext = if (isDir) "DIR" else file.extension.uppercase().ifEmpty { "FILE" }
-                val displayName = file.name
+                val displayName = if (isDir) file.name else (file.nameWithoutExtension.ifEmpty { file.name })
                 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 2.5.dp)
-                        .border(
-                            1.dp,
-                            if (isPlaying) LocalAccentColor.current.copy(alpha = 0.5f) else Color.Transparent,
-                            RoundedCornerShape(4.dp)
-                        )
+                        .padding(vertical = 1.dp)
                         .background(
                             if (isPlaying) LocalAccentColor.current.copy(alpha = 0.12f) else Color.Transparent,
-                            RoundedCornerShape(4.dp)
+                            RoundedCornerShape(3.dp)
                         )
                         .combinedClickable(
                             onClick = { onFileSelected(file) },
@@ -3158,45 +3150,44 @@ fun LibraryView(
                                 }
                             }
                         )
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .border(
-                                1.dp,
-                                (if (isDir) TerminalWhite else if (isPlaying) LocalAccentColor.current else TerminalGray).copy(alpha = 0.4f),
-                                RoundedCornerShape(2.dp)
-                            )
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                    ) {
+                    if (isDir) {
                         Text(
-                            text = ext,
-                            color = if (isDir) TerminalWhite else if (isPlaying) LocalAccentColor.current else TerminalGray,
-                            fontSize = 9.sp,
-                            fontFamily = TerminalFont
+                            text = "📁 ",
+                            color = LocalAccentColor.current,
+                            fontFamily = TerminalFont,
+                            fontSize = 11.sp
+                        )
+                    } else if (isPlaying) {
+                        Text(
+                            text = "▶ ",
+                            color = LocalAccentColor.current,
+                            fontFamily = TerminalFont,
+                            fontSize = 11.sp
                         )
                     }
                     
-                    Spacer(modifier = Modifier.width(8.dp))
-                    
                     Text(
                         text = displayName,
-                        color = if (isPlaying) LocalAccentColor.current.blendWithWhite(0.7f) else TerminalWhite,
-                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isPlaying) LocalAccentColor.current else TerminalWhite,
                         fontFamily = TerminalFont,
-                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Normal,
+                        fontSize = 11.5.sp,
+                        lineHeight = 15.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
                     
                     if (inPlaylist && !isDir) {
-                        Text("★", color = LocalAccentColor.current, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
-                    }
-                    
-                    if (isPlaying && !isDir) {
-                        Text("▶", color = LocalAccentColor.current, fontSize = 10.sp, modifier = Modifier.padding(start = 4.dp))
+                        Text(
+                            text = "★",
+                            color = LocalAccentColor.current,
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
                     }
                 }
             }
@@ -3373,21 +3364,15 @@ fun PlaylistView(
                 items(playlistPaths.mapIndexed { index, path -> index to path }) { (index, path) ->
                     val file = File(path)
                     val isPlaying = file.absolutePath == playingFile?.absolutePath
-                    val ext = file.extension.uppercase().ifEmpty { "AUDIO" }
                     val displayName = file.nameWithoutExtension.ifEmpty { file.name }
                     
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 2.5.dp)
-                            .border(
-                                1.dp,
-                                if (isPlaying) LocalAccentColor.current.copy(alpha = 0.5f) else Color.Transparent,
-                                RoundedCornerShape(4.dp)
-                            )
+                            .padding(vertical = 1.dp)
                             .background(
                                 if (isPlaying) LocalAccentColor.current.copy(alpha = 0.12f) else Color.Transparent,
-                                RoundedCornerShape(4.dp)
+                                RoundedCornerShape(3.dp)
                             )
                             .combinedClickable(
                                 onClick = { onFileSelected(file) },
@@ -3396,55 +3381,47 @@ fun PlaylistView(
                                     onTrackLongPressed(file)
                                 }
                             )
-                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = String.format("%02d.", index + 1),
-                            color = if (isPlaying) LocalAccentColor.current else TerminalGray,
-                            fontFamily = TerminalFont,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(end = 6.dp)
-                        )
-                        Box(
-                            modifier = Modifier
-                                .border(1.dp, (if (isPlaying) LocalAccentColor.current else TerminalGray).copy(alpha = 0.4f), RoundedCornerShape(2.dp))
-                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                        ) {
+                        if (isPlaying) {
                             Text(
-                                text = ext,
-                                color = if (isPlaying) LocalAccentColor.current else TerminalGray,
-                                fontSize = 9.sp,
-                                fontFamily = TerminalFont
+                                text = "▶ ",
+                                color = LocalAccentColor.current,
+                                fontFamily = TerminalFont,
+                                fontSize = 11.sp
                             )
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = String.format("%02d. ", index + 1),
+                            color = if (isPlaying) LocalAccentColor.current else TerminalGray,
+                            fontFamily = TerminalFont,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Normal
+                        )
                         Text(
                             text = displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isPlaying) LocalAccentColor.current.blendWithWhite(0.7f) else TerminalWhite,
+                            color = if (isPlaying) LocalAccentColor.current else TerminalWhite,
                             fontFamily = TerminalFont,
-                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 11.5.sp,
+                            lineHeight = 15.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
-                        if (isPlaying) {
-                            Text(
-                                "▶",
-                                color = LocalAccentColor.current,
-                                fontSize = 10.sp,
-                                fontFamily = TerminalFont,
-                                modifier = Modifier.padding(horizontal = 4.dp)
-                            )
-                        }
                         Box(
                             modifier = Modifier
                                 .clickable { onFileRemoved(path) }
-                                .padding(4.dp)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
-                            Text("✕", color = androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.7f), fontWeight = FontWeight.Bold, fontFamily = TerminalFont, fontSize = 11.sp)
+                            Text(
+                                "✕",
+                                color = androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.7f),
+                                fontWeight = FontWeight.Normal,
+                                fontFamily = TerminalFont,
+                                fontSize = 11.sp
+                            )
                         }
                     }
                 }
