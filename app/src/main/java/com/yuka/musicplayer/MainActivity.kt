@@ -372,6 +372,7 @@ fun KewApp(audioEngine: AudioEngine) {
         )
     }
     var priorityQueue by remember { mutableStateOf<List<File>>(com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue) }
+    var playbackLibraryFiles by remember { mutableStateOf<List<File>>(emptyList()) }
     var shuffledList by remember { mutableStateOf<List<File>>(emptyList()) }
     var currentShuffleIndex by remember { mutableIntStateOf(-1) }
     val playbackHistory = remember { mutableListOf<File>() }
@@ -764,9 +765,13 @@ fun KewApp(audioEngine: AudioEngine) {
         }.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
     }
 
-    val activeList = remember(currentPlaybackSource, filesInDir, playlistPaths) {
-        if (currentPlaybackSource == PlaybackSource.LIBRARY) filesInDir
-        else playlistPaths.map { File(it) }
+    val activeList = remember(currentPlaybackSource, playbackLibraryFiles, filesInDir, playlistPaths) {
+        if (currentPlaybackSource == PlaybackSource.LIBRARY) {
+            if (playbackLibraryFiles.isNotEmpty()) playbackLibraryFiles
+            else filesInDir.filter { !it.isDirectory }
+        } else {
+            playlistPaths.map { File(it) }
+        }
     }
 
     fun ensureShuffleDeck(activeList: List<File>, currentFile: File?) {
@@ -785,6 +790,8 @@ fun KewApp(audioEngine: AudioEngine) {
                     currentShuffleIndex = idx
                     return
                 }
+            } else {
+                return
             }
         }
 
@@ -792,7 +799,7 @@ fun KewApp(audioEngine: AudioEngine) {
             val remaining = activeList.filter { it.absolutePath != currentFile.absolutePath }.shuffled()
             shuffledList = listOf(currentFile) + remaining
             currentShuffleIndex = 0
-        } else {
+        } else if (shuffledList.isEmpty() || deckPaths != activePaths) {
             shuffledList = activeList.shuffled()
             currentShuffleIndex = 0
         }
@@ -814,11 +821,7 @@ fun KewApp(audioEngine: AudioEngine) {
             return currentTrack?.file
         }
 
-        val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
-            filesInDir.filter { !it.isDirectory }
-        } else {
-            playlistPaths.map { File(it) }
-        }
+        val currentActiveList = activeList
         if (currentActiveList.isEmpty()) return null
 
         if (isShuffleEnabled) {
@@ -839,10 +842,17 @@ fun KewApp(audioEngine: AudioEngine) {
                 return nextFile
             } else if (repeatMode == RepeatMode.ALL) {
                 if (consumeQueue) {
-                    val newShuffled = currentActiveList.shuffled()
-                    shuffledList = newShuffled
+                    val currentPlaying = currentTrack?.file
+                    val candidates = if (currentActiveList.size > 1 && currentPlaying != null) {
+                        val withoutCurrent = currentActiveList.filter { it.absolutePath != currentPlaying.absolutePath }
+                        val reshuffled = withoutCurrent.shuffled()
+                        reshuffled + listOf(currentPlaying)
+                    } else {
+                        currentActiveList.shuffled()
+                    }
+                    shuffledList = candidates
                     currentShuffleIndex = 0
-                    return newShuffled.firstOrNull()
+                    return candidates.firstOrNull()
                 } else {
                     return shuffledList.firstOrNull()
                 }
@@ -863,6 +873,21 @@ fun KewApp(audioEngine: AudioEngine) {
 
     fun peekNextTrackFile(): File? = getNextTrackFile(isAutoAdvance = true, consumeQueue = false)
 
+    fun syncPreparedNextTrack() {
+        if (!isPlaying || currentTrack == null) {
+            audioEngine.clearNextTrack()
+            return
+        }
+        val nextFile = peekNextTrackFile()
+        if (nextFile != null) {
+            coroutineScope.launch(Dispatchers.IO) {
+                audioEngine.prepareNextTrack(nextFile.absolutePath)
+            }
+        } else {
+            audioEngine.clearNextTrack()
+        }
+    }
+
     fun playNext(isAutoAdvance: Boolean) {
         val nextFile = getNextTrackFile(isAutoAdvance, consumeQueue = true)
         if (nextFile != null) {
@@ -882,11 +907,7 @@ fun KewApp(audioEngine: AudioEngine) {
         }
 
         if (isShuffleEnabled) {
-            val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
-                filesInDir.filter { !it.isDirectory }
-            } else {
-                playlistPaths.map { File(it) }
-            }
+            val currentActiveList = activeList
             ensureShuffleDeck(currentActiveList, file)
         }
 
@@ -978,12 +999,7 @@ fun KewApp(audioEngine: AudioEngine) {
                 currentTrack = metadata
                 com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack = metadata
                 com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
-            }
-            
-            // Prepare next track for gapless playback
-            val nextFile = peekNextTrackFile()
-            if (nextFile != null && currentTrack?.file?.absolutePath == file.absolutePath) {
-                audioEngine.prepareNextTrack(nextFile.absolutePath)
+                syncPreparedNextTrack()
             }
         }
     }
@@ -991,11 +1007,7 @@ fun KewApp(audioEngine: AudioEngine) {
     playTrackRef = { f, auto, rec -> playTrack(f, auto, rec) }
 
     fun playPrev() {
-        val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
-            filesInDir.filter { !it.isDirectory }
-        } else {
-            playlistPaths.map { File(it) }
-        }
+        val currentActiveList = activeList
         if (currentActiveList.isEmpty()) return
 
         // 1. Check history stack first (actual tracks user previously listened to)
@@ -1040,17 +1052,19 @@ fun KewApp(audioEngine: AudioEngine) {
         val newState = !isShuffleEnabled
         isShuffleEnabled = newState
         if (newState) {
-            val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
-                filesInDir.filter { !it.isDirectory }
-            } else {
-                playlistPaths.map { File(it) }
-            }
+            val currentActiveList = activeList
             ensureShuffleDeck(currentActiveList, currentTrack?.file)
-            val nextFile = peekNextTrackFile()
-            if (nextFile != null && currentTrack != null) {
-                audioEngine.prepareNextTrack(nextFile.absolutePath)
-            }
         }
+        syncPreparedNextTrack()
+    }
+
+    val cycleRepeat = {
+        repeatMode = when (repeatMode) {
+            RepeatMode.OFF -> RepeatMode.ALL
+            RepeatMode.ALL -> RepeatMode.ONE
+            RepeatMode.ONE -> RepeatMode.OFF
+        }
+        syncPreparedNextTrack()
     }
 
     val currentPlayNext by rememberUpdatedState(::playNext)
@@ -1076,11 +1090,7 @@ fun KewApp(audioEngine: AudioEngine) {
                     currentTrack?.file?.let { file ->
                         playTrack(file, false)
                     } ?: run {
-                        val active = if (getCurrentSource() == PlaybackSource.LIBRARY.name) {
-                            filesInDir.filter { !it.isDirectory }
-                        } else {
-                            playlistPaths.map { File(it) }
-                        }
+                        val active = activeList
                         if (active.isNotEmpty()) {
                             playTrack(active.first(), false)
                         }
@@ -1135,11 +1145,6 @@ fun KewApp(audioEngine: AudioEngine) {
                 withContext(Dispatchers.IO) {
                     val nextMetadata = extractMetadata(nextFile)
                     
-                    val nextForGapless = peekNextTrackFile()
-                    if (nextForGapless != null) {
-                        audioEngine.prepareNextTrack(nextForGapless.absolutePath)
-                    }
-                    
                     withContext(Dispatchers.Main) {
                         currentTrack = nextMetadata
                         com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack = nextMetadata
@@ -1153,9 +1158,10 @@ fun KewApp(audioEngine: AudioEngine) {
                             sourceSampleRate = audioEngine.getSourceSampleRate()
                             sourceBitDepth = audioEngine.getSourceBitDepth()
                             recentErrorCount = audioEngine.getRecentErrorCount()
-                            uacVersion = audioEngine.getUacVersion()
-                            claimedInterfaces = audioEngine.getClaimedInterfaces()
+                            outputBitDepth = audioEngine.getOutputBitDepth()
+                            outputSampleRate = audioEngine.getOutputSampleRate()
                         }
+                        syncPreparedNextTrack()
                     }
                 }
             }
@@ -1490,11 +1496,40 @@ fun KewApp(audioEngine: AudioEngine) {
         }
 
         if (showQueuePanel) {
-            val upcomingTracks = remember(priorityQueue, currentTrack, activeList) {
-                val currentActiveList = if (getCurrentSource() == PlaybackSource.LIBRARY.name) filesInDir.filter { !it.isDirectory } else playlistPaths.map { File(it) }
-                val currentIndex = currentActiveList.indexOfFirst { it.absolutePath == currentTrack?.file?.absolutePath }
-                if (currentIndex != -1 && currentIndex + 1 < currentActiveList.size) {
-                    currentActiveList.subList(currentIndex + 1, currentActiveList.size)
+            val upcomingTracks = remember(priorityQueue, currentTrack, activeList, isShuffleEnabled, shuffledList, currentShuffleIndex, repeatMode) {
+                val currentActiveList = activeList
+
+                if (isShuffleEnabled && shuffledList.isNotEmpty()) {
+                    val startIndex = if (currentTrack?.file != null) {
+                        val idx = shuffledList.indexOfFirst { it.absolutePath == currentTrack?.file?.absolutePath }
+                        if (idx != -1) idx else currentShuffleIndex
+                    } else {
+                        currentShuffleIndex
+                    }
+                    val afterCurrent = if (startIndex in shuffledList.indices && startIndex + 1 < shuffledList.size) {
+                        shuffledList.subList(startIndex + 1, shuffledList.size)
+                    } else emptyList()
+
+                    if (repeatMode == RepeatMode.ALL && startIndex > 0) {
+                        afterCurrent + shuffledList.subList(0, startIndex)
+                    } else {
+                        afterCurrent
+                    }
+                } else if (currentActiveList.isNotEmpty()) {
+                    val currentIndex = currentActiveList.indexOfFirst { it.absolutePath == currentTrack?.file?.absolutePath }
+                    if (currentIndex != -1) {
+                        val afterCurrent = if (currentIndex + 1 < currentActiveList.size) {
+                            currentActiveList.subList(currentIndex + 1, currentActiveList.size)
+                        } else emptyList()
+
+                        if (repeatMode == RepeatMode.ALL && currentIndex > 0) {
+                            afterCurrent + currentActiveList.subList(0, currentIndex)
+                        } else {
+                            afterCurrent
+                        }
+                    } else {
+                        currentActiveList
+                    }
                 } else {
                     emptyList()
                 }
@@ -1534,14 +1569,20 @@ fun KewApp(audioEngine: AudioEngine) {
                                 if (idx in priorityQueue.indices) {
                                     priorityQueue = priorityQueue.filterIndexed { i, _ -> i != idx }
                                     com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = priorityQueue
+                                    syncPreparedNextTrack()
                                 }
                             },
                             onClearQueue = {
                                 priorityQueue = emptyList()
                                 com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = emptyList()
+                                syncPreparedNextTrack()
                             },
                             onSelectTrack = { file ->
                                 showQueuePanel = false
+                                if (priorityQueue.any { it.absolutePath == file.absolutePath }) {
+                                    priorityQueue = priorityQueue.filter { it.absolutePath != file.absolutePath }
+                                    com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = priorityQueue
+                                }
                                 playTrack(file, false)
                             },
                             onClose = { showQueuePanel = false }
@@ -1619,6 +1660,15 @@ fun KewApp(audioEngine: AudioEngine) {
                                 label = "PLAY NOW",
                                 onClick = {
                                     trackActionTarget = null
+                                    if (currentPlaybackSourceStr == PlaybackSource.LIBRARY.name) {
+                                        playbackLibraryFiles = target.parentFile?.listFiles()?.filter {
+                                            !it.isDirectory && (
+                                                it.extension.equals("flac", ignoreCase = true) ||
+                                                it.extension.equals("wav", ignoreCase = true) ||
+                                                it.extension.equals("wave", ignoreCase = true)
+                                            )
+                                        }?.sortedWith(compareBy { it.name.lowercase() }) ?: emptyList()
+                                    }
                                     playTrack(target, false)
                                 }
                             )
@@ -1629,6 +1679,7 @@ fun KewApp(audioEngine: AudioEngine) {
                                     priorityQueue = listOf(target) + priorityQueue
                                     com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = priorityQueue
                                     trackActionTarget = null
+                                    syncPreparedNextTrack()
                                     Toast.makeText(context, "Added as next track", Toast.LENGTH_SHORT).show()
                                 }
                             )
@@ -1639,6 +1690,7 @@ fun KewApp(audioEngine: AudioEngine) {
                                     priorityQueue = priorityQueue + target
                                     com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = priorityQueue
                                     trackActionTarget = null
+                                    syncPreparedNextTrack()
                                     Toast.makeText(context, "Added to queue (#${priorityQueue.size})", Toast.LENGTH_SHORT).show()
                                 }
                             )
@@ -1743,6 +1795,13 @@ fun KewApp(audioEngine: AudioEngine) {
                         currentDirectory = file 
                     } else {
                         currentPlaybackSourceStr = PlaybackSource.LIBRARY.name
+                        playbackLibraryFiles = file.parentFile?.listFiles()?.filter {
+                            !it.isDirectory && (
+                                it.extension.equals("flac", ignoreCase = true) ||
+                                it.extension.equals("wav", ignoreCase = true) ||
+                                it.extension.equals("wave", ignoreCase = true)
+                            )
+                        }?.sortedWith(compareBy { it.name.lowercase() }) ?: emptyList()
                         playTrack(file, false)
                     }
                 },
@@ -1761,13 +1820,7 @@ fun KewApp(audioEngine: AudioEngine) {
                 repeatMode = repeatMode,
                 priorityQueueSize = priorityQueue.size,
                 onToggleShuffle = toggleShuffle,
-                onCycleRepeat = {
-                    repeatMode = when (repeatMode) {
-                        RepeatMode.OFF -> RepeatMode.ALL
-                        RepeatMode.ALL -> RepeatMode.ONE
-                        RepeatMode.ONE -> RepeatMode.OFF
-                    }
-                },
+                onCycleRepeat = cycleRepeat,
                 onOpenQueue = { showQueuePanel = true },
                 onFileSelected = { file ->
                     currentPlaybackSourceStr = PlaybackSource.PLAYLIST.name
@@ -1825,13 +1878,7 @@ fun KewApp(audioEngine: AudioEngine) {
                     }
                 },
                 onToggleShuffle = toggleShuffle,
-                onCycleRepeat = {
-                    repeatMode = when (repeatMode) {
-                        RepeatMode.OFF -> RepeatMode.ALL
-                        RepeatMode.ALL -> RepeatMode.ONE
-                        RepeatMode.ONE -> RepeatMode.OFF
-                    }
-                },
+                onCycleRepeat = cycleRepeat,
                 onOpenQueue = { showQueuePanel = true },
                 onSeekTo = { targetSec ->
                     playbackPosition = targetSec

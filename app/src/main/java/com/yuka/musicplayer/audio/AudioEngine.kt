@@ -31,6 +31,7 @@ class AudioEngine {
     
     // Gapless Playback JNI
     external fun prepareNextTrack(filePath: String): Boolean
+    external fun clearNextTrack(): Boolean
     external fun cleanGarbage()
     external fun closeUsbDac()
 

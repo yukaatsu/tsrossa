@@ -2189,6 +2189,29 @@ Java_com_yuka_musicplayer_audio_AudioEngine_cleanGarbage(JNIEnv *env,
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_clearNextTrack(JNIEnv *env,
+                                                          jobject thiz) {
+  // Abort any in-flight asynchronous prepareNextTrack decode
+  g_audioState.prepareNextGen++;
+
+  ApiMutexLock lock(__func__);
+  g_audioState.hasNextTrack.store(false);
+  g_audioState.nextFilePath = "";
+  if (!g_audioState.pcmBufferNext.empty()) {
+    munlock(g_audioState.pcmBufferNext.data(),
+            g_audioState.pcmBufferNext.size() * sizeof(int32_t));
+    g_audioState.pcmBufferNext.clear();
+    g_audioState.pcmBufferNext.shrink_to_fit();
+  }
+  g_audioState.sampleRateNext.store(0);
+  g_audioState.channelsNext.store(0);
+  g_audioState.sourceBitDepthNext.store(0);
+
+  LOGI("clearNextTrack: Successfully cleared prepared next track from engine.");
+  return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_yuka_musicplayer_audio_AudioEngine_prepareNextTrack(JNIEnv *env,
                                                              jobject thiz,
                                                              jstring filePath) {
