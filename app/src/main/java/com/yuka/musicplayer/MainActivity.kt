@@ -162,6 +162,29 @@ enum class PlaybackSource { LIBRARY, PLAYLIST }
 
 enum class RepeatMode { OFF, ALL, ONE }
 
+enum class LibrarySortMode(val label: String, val shortLabel: String) {
+    DATE_DESC("DATE (NEWEST)", "DATE ↓"),
+    DATE_ASC("DATE (OLDEST)", "DATE ↑"),
+    NAME_ASC("NAME (A-Z)", "A-Z"),
+    NAME_DESC("NAME (Z-A)", "Z-A");
+
+    fun next(): LibrarySortMode = when (this) {
+        DATE_DESC -> DATE_ASC
+        DATE_ASC -> NAME_ASC
+        NAME_ASC -> NAME_DESC
+        NAME_DESC -> DATE_DESC
+    }
+}
+
+fun sortLibraryFiles(files: List<File>, mode: LibrarySortMode): List<File> {
+    return when (mode) {
+        LibrarySortMode.DATE_DESC -> files.sortedWith(compareBy<File>({ !it.isDirectory }).thenByDescending { it.lastModified() })
+        LibrarySortMode.DATE_ASC -> files.sortedWith(compareBy<File>({ !it.isDirectory }).thenBy { it.lastModified() })
+        LibrarySortMode.NAME_ASC -> files.sortedWith(compareBy<File>({ !it.isDirectory }).thenBy { it.name.lowercase() })
+        LibrarySortMode.NAME_DESC -> files.sortedWith(compareBy<File>({ !it.isDirectory }).thenByDescending { it.name.lowercase() })
+    }
+}
+
 fun loadPlaylist(context: Context): List<String> {
     val file = File(context.filesDir, "playlist.txt")
     if (!file.exists()) return emptyList()
@@ -513,6 +536,21 @@ fun KewApp(audioEngine: AudioEngine) {
     LaunchedEffect(currentDirectory) {
         sharedPref.edit().putString("last_directory", currentDirectory.absolutePath).apply()
     }
+
+    var librarySortMode by remember {
+        mutableStateOf(
+            runCatching {
+                LibrarySortMode.valueOf(
+                    sharedPref.getString("library_sort_mode", LibrarySortMode.DATE_DESC.name)
+                        ?: LibrarySortMode.DATE_DESC.name
+                )
+            }.getOrDefault(LibrarySortMode.DATE_DESC)
+        )
+    }
+    LaunchedEffect(librarySortMode) {
+        sharedPref.edit().putString("library_sort_mode", librarySortMode.name).apply()
+    }
+    var libraryRefreshTrigger by remember { mutableIntStateOf(0) }
     
     val coroutineScope = rememberCoroutineScope()
 
@@ -755,14 +793,15 @@ fun KewApp(audioEngine: AudioEngine) {
 
     val hwSampleRate = remember { 44100 } // Hardcoded fallback
 
-    val filesInDir = remember(currentDirectory, isStorageGranted) {
+    val filesInDir = remember(currentDirectory, isStorageGranted, librarySortMode, libraryRefreshTrigger) {
         val files = currentDirectory.listFiles()?.toList() ?: emptyList()
-        files.filter {
+        val filtered = files.filter {
             it.isDirectory ||
             it.extension.equals("flac", ignoreCase = true) ||
             it.extension.equals("wav", ignoreCase = true) ||
             it.extension.equals("wave", ignoreCase = true)
-        }.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        }
+        sortLibraryFiles(filtered, librarySortMode)
     }
 
     val activeList = remember(currentPlaybackSource, playbackLibraryFiles, filesInDir, playlistPaths) {
@@ -1065,6 +1104,39 @@ fun KewApp(audioEngine: AudioEngine) {
             RepeatMode.ONE -> RepeatMode.OFF
         }
         syncPreparedNextTrack()
+    }
+
+    val cycleLibrarySortMode = {
+        val nextMode = librarySortMode.next()
+        librarySortMode = nextMode
+        if (currentPlaybackSourceStr == PlaybackSource.LIBRARY.name && playbackLibraryFiles.isNotEmpty()) {
+            playbackLibraryFiles = sortLibraryFiles(playbackLibraryFiles, nextMode)
+            syncPreparedNextTrack()
+        }
+        val msg = when (nextMode) {
+            LibrarySortMode.DATE_DESC -> "Sorted: Date (Newest first)"
+            LibrarySortMode.DATE_ASC -> "Sorted: Date (Oldest first)"
+            LibrarySortMode.NAME_ASC -> "Sorted: Name (A to Z)"
+            LibrarySortMode.NAME_DESC -> "Sorted: Name (Z to A)"
+        }
+        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    val refreshLibrary = {
+        libraryRefreshTrigger++
+        val currentScannedFiles = currentDirectory.listFiles()?.filter {
+            it.isDirectory ||
+            it.extension.equals("flac", ignoreCase = true) ||
+            it.extension.equals("wav", ignoreCase = true) ||
+            it.extension.equals("wave", ignoreCase = true)
+        } ?: emptyList()
+        if (currentPlaybackSourceStr == PlaybackSource.LIBRARY.name &&
+            currentDirectory.absolutePath == currentTrack?.file?.parentFile?.absolutePath) {
+            val audioFiles = sortLibraryFiles(currentScannedFiles.filter { !it.isDirectory }, librarySortMode)
+            playbackLibraryFiles = audioFiles
+            syncPreparedNextTrack()
+        }
+        Toast.makeText(context, "Library refreshed (${currentScannedFiles.size} items)", Toast.LENGTH_SHORT).show()
     }
 
     val currentPlayNext by rememberUpdatedState(::playNext)
@@ -1667,7 +1739,7 @@ fun KewApp(audioEngine: AudioEngine) {
                                                 it.extension.equals("wav", ignoreCase = true) ||
                                                 it.extension.equals("wave", ignoreCase = true)
                                             )
-                                        }?.sortedWith(compareBy { it.name.lowercase() }) ?: emptyList()
+                                        }?.let { sortLibraryFiles(it, librarySortMode) } ?: emptyList()
                                     }
                                     playTrack(target, false)
                                 }
@@ -1787,6 +1859,9 @@ fun KewApp(audioEngine: AudioEngine) {
                 playingFile = currentTrack?.file,
                 playlistSet = playlistSet,
                 searchQuery = searchQuery,
+                sortMode = librarySortMode,
+                onCycleSort = cycleLibrarySortMode,
+                onRefresh = refreshLibrary,
                 onSearchChange = { searchQuery = it },
                 onFileSelected = { file -> 
                     if (file.name == "..") {
@@ -1801,7 +1876,7 @@ fun KewApp(audioEngine: AudioEngine) {
                                 it.extension.equals("wav", ignoreCase = true) ||
                                 it.extension.equals("wave", ignoreCase = true)
                             )
-                        }?.sortedWith(compareBy { it.name.lowercase() }) ?: emptyList()
+                        }?.let { sortLibraryFiles(it, librarySortMode) } ?: emptyList()
                         playTrack(file, false)
                     }
                 },
@@ -3721,6 +3796,9 @@ fun LibraryView(
     playingFile: File?,
     playlistSet: Set<String>,
     searchQuery: String,
+    sortMode: LibrarySortMode,
+    onCycleSort: () -> Unit,
+    onRefresh: () -> Unit,
     onSearchChange: (String) -> Unit,
     onFileSelected: (File) -> Unit,
     onFileLongPressed: (File) -> Unit,
@@ -3738,15 +3816,65 @@ fun LibraryView(
             .fillMaxSize()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        Text(
-            text = "— FILE LIBRARY —",
-            color = Color.White,
-            fontSize = 11.sp,
-            letterSpacing = 1.sp,
-            fontFamily = TerminalFont,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "— FILE LIBRARY (${filteredIndexedFiles.size}) —",
+                color = Color.White,
+                fontSize = 11.sp,
+                letterSpacing = 1.sp,
+                fontFamily = TerminalFont,
+                fontWeight = FontWeight.Bold
+            )
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Sort Toggle Button
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, LocalAccentColor.current.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .background(LocalAccentColor.current.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onCycleSort()
+                        }
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "⇵ ${sortMode.shortLabel}",
+                        color = LocalAccentColor.current,
+                        fontSize = 9.sp,
+                        fontFamily = TerminalFont,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // Refresh Button
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, LocalAccentColor.current.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .background(LocalAccentColor.current.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onRefresh()
+                        }
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "⟳ REFRESH",
+                        color = LocalAccentColor.current,
+                        fontSize = 9.sp,
+                        fontFamily = TerminalFont,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
         
         // Styled Search Box
         Row(
@@ -3866,6 +3994,19 @@ fun LibraryView(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
+
+                    if (!isDir && (sortMode == LibrarySortMode.DATE_DESC || sortMode == LibrarySortMode.DATE_ASC)) {
+                        val dateFormatted = remember(file.lastModified()) {
+                            java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(file.lastModified()))
+                        }
+                        Text(
+                            text = dateFormatted,
+                            color = TerminalGray.copy(alpha = 0.7f),
+                            fontFamily = TerminalFont,
+                            fontSize = 8.5.sp,
+                            modifier = Modifier.padding(start = 6.dp)
+                        )
+                    }
                     
                     if (inPlaylist && !isDir) {
                         Text(
