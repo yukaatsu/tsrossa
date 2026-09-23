@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="release/app-release.apk"><img src="https://img.shields.io/badge/Release-v1.2.0--beta3-orange.svg" alt="Release v1.2.0-beta3"></a>
+  <a href="https://github.com/yukaatsu/tsrossa/releases"><img src="https://img.shields.io/badge/Release-v1.2.0--beta3-orange.svg" alt="Release v1.2.0-beta3"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Android%208.0%2B-2ea44f.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Engine-Native%20C%2B%2B17%20%2F%20libusb-0052cc.svg" alt="Engine"></a>
   <a href="#"><img src="https://img.shields.io/badge/Audio-Bit--Perfect%20UAC1%20%7C%20UAC2-success.svg" alt="Audio"></a>
@@ -108,9 +108,7 @@ For testing bit-perfect playback with high-resolution FLAC files:
 ## Quick Start
 
 ### Installation
-1. Download the latest release:
-   - **Direct APK**: [`release/app-release.apk`](release/app-release.apk)
-   - **GitHub Releases**: [tsrossa Releases](https://github.com/yukaatsu/tsrossa/releases)
+1. Download the latest APK from [GitHub Releases](https://github.com/yukaatsu/tsrossa/releases).
 2. Install the APK on your device.
 3. Connect your USB DAC via OTG. Grant USB access permission when prompted.
 4. Select a FLAC or WAV file in the Library browser to begin bit-perfect playback.
@@ -123,28 +121,6 @@ Tap **`[LOGS]`** in the header to view the real-time hardware status modal:
 - Zero-jitter RAM playback and gapless engine status
 
 Use **`[COPY REPORT]`** or **`[SHARE REPORT]`** to include hardware telemetry when opening an issue.
-
----
-
-## Building from Source
-
-### Prerequisites
-- Android Studio Ladybug (or newer)
-- Android NDK (r25c or higher)
-- CMake 3.22.1+
-- JDK 17+
-
-### Build Instructions
-```bash
-# Clone the repository
-git clone https://github.com/yukaatsu/tsrossa.git
-cd tsrossa
-
-# Build the release APK
-./gradlew assembleRelease
-```
-The compiled APK will be located at:
-`app/build/outputs/apk/release/app-release.apk`
 
 ---
 
