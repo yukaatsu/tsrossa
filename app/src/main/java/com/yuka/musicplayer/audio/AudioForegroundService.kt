@@ -100,12 +100,31 @@ class AudioForegroundService : Service() {
         return builder.build()
     }
 
+    private var lastNotificationTime = 0L
+    private val notificationHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val notificationRunnable = Runnable {
+        try {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.notify(NOTIFICATION_ID, buildNotification())
+            lastNotificationTime = System.currentTimeMillis()
+        } catch (e: Exception) {
+            android.util.Log.w("AudioForegroundService", "Error posting notification: ${e.message}")
+        }
+    }
+
     private fun updateNotification() {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, buildNotification())
+        val now = System.currentTimeMillis()
+        if (now - lastNotificationTime >= 250L) {
+            notificationHandler.removeCallbacks(notificationRunnable)
+            notificationRunnable.run()
+        } else {
+            notificationHandler.removeCallbacks(notificationRunnable)
+            notificationHandler.postDelayed(notificationRunnable, 250L - (now - lastNotificationTime))
+        }
     }
     
     override fun onDestroy() {
+        notificationHandler.removeCallbacks(notificationRunnable)
         AudioPlayerManager.onNotificationUpdateRequired = null
         wakeLock?.let {
             if (it.isHeld) {
