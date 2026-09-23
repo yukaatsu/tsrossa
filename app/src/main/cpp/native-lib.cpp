@@ -10,10 +10,13 @@
 #include <jni.h>
 #include <libusb.h>
 #include <mutex>
+#include <pthread.h>
 #include <queue>
+#include <sched.h>
 #include <set>
 #include <string>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/types.h>
 #include <thread>
 #include <unistd.h>
@@ -1886,8 +1889,27 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
     g_audioState.stopIsoThread.store(false);
     g_audioState.isoThreadExited.store(false);
     g_audioState.isoThread = new std::thread([]() {
-      int num_transfers = 32;
-      int num_packets = 32;
+      // 1. Elevate thread scheduling priority to real-time audio (nice -19 / SCHED_FIFO)
+      pthread_setname_np(pthread_self(), "KewAudioIso");
+      setpriority(PRIO_PROCESS, 0, -19); // ANDROID_PRIORITY_URGENT_AUDIO
+
+      struct sched_param param;
+      param.sched_priority = sched_get_priority_max(SCHED_FIFO);
+      if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) == 0) {
+        LOGI("isoThread: Elevated to SCHED_FIFO real-time scheduling");
+      } else {
+        LOGI("isoThread: Set to nice -19 urgent audio scheduling");
+      }
+
+      // 2. Hardware Queue Depth:
+      // High-Speed USB (8000 microframes/s): 64 packets * 125µs = 8ms per transfer.
+      // 48 transfers * 8ms = 384ms hardware DMA queue depth.
+      // Full-Speed USB (1000 frames/s): 16 packets * 1ms = 16ms per transfer.
+      // 24 transfers * 16ms = 384ms hardware DMA queue depth.
+      // This absorbs ANY heavy window animation or recent apps thumbnail generation without stutter!
+      int fps = g_audioState.usb_frames_per_sec.load();
+      int num_packets = (fps >= 8000) ? 64 : 16;
+      int num_transfers = (fps >= 8000) ? 48 : 24;
       int packet_size = g_audioState.maxPacketSize;
       g_audioState.activeIsoTransfers.store(0);
 
@@ -1907,9 +1929,9 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
         g_audioState.transfers.push_back(transfer);
       }
 
-      // Pump events while running
+      // Pump events while running with low latency (5ms timeout)
       while (!g_audioState.stopIsoThread.load()) {
-        struct timeval tv = {0, 50000};
+        struct timeval tv = {0, 5000};
         libusb_handle_events_timeout_completed(g_audioState.usbContext, &tv,
                                                nullptr);
       }
