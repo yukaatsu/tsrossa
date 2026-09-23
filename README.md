@@ -2,136 +2,162 @@
   <img src="tsrossa.png" alt="tsrossa Banner" width="100%"/>
 </p>
 
-<h1 align="center">tsrossa — Audiophile Music Player</h1>
+<h1 align="center">tsrossa</h1>
 
 <p align="center">
-  <strong>Direct Kernel-Level USB DAC (UAC1/UAC2) Bit-Perfect Music Player for Android with Native C++ Engine</strong>
+  <strong>Direct-to-DAC Bit-Perfect USB Audio Player for Android</strong><br/>
+  High-fidelity C++17 audio engine bypassing Android AudioFlinger via kernel-level USB transport.
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="release/app-release.apk"><img src="https://img.shields.io/badge/Release-v1.2.0--beta2-orange.svg" alt="Release"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Platform-Android%208.0%2B-green.svg" alt="Platform"></a>
+  <a href="release/app-release.apk"><img src="https://img.shields.io/badge/Release-v1.2.0--beta3-orange.svg" alt="Release v1.2.0-beta3"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Platform-Android%208.0%2B-2ea44f.svg" alt="Platform"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Engine-Native%20C%2B%2B17%20%2F%20libusb-0052cc.svg" alt="Engine"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Audio-Bit--Perfect%20UAC1%20%7C%20UAC2-success.svg" alt="Audio"></a>
   <a href="#"><img src="https://img.shields.io/badge/Formats-FLAC%20%7C%20WAV-blueviolet.svg" alt="Supported Formats"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Audio-Bit--Perfect%20UAC2-success.svg" alt="Bit-Perfect"></a>
-  <a href="https://bagibagi.co/Yukaatsu"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-Donate-FFDD00.svg?logo=buy-me-a-coffee&logoColor=black" alt="Buy me a coffee"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg" alt="License"></a>
+  <a href="https://bagibagi.co/Yukaatsu"><img src="https://img.shields.io/badge/Donate-BagiBagi-FFDD00.svg?logo=buy-me-a-coffee&logoColor=black" alt="Support"></a>
 </p>
 
 ---
 
-## ⚡ Overview
+## Overview
 
-**tsrossa** is a lightweight, open-source Bit-Perfect audiophile music player for Android. It bypasses the standard Android OS mixer (`AudioFlinger`) and communicates directly with external USB DACs at the kernel level using a custom native C++17 `libusb-1.0` asynchronous isochronous engine.
+**tsrossa** is an open-source, bit-perfect music player developed specifically for audiophile USB DAC setups on Android. 
 
-Playback is streamed with zero resampling, zero DSP alterations, and exact clock synchronization for pristine audio fidelity.
+Standard Android audio architectures route playback through the system `AudioTrack` API and `AudioFlinger` mixing service. This pipeline enforces fixed 48 kHz sample-rate conversion (SRC), applies non-linear software digital volume attenuation, and introduces buffer jitter through multiple OS layers.
+
+tsrossa eliminates the entire Android audio framework. By querying Android's USB Host API solely to acquire the raw device file descriptor (`usbfs`), the native C++17 engine interfaces directly with external DACs using `libusb-1.0`. PCM streams are transmitted directly across asynchronous USB Isochronous endpoints with exact hardware clock configuration, zero sample-rate conversion, zero DSP processing, and true unity gain.
 
 ---
 
-## 📸 Interface Preview
+## Interface
 
 <table align="center">
   <tr>
     <td align="center" width="33%">
-      <img src="screenshots/01_now_playing.png" alt="Now Playing" width="100%"/>
-      <br/><b>Now Playing</b><br/>
-      <sub>Pac-Man seek bar, dynamic album art palette, hardware volume dial</sub>
+      <img src="screenshots/01_now_playing.png" alt="Now Playing HUD" width="100%"/>
+      <br/><b>Now Playing HUD</b><br/>
+      <sub>Terminal interface with Pac-Man seek bar, dynamic album art palette, and hardware volume dial</sub>
     </td>
     <td align="center" width="33%">
-      <img src="screenshots/02_library.png" alt="Library Browser" width="100%"/>
-      <br/><b>Library Browser</b><br/>
-      <sub>Fast file navigation with sleek terminal search and codec tags</sub>
+      <img src="screenshots/02_library.png" alt="File Library" width="100%"/>
+      <br/><b>File Library</b><br/>
+      <sub>Hierarchical file browser with Date/Name sorting, one-tap directory refresh, and timestamp indexing</sub>
     </td>
     <td align="center" width="33%">
-      <img src="screenshots/03_system_logs.png" alt="Live Diagnostics" width="100%"/>
-      <br/><b>Live Diagnostics</b><br/>
-      <sub>Real-time DAC telemetry, clock locking, and 1-tap report export</sub>
+      <img src="screenshots/03_system_logs.png" alt="Hardware Telemetry" width="100%"/>
+      <br/><b>Hardware Telemetry</b><br/>
+      <sub>Real-time UAC2 endpoint negotiation, hardware clock verification, RAM buffer state, and 1-tap report export</sub>
     </td>
   </tr>
 </table>
 
 ---
 
-## 🚀 Key Features
+## Architecture & Engineering
 
-- **100% AudioFlinger Bypass**: Direct USB Host access prevents Android's forced 48kHz resampling and system audio degradation.
-- **Lossless & Uncompressed Playback**: Native decoding of **FLAC** (`.flac`) and **WAV** (`.wav`, `.wave`) from 16-bit/44.1kHz up to 32-bit/384kHz (including IEEE 32-bit Float).
-- **Hardware Volume Control**: Native logarithmic gain adjustment via USB Feature Units (indicated by a Gold Status Dot for true unity gain).
-- **Retro-Cyberpunk HUD**: Terminal monospaced interface with an interactive Pac-Man animated seek bar, dark AMOLED theme, and album art accent lighting.
-- **True Gapless Playback**: Native pre-buffering delivers seamless track handovers without silence or clicks.
-- **In-App Updater & Hotplug Safety**: Built-in GitHub release updater and graceful USB disconnection handling to prevent crashes.
+### 1. Direct Kernel USB Transport (`usbfs` + `libusb-1.0`)
+- Circumvents `AudioTrack`, `AudioFlinger`, and vendor audio HAL layers entirely.
+- Establishes a dedicated native C++ transfer loop utilizing Linux `usbfs` handles.
+- Schedules asynchronous Isochronous transfers directly to the DAC's audio streaming endpoint.
+
+### 2. Hardware Clock & Rate Negotiation (UAC1 / UAC2)
+- Inspects USB Audio Class descriptors to map physical Clock Source and Clock Selector entities.
+- Configures sample rates directly at the hardware crystal oscillator via `CS_SAMPLING_FREQ_CONTROL` requests.
+- Eliminates Android's mandatory 48 kHz resampler: 44.1 kHz audio remains native 44.1 kHz, 96 kHz remains 96 kHz, up to 384 kHz.
+
+### 3. In-Memory PCM Preload & Memory Locking (`mlock`)
+- Decodes FLAC and WAV files into an uncompressed 32-bit linear PCM memory buffer prior to playback.
+- Uses POSIX `mlock()` to lock audio pages in physical RAM, preventing Linux kernel swapping, flash memory I/O spikes, and micro-stutters.
+
+### 4. Hardware Feature Unit Volume & True Unity Gain
+- Implements logarithmic volume attenuation directly on the DAC hardware via USB Feature Unit volume requests (`FU_VOLUME_CONTROL`).
+- Full volume (100% / 0.0 dB) engages true Bit-Perfect Unity Gain, preserving exact 0 dBFS dynamic range without digital math distortion.
+- An optional software 64-bit dithered attenuation fallback is available for DACs lacking hardware volume units.
+
+### 5. Gapless Streaming Handover
+- Secondary background worker decodes the next queued track into RAM prior to current track completion.
+- Seamlessly switches audio frames across endpoint boundaries without stream teardown, preventing pops, clicks, or timing gaps.
 
 ---
 
-## 💡 Obtaining FLAC Music (SpotiFLAC)
+## Technical Specifications
 
-Looking for lossless FLAC tracks to test bit-perfect playback with your DAC setup? You can obtain high-quality audio files using **SpotiFLAC**:
-
-- 🌐 **Official Website**: [spotiflac.com](https://spotiflac.com)
-- 📱 **SpotiFLAC Mobile GitHub**: [spotiflacapp/SpotiFLAC-Mobile](https://github.com/spotiflacapp/SpotiFLAC-Mobile)
-
----
-
-## 🧪 Beta Tester Guide & Testing Scope
-
-To provide clarity for community testers during the **Beta (v1.2.0-beta2)** phase, here is the scope of supported capabilities and recommended testing workflows:
-
-### ✅ Supported in This Version:
-| Category | Supported Specification & Testing Notes |
+| Parameter | Supported Range / Specification |
 | :--- | :--- |
-| **Audio Formats** | • **FLAC** (`.flac`): 16-bit, 24-bit, 32-bit integer PCM (44.1 kHz to 384 kHz)<br/>• **WAV** (`.wav`, `.wave`): 16-bit, 24-bit, 32-bit Linear PCM, and 32-bit IEEE Float |
-| **Audio Output** | **Dedicated to External USB DACs** via USB-C / OTG (Dongle DAC, Portable DAC/Amp, Desktop DAC) adhering to USB Audio Class (UAC1 / UAC2). |
-| **AudioFlinger Bypass** | **100% Direct Kernel USB** — Bypasses Android OS mixer; zero 48kHz forced resampling, zero DSP alterations. |
-| **Audio & Seek Controls** | In-app playback controls, Pac-Man animated seek bar, and **Android Lockscreen / MediaStyle notification drawer**. |
-| **Hardware Diagnostics** | Open **`[LOGS]`** to inspect real-time DAC negotiation, clock locking, and use **`[📋 COPY REPORT]`** or **`[↗ SHARE REPORT]`** to submit telemetry with bug reports. |
-| **In-App Updates** | Tap **`[UPD]`** in the top header or in Settings to automatically check and install new GitHub releases. |
+| **Supported Formats** | • **FLAC** (`.flac`): 16-bit, 24-bit, 32-bit integer PCM (44.1 kHz to 384 kHz)<br/>• **WAV** (`.wav`, `.wave`): 16-bit, 24-bit, 32-bit Linear PCM, and 32-bit IEEE Float |
+| **Output Target** | External USB DACs via USB-C OTG (Dongles, Portable DAC/Amps, Desktop DACs) |
+| **USB Audio Protocols** | USB Audio Class 1.0 (UAC1) and USB Audio Class 2.0 (UAC2) |
+| **Endpoint Sync** | Asynchronous and Adaptive Isochronous endpoints |
+| **Android Version** | Android 8.0 (API 26) through Android 15+ (API 35) |
+| **Permissions Required** | `android.permission.READ_MEDIA_AUDIO` / `READ_EXTERNAL_STORAGE`, `USB_PERMISSION` |
 
-### ❌ Out of Scope / Not Supported in Beta:
-- ❌ **Lossy Compressed Formats**: Formats such as **MP3, AAC, M4A, OGG, WMA** are intentionally omitted from this bit-perfect engine.
-- ❌ **Native DSD / DSF / DFF**: Planned for a future release via DoP (DSD over PCM).
-- ❌ **Built-in Phone Speakers & 3.5mm Headphone Jack**: This application is strictly an audiophile driver for **external USB DACs**. An external USB DAC is required for playback.
-- ❌ **Inline Headset Cable Remote Buttons**: Intentionally bypassed to ensure kernel isochronous DMA streaming stability is not interrupted by OS input events.
-
-### 💬 Feedback & Bug Reports
-Since Android USB host implementations and external DAC chipsets vary widely across devices, your feedback and test reports are invaluable! Please share diagnostic logs or feedback on [GitHub Issues](https://github.com/yukaatsu/tsrossa/issues).
+> **Design Scope**: tsrossa is designed strictly as a high-fidelity bit-perfect transport for external USB DACs. Built-in phone speakers, internal 3.5mm jacks, and lossy formats (MP3, AAC, OGG) are intentionally excluded to keep the native audio pipeline clean and uncompromised.
 
 ---
 
-## 📥 Installation
+## Test Audio Source
 
-1. Download the latest signed APK:
-   - 📦 **Direct Download**: [`release/app-release.apk`](release/app-release.apk)
-   - 🚀 **GitHub Releases**: [tsrossa Releases](https://github.com/yukaatsu/tsrossa/releases)
-2. Install the APK on your Android device (Android 8.0+).
-3. Connect your USB DAC via OTG cable and tap **OK** when prompted for USB permissions.
+For testing bit-perfect playback with high-resolution FLAC files:
+- **SpotiFLAC**: [spotiflac.com](https://spotiflac.com)
+- **SpotiFLAC Mobile**: [GitHub Repository](https://github.com/spotiflacapp/SpotiFLAC-Mobile)
 
 ---
 
-## 📱 Compatibility
+## Quick Start
 
-- **Android Versions**: Android 8.0 (Oreo, API 26) to Android 14+ (API 34).
-- **USB DAC Support**: Standard USB Audio Class 1.0 (UAC1) and 2.0 (UAC2) devices.
-- **Tested DACs**: ESS Sabre, AKM, Cirrus Logic (CS43131/CS43198), Realtek, Conexant, Savitech, and more.
+### Installation
+1. Download the latest release:
+   - **Direct APK**: [`release/app-release.apk`](release/app-release.apk)
+   - **GitHub Releases**: [tsrossa Releases](https://github.com/yukaatsu/tsrossa/releases)
+2. Install the APK on your device.
+3. Connect your USB DAC via OTG. Grant USB access permission when prompted.
+4. Select a FLAC or WAV file in the Library browser to begin bit-perfect playback.
+
+### Hardware Diagnostics
+Tap **`[LOGS]`** in the header to view the real-time hardware status modal:
+- Negotiated sample rate & bit depth
+- Active interface endpoints and UAC protocol version
+- Bit-perfect transmission verification
+- Zero-jitter RAM playback and gapless engine status
+
+Use **`[COPY REPORT]`** or **`[SHARE REPORT]`** to include hardware telemetry when opening an issue.
 
 ---
 
-## 🛠️ Building From Source
+## Building from Source
 
+### Prerequisites
+- Android Studio Ladybug (or newer)
+- Android NDK (r25c or higher)
+- CMake 3.22.1+
+- JDK 17+
+
+### Build Instructions
 ```bash
+# Clone the repository
 git clone https://github.com/yukaatsu/tsrossa.git
 cd tsrossa
+
+# Build the release APK
 ./gradlew assembleRelease
 ```
-Compiled APK: `app/build/outputs/apk/release/app-release.apk`
+The compiled APK will be located at:
+`app/build/outputs/apk/release/app-release.apk`
 
 ---
 
-## ☕ Support
+## Support & Contributions
 
-If you enjoy **tsrossa**, you can support its ongoing development:
-👉 **[Buy me a coffee on BagiBagi](https://bagibagi.co/Yukaatsu)**
+If you find tsrossa useful for your portable audiophile setup, consider supporting ongoing development:
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Donate-BagiBagi-FFDD00.svg?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://bagibagi.co/Yukaatsu)
+
+Contributions, issue reports, and DAC compatibility logs are welcome on [GitHub Issues](https://github.com/yukaatsu/tsrossa/issues).
 
 ---
 
-## 📄 License
+## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+tsrossa is distributed under the [Apache License 2.0](LICENSE).
