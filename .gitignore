@@ -65,3 +65,6 @@ __pycache__/
 
 # Scratch files
 Test.kt
+
+# Tooling
+compile_commands.json
