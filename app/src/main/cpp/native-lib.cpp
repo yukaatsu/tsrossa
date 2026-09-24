@@ -10,10 +10,13 @@
 #include <jni.h>
 #include <libusb.h>
 #include <mutex>
+#include <pthread.h>
 #include <queue>
+#include <sched.h>
 #include <set>
 #include <string>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/types.h>
 #include <thread>
 #include <unistd.h>
@@ -953,7 +956,7 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
     LOGI("Cleaning up %zu orphan transfers from previous deadlocks.", g_audioState.orphanTransfers.size());
     for (auto t : g_audioState.orphanTransfers) {
       if (t) {
-        delete[] t->buffer;
+        free(t->buffer);
         libusb_free_transfer(t);
       }
     }
@@ -1750,52 +1753,32 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
     return -1;
   }
 
-  // Partial load strategy: decode first 100ms synchronously, the rest
-  // asynchronously
-  size_t framesPer100ms = newSampleRate / 10;
-  size_t initialFrames =
-      (totalFrames < framesPer100ms) ? totalFrames : framesPer100ms;
+  // 100% Pure RAM-Disk Playback: Decode entire track synchronously into RAM before streaming
+  size_t totalRead = decoder->read_pcm_frames_s32(
+      totalFrames, g_audioState.pcmBuffer.data());
 
-  size_t initialRead = decoder->read_pcm_frames_s32(
-      initialFrames, g_audioState.pcmBuffer.data());
-
-  g_audioState.decodedFrames.store(initialRead);
+  g_audioState.decodedFrames.store(totalRead);
   g_audioState.pcmIndex.store(0);
   g_audioState.cancelDecoding.store(false);
+  g_audioState.isDecoding.store(false);
 
-  if (initialRead < totalFrames) {
-    g_audioState.isDecoding.store(true);
-    g_audioState.decodeThread =
-        new std::thread([decoder, totalFrames, initialRead]() {
-          size_t currentOffset = initialRead;
-          size_t chunkSize = decoder->sampleRate;
-          while (currentOffset < totalFrames &&
-                 !g_audioState.cancelDecoding.load()) {
-            size_t framesToRead = (totalFrames - currentOffset > chunkSize)
-                                      ? chunkSize
-                                      : (totalFrames - currentOffset);
-            size_t read = decoder->read_pcm_frames_s32(
-                framesToRead,
-                g_audioState.pcmBuffer.data() +
-                    (currentOffset * g_audioState.channels));
-            if (read == 0)
-              break;
-            currentOffset += read;
-            g_audioState.decodedFrames.store(currentOffset);
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-          }
-          decoder->close();
-          g_audioState.isDecoding.store(false);
-        });
-  } else {
-    decoder->close();
-    g_audioState.isDecoding.store(false);
-  }
+  // Close decoder and flash storage file immediately — zero flash storage I/O during playback!
+  decoder->close();
+  LOGI("Pure RAM Playback: Pre-cached 100%% of track to RAM (%llu frames). Storage file closed.",
+       (unsigned long long)totalRead);
 
   env->ReleaseStringUTFChars(filePath, path);
-  if (mlock(g_audioState.pcmBuffer.data(),
-            g_audioState.pcmBuffer.size() * sizeof(int32_t)) < 0) {
-    LOGI("mlock failed or not permitted, continuing without locked memory");
+
+  // Pre-fault memory pages and advice kernel for sequential real-time access
+  size_t buffer_bytes = g_audioState.pcmBuffer.size() * sizeof(int32_t);
+  madvise(g_audioState.pcmBuffer.data(), buffer_bytes, MADV_WILLNEED);
+  if (mlock(g_audioState.pcmBuffer.data(), buffer_bytes) < 0) {
+    // Pre-fault each 4KB page in RAM to eliminate page faults during real-time streaming
+    volatile const int32_t *p = g_audioState.pcmBuffer.data();
+    size_t num_ints = g_audioState.pcmBuffer.size();
+    for (size_t i = 0; i < num_ints; i += 1024) {
+      (void)p[i];
+    }
   }
 
   g_audioState.isSwapping.store(false);
@@ -1899,6 +1882,31 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
     g_audioState.stopIsoThread.store(false);
     g_audioState.isoThreadExited.store(false);
     g_audioState.isoThread = new std::thread([]() {
+      // 1. Thread Naming
+      pthread_setname_np(pthread_self(), "TsrossaIso");
+
+      // 2. Real-Time Scheduling Priority (SCHED_FIFO / nice -19)
+      setpriority(PRIO_PROCESS, 0, -19); // ANDROID_PRIORITY_URGENT_AUDIO
+      struct sched_param param;
+      param.sched_priority = sched_get_priority_max(SCHED_FIFO);
+      if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) == 0) {
+        LOGI("TsrossaIso: Elevated to SCHED_FIFO real-time scheduling");
+      } else {
+        LOGI("TsrossaIso: Set to nice -19 urgent audio scheduling");
+      }
+
+      // 3. CPU Core Pinning: Bind to a Performance Core (avoids core hopping & cache thrashing)
+      long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
+      if (nprocs > 4) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        int target_core = (int)(nprocs - 2); // Core 6 on 8-core SoC
+        CPU_SET(target_core, &cpuset);
+        if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) == 0) {
+          LOGI("TsrossaIso: Pinned to Performance Core %d (of %ld cores)", target_core, nprocs);
+        }
+      }
+
       int num_transfers = 32;
       int num_packets = 32;
       int packet_size = g_audioState.maxPacketSize;
@@ -1906,7 +1914,13 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
 
       for (int i = 0; i < num_transfers; i++) {
         struct libusb_transfer *transfer = libusb_alloc_transfer(num_packets);
-        uint8_t *buffer = new uint8_t[num_packets * packet_size](); // Added () for zero-initialization
+        // 4. 64-Byte Cacheline DMA Buffer Alignment (ARM Cortex optimal DMA burst)
+        uint8_t *buffer = nullptr;
+        if (posix_memalign((void **)&buffer, 64, num_packets * packet_size) != 0 || buffer == nullptr) {
+          buffer = (uint8_t *)calloc(num_packets, packet_size);
+        } else {
+          memset(buffer, 0, num_packets * packet_size);
+        }
         libusb_fill_iso_transfer(transfer, g_audioState.usbHandle,
                                  g_audioState.epAddress, buffer,
                                  num_packets * packet_size, num_packets,
@@ -1962,7 +1976,7 @@ Java_com_yuka_musicplayer_audio_AudioEngine_playAudio(JNIEnv *env, jobject thiz,
       } else {
         // Cleanup safely
         for (auto t : g_audioState.transfers) {
-          delete[] t->buffer;
+          free(t->buffer);
           libusb_free_transfer(t);
         }
         g_audioState.transfers.clear();
