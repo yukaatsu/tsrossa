@@ -722,17 +722,13 @@ fun KewApp(audioEngine: AudioEngine) {
     val focusChangeListener = remember {
         AudioManager.OnAudioFocusChangeListener { focusChange ->
             when (focusChange) {
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                     if (isPlaying) {
                         audioEngine.pauseAudio()
                         isPlaying = false
                         pausedByTransientLoss = true
                     }
-                }
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                    // Bit-perfect USB DAC stream: intentionally ignore ducking so notification dings,
-                    // UI sounds, and status bar interactions do not interrupt music playback.
-                    android.util.Log.d("MainActivity", "AudioFocus: Ignoring CAN_DUCK for bit-perfect audio stream")
                 }
                 AudioManager.AUDIOFOCUS_LOSS -> {
                     if (isPlaying) {
@@ -787,7 +783,7 @@ fun KewApp(audioEngine: AudioEngine) {
                         .build()
                 )
                 .setAcceptsDelayedFocusGain(true)
-                .setWillPauseWhenDucked(false)
+                .setWillPauseWhenDucked(true)
                 .setOnAudioFocusChangeListener(focusChangeListener)
                 .build()
         } else {
