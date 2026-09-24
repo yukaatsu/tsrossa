@@ -17,6 +17,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.app.NotificationManager
+import android.app.PictureInPictureParams
+import android.app.PendingIntent
+import android.app.RemoteAction
+import android.graphics.drawable.Icon
+import android.util.Rational
+import android.content.res.Configuration
 import android.os.Environment
 import android.provider.Settings
 import android.Manifest
@@ -111,8 +117,63 @@ import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        var isInPipModeState = mutableStateOf(false)
+        var isAutoPipEnabled = true
+        private var instance: MainActivity? = null
+
+        fun updateAutoPipParams(isPlaying: Boolean) {
+            instance?.updatePipParamsInternal(isPlaying)
+        }
+    }
+
+    fun updatePipParamsInternal(isPlaying: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                val builder = PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(187, 100))
+                    .setActions(emptyList())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    builder.setAutoEnterEnabled(isPlaying && isAutoPipEnabled)
+                }
+                setPictureInPictureParams(builder.build())
+            } catch (e: Exception) {
+                android.util.Log.w("MainActivity", "setPictureInPictureParams error: ${e.message}")
+            }
+        }
+    }
+
+    fun enterPipModeSafely() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                val params = PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(187, 100))
+                    .setActions(emptyList())
+                    .build()
+                enterPictureInPictureMode(params)
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Failed to enter PiP: ${e.message}")
+            }
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        val isPlaying = com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying ||
+            (com.yuka.musicplayer.audio.AudioPlayerManager.isInitialized && com.yuka.musicplayer.audio.AudioPlayerManager.audioEngine.isPlaying())
+        if (isPlaying && isAutoPipEnabled) {
+            enterPipModeSafely()
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        isInPipModeState.value = isInPictureInPictureMode
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        instance = this
 
         // Prevent launcher bug where opening app creates a duplicate MainActivity instance
         if (!isTaskRoot && intent.hasCategory(Intent.CATEGORY_LAUNCHER) && intent.action != null && intent.action == Intent.ACTION_MAIN) {
@@ -120,6 +181,9 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        val prefs = getSharedPreferences("KewMobilePrefs", Context.MODE_PRIVATE)
+        isAutoPipEnabled = prefs.getBoolean("auto_pip_enabled", true)
+        updatePipParamsInternal(com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying)
 
         com.yuka.musicplayer.audio.AudioPlayerManager.initialize(applicationContext)
 
@@ -142,6 +206,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (instance == this) instance = null
         if (isFinishing) {
             val isStillPlaying = com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying ||
                 (com.yuka.musicplayer.audio.AudioPlayerManager.isInitialized && com.yuka.musicplayer.audio.AudioPlayerManager.audioEngine.isPlaying())
@@ -294,6 +359,7 @@ fun KewApp(audioEngine: AudioEngine) {
     var fontScale by remember { mutableStateOf(sharedPref.getFloat("font_scale", 1.0f)) }
     var hapticEnabled by remember { mutableStateOf(sharedPref.getBoolean("haptic_enabled", true)) }
     var keepAwake by remember { mutableStateOf(sharedPref.getBoolean("keep_awake", false)) }
+    var autoPipEnabled by remember { mutableStateOf(sharedPref.getBoolean("auto_pip_enabled", true)) }
     var defaultScreenStr by remember { mutableStateOf(sharedPref.getString("default_screen", "LIBRARY") ?: "LIBRARY") }
     var bgMode by remember { mutableStateOf(sharedPref.getString("bg_mode", "BLACK") ?: "BLACK") }
     var accentMode by remember { mutableStateOf(sharedPref.getString("accent_mode", "DYNAMIC") ?: "DYNAMIC") }
@@ -603,6 +669,7 @@ fun KewApp(audioEngine: AudioEngine) {
     LaunchedEffect(isPlaying) {
         com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying = isPlaying
         com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
+        MainActivity.updateAutoPipParams(isPlaying)
         val intent = Intent(context, com.yuka.musicplayer.audio.AudioForegroundService::class.java).apply {
             action = if (isPlaying) "ACTION_PLAY" else "ACTION_PAUSE"
         }
@@ -1350,7 +1417,24 @@ fun KewApp(audioEngine: AudioEngine) {
         ),
         LocalAccentColor provides currentAccentColor
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        val isInPip by MainActivity.isInPipModeState
+        if (isInPip) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            FloatingMiniPlayer(
+                track = currentTrack,
+                isPlaying = isPlaying,
+                accentColor = currentAccentColor,
+                sampleRate = outputSampleRate,
+                bitDepth = outputBitDepth,
+                onRestoreFullScreen = {
+                    val intent = Intent(context, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    }
+                    context.startActivity(intent)
+                }
+            )
+        } else {
+            Box(modifier = Modifier.fillMaxSize()) {
             if (bgMode == "BLUR" && wallpaperBitmap != null) {
                 androidx.compose.foundation.Image(
                     bitmap = wallpaperBitmap!!,
@@ -1973,6 +2057,12 @@ fun KewApp(audioEngine: AudioEngine) {
                 onHapticChange = { hapticEnabled = it },
                 keepAwake = keepAwake,
                 onKeepAwakeChange = { keepAwake = it },
+                autoPipEnabled = autoPipEnabled,
+                onAutoPipChange = {
+                    autoPipEnabled = it
+                    MainActivity.isAutoPipEnabled = it
+                    MainActivity.updateAutoPipParams(isPlaying)
+                },
                 defaultScreen = defaultScreenStr,
                 onDefaultScreenChange = { defaultScreenStr = it },
                 accentMode = accentMode,
@@ -2000,6 +2090,7 @@ fun KewApp(audioEngine: AudioEngine) {
         )
     }
         } // End Box wrapper
+        } // End else
     } // End CompositionLocalProvider
 } // End KewApp
 
@@ -3179,6 +3270,130 @@ fun QueuePanel(
 }
 
 @Composable
+fun FloatingMiniPlayer(
+    track: TrackInfo?,
+    isPlaying: Boolean,
+    accentColor: androidx.compose.ui.graphics.Color,
+    sampleRate: Int,
+    bitDepth: Int,
+    onRestoreFullScreen: () -> Unit
+) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(10.dp))
+            .background(androidx.compose.ui.graphics.Color(0xFF0A0A0E))
+            .border(2.dp, androidx.compose.ui.graphics.Color.White, RoundedCornerShape(10.dp))
+            .clickable { onRestoreFullScreen() }
+    ) {
+        val isMini = maxHeight < 85.dp || maxWidth < 260.dp
+        val horizontalPadding = if (isMini) 10.dp else 14.dp
+        val verticalPadding = if (isMini) 6.dp else 10.dp
+        val coverSize = (maxHeight * 0.72f).coerceIn(40.dp, 80.dp)
+        val coverCorner = if (isMini) 6.dp else 8.dp
+        val titleSize = if (isMini) 11.sp else 14.sp
+        val artistSize = if (isMini) 8.5.sp else 11.sp
+        val badgeSize = if (isMini) 7.5.sp else 9.5.sp
+        val badgeCorner = if (isMini) 3.5.dp else 5.dp
+        val badgePadH = if (isMini) 4.5.dp else 6.5.dp
+        val badgePadV = if (isMini) 1.5.dp else 2.5.dp
+        val textSpacing = if (isMini) 1.5.dp else 2.5.dp
+        val contentSpacing = if (isMini) 8.dp else 12.dp
+
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = horizontalPadding, vertical = verticalPadding),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Start
+        ) {
+            // SISI KIRI: Cover art album
+            Box(
+                modifier = Modifier
+                    .size(coverSize)
+                    .clip(RoundedCornerShape(coverCorner))
+                    .background(androidx.compose.ui.graphics.Color(0xFF141418))
+                    .border(1.dp, accentColor.copy(alpha = 0.35f), RoundedCornerShape(coverCorner)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (track?.coverArt != null) {
+                    Image(
+                        bitmap = track.coverArt.asImageBitmap(),
+                        contentDescription = "Cover Art",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Text(
+                        text = "♪",
+                        color = accentColor,
+                        fontSize = if (isMini) 20.sp else 30.sp,
+                        fontFamily = TerminalFont
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(contentSpacing))
+
+            // SISI KANAN: Judul lagu, artis, dan badge [ 44.1k • UAC2 ]
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = track?.title ?: "tsrossa Bit-Perfect",
+                    color = TerminalWhite,
+                    fontSize = titleSize,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = TerminalFont,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(textSpacing))
+
+                Text(
+                    text = track?.artist ?: "Native UAC2",
+                    color = TerminalGray,
+                    fontSize = artistSize,
+                    fontFamily = TerminalFont,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(textSpacing + 1.dp))
+
+                val rateK = if (sampleRate > 0) "${sampleRate / 1000.0}k" else "44.1k"
+                val badgeText = if (!isMini && bitDepth > 0) {
+                    "[$rateK • ${bitDepth}b • UAC2]"
+                } else {
+                    "[$rateK • UAC2]"
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(accentColor.copy(alpha = 0.12f), RoundedCornerShape(badgeCorner))
+                        .border(1.dp, accentColor, RoundedCornerShape(badgeCorner))
+                        .padding(horizontal = badgePadH, vertical = badgePadV),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = badgeText,
+                        color = accentColor,
+                        fontSize = badgeSize,
+                        fontFamily = TerminalFont,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun RetroActionItem(
     icon: String,
     label: String,
@@ -3213,6 +3428,8 @@ fun SettingsView(
     onHapticChange: (Boolean) -> Unit,
     keepAwake: Boolean,
     onKeepAwakeChange: (Boolean) -> Unit,
+    autoPipEnabled: Boolean = true,
+    onAutoPipChange: (Boolean) -> Unit = {},
     defaultScreen: String,
     onDefaultScreenChange: (String) -> Unit,
     accentMode: String,
@@ -3376,6 +3593,28 @@ fun SettingsView(
                 modifier = Modifier.fillMaxWidth()
             )
         }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("AUTO FLOATING PLAYER (PIP ON HOME)", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+            RetroButton(
+                if (autoPipEnabled) "[✓] AUTO FLOATING ENABLED" else "[ ] DISABLED",
+                {
+                    val newState = !autoPipEnabled
+                    onAutoPipChange(newState)
+                    prefs.edit().putBoolean("auto_pip_enabled", newState).apply()
+                },
+                isSelected = autoPipEnabled,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Text(
+            text = "Otomatis mengecil menjadi floating mini-player saat tekan tombol Home agar audio tidak ter-freeze oleh sistem Android.",
+            color = TerminalGray.copy(alpha = 0.7f),
+            fontFamily = TerminalFont,
+            fontSize = 9.sp,
+            modifier = Modifier.padding(start = 2.dp, bottom = 4.dp)
+        )
 
         Spacer(modifier = Modifier.height(8.dp))
         Text("DEFAULT SCREEN ON LAUNCH", color = TerminalGray, fontFamily = TerminalFont, fontSize = 11.sp, fontWeight = FontWeight.Bold)
