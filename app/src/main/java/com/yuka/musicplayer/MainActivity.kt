@@ -669,7 +669,9 @@ fun KewApp(audioEngine: AudioEngine) {
 
     DisposableEffect(usbAudioController) {
         usbAudioController.onDeviceReady = { fd ->
+            com.yuka.musicplayer.audio.UsbAudioController.log("MainActivity onDeviceReady: calling audioEngine.initUsbDac(FD=$fd)")
             val connected = audioEngine.initUsbDac(fd)
+            com.yuka.musicplayer.audio.UsbAudioController.log("MainActivity onDeviceReady: initUsbDac returned $connected")
             if (!connected) {
                 android.util.Log.e("MainActivity", "initUsbDac failed for FD $fd! Closing USB connection to avoid wedge.")
                 usbAudioController.closeDevice()
@@ -2263,6 +2265,18 @@ fun generateDiagnosticReport(
             sb.appendLine("${i + 1}. \"${t.filename}\" (${t.bitDepth}-Bit / ${t.sampleRate / 1000.0} kHz) -> Reason: ${t.reason}")
         }
     }
+    sb.appendLine()
+    sb.appendLine("[USB AUDIT TRAIL]")
+    sb.appendLine("--- Framework (Java) Trace ---")
+    sb.appendLine(com.yuka.musicplayer.audio.UsbAudioController.getTrace())
+    sb.appendLine()
+    sb.appendLine("--- Engine (libusb) Trace ---")
+    val nativeAudit = try {
+        com.yuka.musicplayer.audio.AudioPlayerManager.audioEngine.getLastUsbDiagnostic()
+    } catch (e: Exception) {
+        "Error fetching native audit: ${e.message}"
+    }
+    sb.appendLine(if (nativeAudit.isNotEmpty()) nativeAudit else "No native events recorded.")
     sb.appendLine("=========================================")
     return sb.toString()
 }
@@ -2516,6 +2530,51 @@ fun SystemLogsPanel(
             LogItem("RAM Playback", "ACTIVE (Zero Jitter)", LocalAccentColor.current)
             LogItem("Gapless Engine", "ACTIVE (Direct Handover)", LocalAccentColor.current)
             LogItem("DSP Pipeline", "BYPASSED (Bit-Perfect)", LocalAccentColor.current)
+
+            // Section 5: USB Audit Trail
+            LogSectionHeader("USB HARDWARE & DRIVER AUDIT")
+            val nativeAudit = remember(isDacConnected) {
+                try {
+                    audioEngine.getLastUsbDiagnostic()
+                } catch (e: Exception) {
+                    "Error: ${e.message}"
+                }
+            }
+            val javaAudit = com.yuka.musicplayer.audio.UsbAudioController.getTrace()
+
+            Text(
+                text = "FRAMEWORK (JAVA) LOG:",
+                color = LocalAccentColor.current,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = TerminalFont,
+                modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+            )
+            Text(
+                text = javaAudit,
+                color = TerminalWhite,
+                fontSize = 9.sp,
+                lineHeight = 13.sp,
+                fontFamily = TerminalFont,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            Text(
+                text = "ENGINE (LIBUSB) LOG:",
+                color = LocalAccentColor.current,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = TerminalFont,
+                modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+            )
+            Text(
+                text = if (nativeAudit.isNotEmpty()) nativeAudit else "No native events recorded.",
+                color = if (isDacConnected) TerminalWhite else androidx.compose.ui.graphics.Color(0xFFFF8888),
+                fontSize = 9.sp,
+                lineHeight = 13.sp,
+                fontFamily = TerminalFont,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
 
             // Section 5: Refused Tracks (if any)
             if (refusedTrackHistory.isNotEmpty()) {

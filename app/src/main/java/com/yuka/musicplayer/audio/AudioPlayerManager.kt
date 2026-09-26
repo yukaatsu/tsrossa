@@ -36,7 +36,9 @@ object AudioPlayerManager {
         
         // Connect USB controller lifecycle directly to AudioPlayerManager
         usbAudioController.onDeviceReady = { fd ->
+            UsbAudioController.log("AudioPlayerManager onDeviceReady: calling audioEngine.initUsbDac(FD=$fd)")
             isDacConnected = audioEngine.initUsbDac(fd)
+            UsbAudioController.log("AudioPlayerManager onDeviceReady: initUsbDac returned $isDacConnected")
             if (!isDacConnected) {
                 Log.e("AudioPlayerManager", "initUsbDac failed for FD $fd! Closing USB connection to avoid wedged state.")
                 usbAudioController.closeDevice()

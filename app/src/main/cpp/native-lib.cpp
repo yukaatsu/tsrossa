@@ -304,6 +304,18 @@ std::mutex g_controlMutex;
 std::condition_variable g_controlCv;
 
 static AudioEngineState g_audioState;
+static std::string g_lastUsbDiagnostic;
+static std::mutex g_usbDiagMutex;
+
+static void record_usb_diag(const std::string &msg) {
+  std::lock_guard<std::mutex> lock(g_usbDiagMutex);
+  LOGI("USB_DIAG: %s", msg.c_str());
+  if (g_lastUsbDiagnostic.size() > 16000) {
+    g_lastUsbDiagnostic = g_lastUsbDiagnostic.substr(g_lastUsbDiagnostic.size() - 8000);
+  }
+  g_lastUsbDiagnostic += msg;
+  g_lastUsbDiagnostic += "\n";
+}
 
 
 
@@ -947,14 +959,19 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
                                                        jobject thiz, jint fd) {
   ApiMutexLock lock(__func__);
+  char dbg[512];
+  snprintf(dbg, sizeof(dbg), "=== initUsbDac(FD=%d) START ===", fd);
+  record_usb_diag(dbg);
+
   if (g_audioState.usbHandle != nullptr) {
-    LOGI("initUsbDac: USB DAC is already initialized and active. Preserving existing connection.");
+    record_usb_diag("initUsbDac: usbHandle != nullptr. Preserving existing connection.");
     return JNI_TRUE;
   }
 
   // Clean up orphan transfers now that the USB device was physically detached and kernel state is wiped
   if (!g_audioState.orphanTransfers.empty()) {
-    LOGI("Cleaning up %zu orphan transfers from previous deadlocks.", g_audioState.orphanTransfers.size());
+    snprintf(dbg, sizeof(dbg), "Cleaning up %zu orphan transfers from previous deadlocks.", g_audioState.orphanTransfers.size());
+    record_usb_diag(dbg);
     for (auto t : g_audioState.orphanTransfers) {
       if (t) {
         free(t->buffer);
@@ -965,18 +982,24 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
   }
 
   if (g_audioState.usbContext == nullptr) {
-    if (libusb_init(&g_audioState.usbContext) < 0)
+    int init_res = libusb_init(&g_audioState.usbContext);
+    snprintf(dbg, sizeof(dbg), "libusb_init() -> %d (%s)", init_res, libusb_error_name(init_res));
+    record_usb_diag(dbg);
+    if (init_res < 0) {
+      record_usb_diag("FATAL: libusb_init failed!");
       return JNI_FALSE;
-
-    // Note: Do NOT register libusb_hotplug_register_callback on Android!
-    // libusb Linux netlink uevent hotplug is unreliable in Android's app sandbox
-    // and causes false "Surprise Removal" disconnect events on many OEM kernels.
-    // Detach lifecycle is managed accurately via Android UsbManager BroadcastReceiver and ISO transfer errors.
+    }
+  } else {
+    record_usb_diag("libusb_init: Reusing existing usbContext.");
   }
 
-  if (libusb_wrap_sys_device(g_audioState.usbContext, (intptr_t)fd,
-                             &g_audioState.usbHandle) < 0) {
-    LOGE("initUsbDac: libusb_wrap_sys_device failed for FD %d!", fd);
+  int wrap_res = libusb_wrap_sys_device(g_audioState.usbContext, (intptr_t)fd,
+                                        &g_audioState.usbHandle);
+  snprintf(dbg, sizeof(dbg), "libusb_wrap_sys_device(FD=%d) -> %d (%s)",
+           fd, wrap_res, libusb_error_name(wrap_res));
+  record_usb_diag(dbg);
+  if (wrap_res < 0 || g_audioState.usbHandle == nullptr) {
+    record_usb_diag("FATAL: libusb_wrap_sys_device failed! Check usbfs/SELinux permissions on FD.");
     return JNI_FALSE;
   }
 
@@ -984,34 +1007,56 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
   int dev_speed = libusb_get_device_speed(dev);
   int dev_fps = (dev_speed == LIBUSB_SPEED_HIGH || dev_speed == LIBUSB_SPEED_SUPER) ? 8000 : 1000;
   g_audioState.usb_frames_per_sec.store(dev_fps);
-  LOGI("initUsbDac: Device speed is %d -> cached usb_frames_per_sec set to %d", dev_speed, dev_fps);
+  snprintf(dbg, sizeof(dbg), "Device speed=%d -> usb_frames_per_sec=%d", dev_speed, dev_fps);
+  record_usb_diag(dbg);
 
   struct libusb_config_descriptor *config = nullptr;
-  if (libusb_get_active_config_descriptor(dev, &config) < 0 || config == nullptr) {
-    LOGW("initUsbDac: libusb_get_active_config_descriptor failed (unconfigured state). Trying config index 0...");
-    if (libusb_get_config_descriptor(dev, 0, &config) < 0 || config == nullptr) {
-      LOGE("initUsbDac: Failed to get any USB config descriptor!");
+  int act_cfg_res = libusb_get_active_config_descriptor(dev, &config);
+  snprintf(dbg, sizeof(dbg), "libusb_get_active_config_descriptor() -> %d (%s)",
+           act_cfg_res, libusb_error_name(act_cfg_res));
+  record_usb_diag(dbg);
+
+  if (act_cfg_res < 0 || config == nullptr) {
+    int cfg0_res = libusb_get_config_descriptor(dev, 0, &config);
+    snprintf(dbg, sizeof(dbg), "libusb_get_config_descriptor(idx=0) -> %d (%s)",
+             cfg0_res, libusb_error_name(cfg0_res));
+    record_usb_diag(dbg);
+    if (cfg0_res < 0 || config == nullptr) {
+      record_usb_diag("FATAL: Failed to get any USB config descriptor!");
       libusb_close(g_audioState.usbHandle);
       g_audioState.usbHandle = nullptr;
       return JNI_FALSE;
     }
     int set_cfg = libusb_set_configuration(g_audioState.usbHandle, config->bConfigurationValue);
-    LOGI("initUsbDac: Set configuration to %d, result: %d", config->bConfigurationValue, set_cfg);
+    snprintf(dbg, sizeof(dbg), "libusb_set_configuration(%d) -> %d (%s)",
+             config->bConfigurationValue, set_cfg, libusb_error_name(set_cfg));
+    record_usb_diag(dbg);
   }
 
-  // --- DUMP DESCRIPTOR LOGGING ---
-  LOGI("=== START DESCRIPTOR DUMP ===");
+  snprintf(dbg, sizeof(dbg), "Active Config: bConfigurationValue=%d, bNumInterfaces=%d",
+           config->bConfigurationValue, config->bNumInterfaces);
+  record_usb_diag(dbg);
+
+  // --- DUMP DESCRIPTOR AUDIT ---
   for (int i = 0; i < config->bNumInterfaces; i++) {
+    snprintf(dbg, sizeof(dbg), " Interface %d: %d altsettings", i, config->interface[i].num_altsetting);
+    record_usb_diag(dbg);
     for (int j = 0; j < config->interface[i].num_altsetting; j++) {
       const struct libusb_interface_descriptor *alt =
           &config->interface[i].altsetting[j];
-      LOGI("DUMP: Interface %d, AltSetting %d | Class %d, SubClass %d, "
-           "Protocol %d",
-           alt->bInterfaceNumber, alt->bAlternateSetting, alt->bInterfaceClass,
-           alt->bInterfaceSubClass, alt->bInterfaceProtocol);
+      snprintf(dbg, sizeof(dbg), "   Alt %d: ifaceNum=%d, class=%d, subClass=%d, proto=%d, EPs=%d",
+               alt->bAlternateSetting, alt->bInterfaceNumber, alt->bInterfaceClass,
+               alt->bInterfaceSubClass, alt->bInterfaceProtocol, alt->bNumEndpoints);
+      record_usb_diag(dbg);
+      for (int k = 0; k < alt->bNumEndpoints; k++) {
+        snprintf(dbg, sizeof(dbg), "     EP[%d]: addr=0x%02X, attr=0x%02X (type=%d), maxPkt=%d",
+                 k, alt->endpoint[k].bEndpointAddress, alt->endpoint[k].bmAttributes,
+                 (alt->endpoint[k].bmAttributes & 0x03), alt->endpoint[k].wMaxPacketSize);
+        record_usb_diag(dbg);
+      }
     }
   }
-  LOGI("=== END DESCRIPTOR DUMP ===");
+
 
   // Bagian 2.1 - 2.4: Parse Audio Control Interface
   g_audioState.uacVersion = 1;
@@ -1162,7 +1207,14 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
     LOGI("  %d-Bit", bd);
   }
 
-
+  snprintf(dbg, sizeof(dbg), "Valid streaming altsettings found: %zu", g_audioState.validAlts.size());
+  record_usb_diag(dbg);
+  for (size_t a = 0; a < g_audioState.validAlts.size(); a++) {
+    const auto &info = g_audioState.validAlts[a];
+    snprintf(dbg, sizeof(dbg), "   ValidAlt[%zu]: iface=%d, alt=%d, ep=0x%02X, pkt=%d, sf_size=%d",
+             a, info.interface_num, info.altsetting, info.ep_out, info.max_packet_size, info.subframe_size);
+    record_usb_diag(dbg);
+  }
 
   if (!g_audioState.validAlts.empty()) {
     int source_bytes = g_audioState.sourceBitDepth.load() / 8;
@@ -1190,9 +1242,17 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
     max_packet_size = best_alt.max_packet_size;
   }
   if (as_interface == -1 || ep_out == 0) {
+    snprintf(dbg, sizeof(dbg), "FATAL: as_interface=%d, ep_out=0x%02X (no valid audio streaming endpoint found!)",
+             as_interface, ep_out);
+    record_usb_diag(dbg);
     libusb_free_config_descriptor(config);
+    libusb_close(g_audioState.usbHandle);
+    g_audioState.usbHandle = nullptr;
     return JNI_FALSE;
   }
+  snprintf(dbg, sizeof(dbg), "Selected stream: iface=%d, alt=%d, ep=0x%02X, pkt=%d",
+           as_interface, as_altsetting, ep_out, max_packet_size);
+  record_usb_diag(dbg);
 
   libusb_set_auto_detach_kernel_driver(g_audioState.usbHandle, 1);
   g_audioState.claimedInterfaces.clear();
@@ -1225,21 +1285,31 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
           // Step 2: Claim the interface
           int claim_res =
               libusb_claim_interface(g_audioState.usbHandle, iface_num);
+          int ioctl_res = -999;
+          int ioctl_errno = 0;
           if (claim_res == LIBUSB_ERROR_BUSY) {
             LOGW("USBExclusive: Interface %d is BUSY. Attempting direct USBDEVFS_DISCONNECT_CLAIM ioctl...", iface_num);
             struct usbdevfs_disconnect_claim dc;
             memset(&dc, 0, sizeof(dc));
             dc.interface = (unsigned int)iface_num;
             dc.flags = 0; // Force disconnect kernel driver
-            int ioctl_res = ioctl(fd, USBDEVFS_DISCONNECT_CLAIM, &dc);
+            ioctl_res = ioctl(fd, USBDEVFS_DISCONNECT_CLAIM, &dc);
+            if (ioctl_res != 0) ioctl_errno = errno;
             if (ioctl_res == 0) {
-              claim_res = libusb_claim_interface(g_audioState.usbHandle, iface_num);
-              LOGI("USBExclusive: Retried claim after ioctl disconnect_claim on Interface %d: %d", iface_num, claim_res);
+              claim_res = 0;
+              LOGI("USBExclusive: Retried claim after ioctl disconnect_claim on Interface %d: SUCCESS", iface_num);
             } else {
+              claim_res = libusb_claim_interface(g_audioState.usbHandle, iface_num);
               LOGW("USBExclusive: USBDEVFS_DISCONNECT_CLAIM ioctl failed on Interface %d: %d (%s)",
                    iface_num, errno, strerror(errno));
             }
           }
+
+          snprintf(dbg, sizeof(dbg), " Claim Iface %d: detach=%d (%s), claim=%d (%s), ioctl_dc=%d (errno=%d)",
+                   iface_num, detach_res, libusb_error_name(detach_res),
+                   claim_res, libusb_error_name(claim_res),
+                   ioctl_res, ioctl_errno);
+          record_usb_diag(dbg);
 
           if (claim_res == 0) {
             std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -1318,17 +1388,22 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
   if (std::find(g_audioState.claimedInterfaces.begin(),
                 g_audioState.claimedInterfaces.end(),
                 as_interface) == g_audioState.claimedInterfaces.end()) {
+    snprintf(dbg, sizeof(dbg), "Streaming interface %d not yet claimed. Attempting final ioctl retry...", as_interface);
+    record_usb_diag(dbg);
     LOGW("USBExclusive: Streaming interface %d not claimed yet. Attempting USBDEVFS_DISCONNECT_CLAIM ioctl...", as_interface);
     struct usbdevfs_disconnect_claim dc;
     memset(&dc, 0, sizeof(dc));
     dc.interface = (unsigned int)as_interface;
     dc.flags = 0;
-    ioctl(fd, USBDEVFS_DISCONNECT_CLAIM, &dc);
+    int ioctl_res = ioctl(fd, USBDEVFS_DISCONNECT_CLAIM, &dc);
     int claim_res = libusb_claim_interface(g_audioState.usbHandle, as_interface);
-    if (claim_res == 0) {
+    snprintf(dbg, sizeof(dbg), " Streaming retry: ioctl_dc=%d, claim=%d (%s)",
+             ioctl_res, claim_res, libusb_error_name(claim_res));
+    record_usb_diag(dbg);
+    if (ioctl_res == 0 || claim_res == 0) {
       std::lock_guard<std::mutex> lock(g_stateMutex);
       g_audioState.claimedInterfaces.push_back(as_interface);
-      LOGI("USBExclusive: Successfully claimed streaming interface %d on retry!", as_interface);
+      LOGI("USBExclusive: Successfully claimed streaming interface %d on retry! (ioctl=%d, claim=%d)", as_interface, ioctl_res, claim_res);
     }
   }
 
@@ -1336,6 +1411,9 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
   if (std::find(g_audioState.claimedInterfaces.begin(),
                 g_audioState.claimedInterfaces.end(),
                 as_interface) == g_audioState.claimedInterfaces.end()) {
+    snprintf(dbg, sizeof(dbg), "FATAL: Streaming interface %d could not be claimed! Claimed list size: %zu. Aborting.",
+             as_interface, g_audioState.claimedInterfaces.size());
+    record_usb_diag(dbg);
     LOGE("USBExclusive: Failed to claim streaming interface %d! Aborting.",
          as_interface);
 
@@ -1354,7 +1432,11 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
   // Note: We do NOT abort if this returns non-zero, because playAudio explicitly sets
   // the exact operational altsetting when playback begins.
   int alt0_res = libusb_set_interface_alt_setting(g_audioState.usbHandle, as_interface, 0);
+  snprintf(dbg, sizeof(dbg), "libusb_set_interface_alt_setting(iface=%d, alt=0) -> %d (%s)",
+           as_interface, alt0_res, libusb_error_name(alt0_res));
+  record_usb_diag(dbg);
   LOGI("initUsbDac: Set interface %d to AltSetting 0 (standby), result: %d", as_interface, alt0_res);
+
 
   g_audioState.usbAudioInterface = as_interface;
   g_audioState.epAddress = ep_out;
@@ -1493,6 +1575,12 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
       g_controlCv.notify_one();
     }
   }
+
+  snprintf(dbg, sizeof(dbg), "=== initUsbDac SUCCESS: VID=%04X, PID=%04X, Product='%s', Manufacturer='%s', UAC=%d, Claimed=%zu ifaces ===",
+           g_audioState.dacVid.load(), g_audioState.dacPid.load(),
+           g_audioState.dacProductName.c_str(), g_audioState.dacManufacturerName.c_str(),
+           g_audioState.uacVersion.load(), g_audioState.claimedInterfaces.size());
+  record_usb_diag(dbg);
 
   LOGI("USB Audio Interface %d Claimed! Endpoint: 0x%x, PacketSize: %d",
        as_interface, ep_out, max_packet_size);
@@ -2451,4 +2539,11 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_yuka_musicplayer_audio_AudioEngine_getOutputSampleRate(
     JNIEnv *env, jobject thiz) {
   return g_audioState.sampleRate.load();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_getLastUsbDiagnostic(
+    JNIEnv *env, jobject thiz) {
+  std::lock_guard<std::mutex> lock(g_usbDiagMutex);
+  return env->NewStringUTF(g_lastUsbDiagnostic.c_str());
 }

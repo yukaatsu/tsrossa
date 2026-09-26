@@ -54,6 +54,7 @@ class AudioEngine {
     external fun getSupportedSampleRates(): String
     external fun getDacInfo(): String
     external fun getRefusedTrackHistory(): String
+    external fun getLastUsbDiagnostic(): String
     external fun getOutputBitDepth(): Int
     external fun getOutputSampleRate(): Int
 
