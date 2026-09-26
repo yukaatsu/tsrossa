@@ -78,7 +78,25 @@ struct libusb_transfer {
     struct libusb_iso_packet_descriptor iso_packet_desc[0];
 };
 
+enum libusb_option {
+    LIBUSB_OPTION_LOG_LEVEL = 0,
+    LIBUSB_OPTION_USE_USBDK = 1,
+    LIBUSB_OPTION_NO_DEVICE_DISCOVERY = 2,
+    LIBUSB_OPTION_LOG_CB = 3,
+    LIBUSB_OPTION_MAX = 4
+};
+
+struct libusb_init_option {
+    enum libusb_option option;
+    union {
+        int ival;
+        void *log_cbval;
+    } value;
+};
+
 int libusb_init(libusb_context **ctx);
+int libusb_init_context(libusb_context **ctx, const struct libusb_init_option options[], int num_options);
+int libusb_set_option(libusb_context *ctx, enum libusb_option option, ...);
 int libusb_has_capability(int capability);
 int libusb_hotplug_register_callback(libusb_context *ctx, int events, int flags, int vendor_id, int product_id, int dev_class, void* cb, void *user_data, libusb_hotplug_callback_handle *handle);
 int libusb_wrap_sys_device(libusb_context *ctx, intptr_t sys_dev, libusb_device_handle **dev_handle);

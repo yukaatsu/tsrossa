@@ -982,12 +982,26 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
   }
 
   if (g_audioState.usbContext == nullptr) {
-    int init_res = libusb_init(&g_audioState.usbContext);
-    snprintf(dbg, sizeof(dbg), "libusb_init() -> %d (%s)", init_res, libusb_error_name(init_res));
+    // On Android (unrooted), libusb_init() attempts to monitor netlink and scan /sys/bus/usb/devices/
+    // which SELinux strictly blocks, returning LIBUSB_ERROR_IO (-1).
+    // LIBUSB_OPTION_NO_DEVICE_DISCOVERY skips scanning and netlink socket creation entirely,
+    // allowing libusb_wrap_sys_device() to cleanly adopt the Android USB File Descriptor.
+    libusb_set_option(nullptr, LIBUSB_OPTION_NO_DEVICE_DISCOVERY, 1);
+    const struct libusb_init_option options[] = {
+        { LIBUSB_OPTION_NO_DEVICE_DISCOVERY, { .ival = 1 } }
+    };
+    int init_res = libusb_init_context(&g_audioState.usbContext, options, 1);
+    snprintf(dbg, sizeof(dbg), "libusb_init_context(NO_DEVICE_DISCOVERY) -> %d (%s)", init_res, libusb_error_name(init_res));
     record_usb_diag(dbg);
     if (init_res < 0) {
-      record_usb_diag("FATAL: libusb_init failed!");
-      return JNI_FALSE;
+      // Fallback: try standard libusb_init just in case
+      init_res = libusb_init(&g_audioState.usbContext);
+      snprintf(dbg, sizeof(dbg), "Fallback libusb_init() -> %d (%s)", init_res, libusb_error_name(init_res));
+      record_usb_diag(dbg);
+      if (init_res < 0) {
+        record_usb_diag("FATAL: libusb_init_context failed!");
+        return JNI_FALSE;
+      }
     }
   } else {
     record_usb_diag("libusb_init: Reusing existing usbContext.");
