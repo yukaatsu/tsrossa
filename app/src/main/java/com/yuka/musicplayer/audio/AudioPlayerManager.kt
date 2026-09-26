@@ -37,6 +37,10 @@ object AudioPlayerManager {
         // Connect USB controller lifecycle directly to AudioPlayerManager
         usbAudioController.onDeviceReady = { fd ->
             isDacConnected = audioEngine.initUsbDac(fd)
+            if (!isDacConnected) {
+                Log.e("AudioPlayerManager", "initUsbDac failed for FD $fd! Closing USB connection to avoid wedged state.")
+                usbAudioController.closeDevice()
+            }
             Log.i("AudioPlayerManager", "USB DAC initialized. Connected: $isDacConnected")
             notifyStateChanged()
         }

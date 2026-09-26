@@ -138,6 +138,10 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.action == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            android.util.Log.i("MainActivity", "onNewIntent: USB device attached event. Scanning DAC...")
+            com.yuka.musicplayer.audio.AudioPlayerManager.usbAudioController.scanAndRequestPermission()
+        }
     }
 
     override fun onDestroy() {
@@ -665,8 +669,13 @@ fun KewApp(audioEngine: AudioEngine) {
 
     DisposableEffect(usbAudioController) {
         usbAudioController.onDeviceReady = { fd ->
-            isDacConnected = audioEngine.initUsbDac(fd)
-            com.yuka.musicplayer.audio.AudioPlayerManager.isDacConnected = isDacConnected
+            val connected = audioEngine.initUsbDac(fd)
+            if (!connected) {
+                android.util.Log.e("MainActivity", "initUsbDac failed for FD $fd! Closing USB connection to avoid wedge.")
+                usbAudioController.closeDevice()
+            }
+            isDacConnected = connected
+            com.yuka.musicplayer.audio.AudioPlayerManager.isDacConnected = connected
             com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
         }
         usbAudioController.onDeviceDetached = {
@@ -1307,30 +1316,7 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
 
-    DisposableEffect(Unit) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_DETACHED) {
-                    audioEngine.pauseAudio()
-                    isPlaying = false
-                    isDacConnected = false
-                }
-            }
-        }
-        val filter = IntentFilter().apply {
-            addAction(android.hardware.usb.UsbManager.ACTION_USB_DEVICE_DETACHED)
-        }
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            context.registerReceiver(receiver, filter)
-        }
-        
-        onDispose {
-            context.unregisterReceiver(receiver)
-        }
-    }
+
 
     val lifecycleOwner = context as LifecycleOwner
     LaunchedEffect(currentTrack, isPlaying) {
@@ -2240,7 +2226,7 @@ fun generateDiagnosticReport(
 ): String {
     val sb = StringBuilder()
     sb.appendLine("=== TSROSSA AUDIO ENGINE DIAGNOSTICS ===")
-    sb.appendLine("App Version: 1.2.0-beta1")
+    sb.appendLine("App Version: ${com.yuka.musicplayer.BuildConfig.VERSION_NAME}")
     sb.appendLine("Device Model: ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})")
     sb.appendLine("Timestamp: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}")
     sb.appendLine()
@@ -2468,6 +2454,19 @@ fun SystemLogsPanel(
                 LogItem("Claimed Ifaces", if (claimedInterfaces.isNotEmpty()) claimedInterfaces else "--", TerminalWhite)
             } else {
                 LogItem("USB Status", "DISCONNECTED", TerminalGray)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "[ INITIALIZE / RECONNECT DAC ]",
+                    color = LocalAccentColor.current,
+                    fontSize = 11.sp,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    modifier = Modifier
+                        .clickable {
+                            com.yuka.musicplayer.audio.AudioPlayerManager.usbAudioController.scanAndRequestPermission()
+                        }
+                        .padding(vertical = 4.dp, horizontal = 4.dp)
+                )
             }
 
             // Section 2: Signal Path

@@ -14,10 +14,11 @@
 #include <queue>
 #include <sched.h>
 #include <set>
-#include <string>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/types.h>
+#include <linux/usbdevice_fs.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -967,17 +968,15 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
     if (libusb_init(&g_audioState.usbContext) < 0)
       return JNI_FALSE;
 
-    if (libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) {
-      libusb_hotplug_register_callback(
-          g_audioState.usbContext, LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT,
-          LIBUSB_HOTPLUG_NO_FLAGS, LIBUSB_HOTPLUG_MATCH_ANY,
-          LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY, hotplug_callback,
-          nullptr, &g_audioState.hotplugHandle);
-    }
+    // Note: Do NOT register libusb_hotplug_register_callback on Android!
+    // libusb Linux netlink uevent hotplug is unreliable in Android's app sandbox
+    // and causes false "Surprise Removal" disconnect events on many OEM kernels.
+    // Detach lifecycle is managed accurately via Android UsbManager BroadcastReceiver and ISO transfer errors.
   }
 
   if (libusb_wrap_sys_device(g_audioState.usbContext, (intptr_t)fd,
                              &g_audioState.usbHandle) < 0) {
+    LOGE("initUsbDac: libusb_wrap_sys_device failed for FD %d!", fd);
     return JNI_FALSE;
   }
 
@@ -987,9 +986,18 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
   g_audioState.usb_frames_per_sec.store(dev_fps);
   LOGI("initUsbDac: Device speed is %d -> cached usb_frames_per_sec set to %d", dev_speed, dev_fps);
 
-  struct libusb_config_descriptor *config;
-  if (libusb_get_active_config_descriptor(dev, &config) < 0)
-    return JNI_FALSE;
+  struct libusb_config_descriptor *config = nullptr;
+  if (libusb_get_active_config_descriptor(dev, &config) < 0 || config == nullptr) {
+    LOGW("initUsbDac: libusb_get_active_config_descriptor failed (unconfigured state). Trying config index 0...");
+    if (libusb_get_config_descriptor(dev, 0, &config) < 0 || config == nullptr) {
+      LOGE("initUsbDac: Failed to get any USB config descriptor!");
+      libusb_close(g_audioState.usbHandle);
+      g_audioState.usbHandle = nullptr;
+      return JNI_FALSE;
+    }
+    int set_cfg = libusb_set_configuration(g_audioState.usbHandle, config->bConfigurationValue);
+    LOGI("initUsbDac: Set configuration to %d, result: %d", config->bConfigurationValue, set_cfg);
+  }
 
   // --- DUMP DESCRIPTOR LOGGING ---
   LOGI("=== START DESCRIPTOR DUMP ===");
@@ -1217,6 +1225,22 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
           // Step 2: Claim the interface
           int claim_res =
               libusb_claim_interface(g_audioState.usbHandle, iface_num);
+          if (claim_res == LIBUSB_ERROR_BUSY) {
+            LOGW("USBExclusive: Interface %d is BUSY. Attempting direct USBDEVFS_DISCONNECT_CLAIM ioctl...", iface_num);
+            struct usbdevfs_disconnect_claim dc;
+            memset(&dc, 0, sizeof(dc));
+            dc.interface = (unsigned int)iface_num;
+            dc.flags = 0; // Force disconnect kernel driver
+            int ioctl_res = ioctl(fd, USBDEVFS_DISCONNECT_CLAIM, &dc);
+            if (ioctl_res == 0) {
+              claim_res = libusb_claim_interface(g_audioState.usbHandle, iface_num);
+              LOGI("USBExclusive: Retried claim after ioctl disconnect_claim on Interface %d: %d", iface_num, claim_res);
+            } else {
+              LOGW("USBExclusive: USBDEVFS_DISCONNECT_CLAIM ioctl failed on Interface %d: %d (%s)",
+                   iface_num, errno, strerror(errno));
+            }
+          }
+
           if (claim_res == 0) {
             std::lock_guard<std::mutex> lock(g_stateMutex);
             g_audioState.claimedInterfaces.push_back(iface_num);
@@ -1290,6 +1314,24 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
 
   libusb_free_config_descriptor(config); // Move free to AFTER the loop!
 
+  // Final retry on streaming interface if not claimed yet
+  if (std::find(g_audioState.claimedInterfaces.begin(),
+                g_audioState.claimedInterfaces.end(),
+                as_interface) == g_audioState.claimedInterfaces.end()) {
+    LOGW("USBExclusive: Streaming interface %d not claimed yet. Attempting USBDEVFS_DISCONNECT_CLAIM ioctl...", as_interface);
+    struct usbdevfs_disconnect_claim dc;
+    memset(&dc, 0, sizeof(dc));
+    dc.interface = (unsigned int)as_interface;
+    dc.flags = 0;
+    ioctl(fd, USBDEVFS_DISCONNECT_CLAIM, &dc);
+    int claim_res = libusb_claim_interface(g_audioState.usbHandle, as_interface);
+    if (claim_res == 0) {
+      std::lock_guard<std::mutex> lock(g_stateMutex);
+      g_audioState.claimedInterfaces.push_back(as_interface);
+      LOGI("USBExclusive: Successfully claimed streaming interface %d on retry!", as_interface);
+    }
+  }
+
   // We only absolutely need the streaming interface to succeed
   if (std::find(g_audioState.claimedInterfaces.begin(),
                 g_audioState.claimedInterfaces.end(),
@@ -1308,9 +1350,11 @@ Java_com_yuka_musicplayer_audio_AudioEngine_initUsbDac(JNIEnv *env,
     return JNI_FALSE;
   }
 
-  if (libusb_set_interface_alt_setting(g_audioState.usbHandle, as_interface,
-                                       as_altsetting) < 0)
-    return JNI_FALSE;
+  // Set streaming interface to AltSetting 0 (Zero-Bandwidth / Idle) until playback begins.
+  // Note: We do NOT abort if this returns non-zero, because playAudio explicitly sets
+  // the exact operational altsetting when playback begins.
+  int alt0_res = libusb_set_interface_alt_setting(g_audioState.usbHandle, as_interface, 0);
+  LOGI("initUsbDac: Set interface %d to AltSetting 0 (standby), result: %d", as_interface, alt0_res);
 
   g_audioState.usbAudioInterface = as_interface;
   g_audioState.epAddress = ep_out;
