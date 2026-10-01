@@ -68,3 +68,5 @@ Test.kt
 
 # Tooling
 compile_commands.json
+graphify-out/
+.agents/

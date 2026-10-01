@@ -595,6 +595,9 @@ fun KewApp(audioEngine: AudioEngine) {
     var isPlaying by remember { mutableStateOf(com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying || audioEngine.isPlaying()) }
     var pausedByTransientLoss by remember { mutableStateOf(false) }
     var playbackPosition by remember { mutableStateOf(0.0) }
+    var playJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var prepareJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var playTrackRef by remember { mutableStateOf<((File, Boolean, Boolean) -> Unit)?>(null) }
     var currentVolume by remember { 
         mutableStateOf(sharedPref.getFloat("last_volume", 1.0f)) 
     }
@@ -755,27 +758,8 @@ fun KewApp(audioEngine: AudioEngine) {
                         if (resumed) {
                             isPlaying = true
                         } else {
-                            currentTrack?.file?.absolutePath?.let { path ->
-                                coroutineScope.launch(Dispatchers.IO) {
-                                    var result = audioEngine.playAudio(path)
-                                    if (result == -3) {
-                                        delay(200)
-                                        result = audioEngine.playAudio(path)
-                                    }
-                                    withContext(Dispatchers.Main) {
-                                        if (result == 0) {
-                                            isPlaying = true
-                                        } else {
-                                            isPlaying = false
-                                            val msg = when (result) {
-                                                -2 -> "Format no longer supported by DAC"
-                                                -3 -> "USB negotiation failed on resume"
-                                                else -> "Playback resume failed"
-                                            }
-                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
+                            currentTrack?.file?.let { file ->
+                                playTrackRef?.invoke(file, false, true)
                             }
                         }
                     }
@@ -855,8 +839,6 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
 
-    var playTrackRef: ((File, Boolean, Boolean) -> Unit)? = null
-
     fun getNextTrackFile(isAutoAdvance: Boolean, consumeQueue: Boolean): File? {
         if (priorityQueue.isNotEmpty()) {
             val nextQueueFile = priorityQueue.first()
@@ -924,13 +906,14 @@ fun KewApp(audioEngine: AudioEngine) {
     fun peekNextTrackFile(): File? = getNextTrackFile(isAutoAdvance = true, consumeQueue = false)
 
     fun syncPreparedNextTrack() {
+        prepareJob?.cancel()
         if (!isPlaying || currentTrack == null) {
             audioEngine.clearNextTrack()
             return
         }
         val nextFile = peekNextTrackFile()
         if (nextFile != null) {
-            coroutineScope.launch(Dispatchers.IO) {
+            prepareJob = coroutineScope.launch(Dispatchers.IO) {
                 audioEngine.prepareNextTrack(nextFile.absolutePath)
             }
         } else {
@@ -987,7 +970,8 @@ fun KewApp(audioEngine: AudioEngine) {
         playbackPosition = 0.0
 
         // 1. Play audio INSTANTLY (without waiting for metadata extraction)
-        coroutineScope.launch(Dispatchers.IO) {
+        playJob?.cancel()
+        playJob = coroutineScope.launch(Dispatchers.IO) {
             var result = audioEngine.playAudio(file.absolutePath)
             
             // Retry once on transient negotiation failure
@@ -1028,14 +1012,31 @@ fun KewApp(audioEngine: AudioEngine) {
                     }
                     return@launch
                 }
-                else -> {
-                    // -1 (file error) or -3 (negotiation failed after retry)
+                result == -1 -> {
+                    // -1: File open/decode error (Permission denied or unsupported format)
                     withContext(Dispatchers.Main) {
                         isPlaying = false
-                        if (result == -3) {
-                            Toast.makeText(context, "USB negotiation failed", Toast.LENGTH_SHORT).show()
+                        val lastUsbDiag = audioEngine.getLastUsbDiagnostic()
+                        val isPermissionIssue = lastUsbDiag.contains("Permission denied", ignoreCase = true) || !checkStoragePermission(context)
+                        val errorMsg = if (isPermissionIssue) {
+                            "Izin ditolak! Aktifkan 'Akses semua file' untuk tsrossa di Pengaturan Android."
+                        } else {
+                            "Gagal membuka file audio. Pastikan format FLAC atau WAV yang valid."
                         }
-                        playNext(isAutoAdvance)
+                        Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                    }
+                    return@launch
+                }
+                else -> {
+                    // -3 (negotiation failed after retry), -4 (device wedged), or unknown
+                    withContext(Dispatchers.Main) {
+                        isPlaying = false
+                        val msg = when (result) {
+                            -3 -> "USB negotiation failed"
+                            -4 -> "USB DAC wedged. Cabut dan pasang kembali DAC."
+                            else -> "Playback failed (error code $result)"
+                        }
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                     }
                     return@launch
                 }
@@ -1811,30 +1812,8 @@ fun KewApp(audioEngine: AudioEngine) {
                         setDndMode(true)
                     }
                 } else {
-                    currentTrack?.file?.absolutePath?.let { path ->
-                        coroutineScope.launch(Dispatchers.IO) {
-                            var result = audioEngine.playAudio(path)
-                            if (result == -3) {
-                                delay(200)
-                                result = audioEngine.playAudio(path)
-                            }
-                            withContext(Dispatchers.Main) {
-                                if (result == 0) {
-                                    isPlaying = true
-                                    if (notificationManager.isNotificationPolicyAccessGranted) {
-                                        setDndMode(true)
-                                    }
-                                } else {
-                                    isPlaying = false
-                                    val msg = when (result) {
-                                        -2 -> "Format not supported by DAC"
-                                        -3 -> "USB negotiation failed"
-                                        else -> "Playback failed"
-                                    }
-                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
+                    currentTrack?.file?.let { file ->
+                        playTrack(file, false)
                     }
                 }
             }
@@ -2243,8 +2222,12 @@ fun generateDiagnosticReport(
     if (isPlaying) {
         sb.appendLine("Input Stream: $sourceBitDepth-Bit / ${sourceSampleRate / 1000.0} kHz")
         sb.appendLine("DAC Output: $outputBitDepth-Bit / ${outputSampleRate / 1000.0} kHz")
-        val bitPerfect = (sourceSampleRate > 0 && sourceSampleRate == outputSampleRate && sourceBitDepth == outputBitDepth)
-        sb.appendLine("Transmission: ${if (bitPerfect) "BIT-PERFECT [PASS]" else "RESAMPLED [FAIL]"}")
+        val transmissionStatus = when {
+            sourceSampleRate == 0 -> "STANDBY [NO STREAM]"
+            sourceSampleRate == outputSampleRate && sourceBitDepth == outputBitDepth -> "BIT-PERFECT [PASS]"
+            else -> "RESAMPLED [FAIL]"
+        }
+        sb.appendLine("Transmission: $transmissionStatus")
         val rateText = if (isSampleRateUnverified) "${negotiatedSampleRate / 1000.0} kHz (Unverified)" else "${negotiatedSampleRate / 1000.0} kHz"
         sb.appendLine("Hardware Clock: $rateText")
     }
@@ -2496,6 +2479,8 @@ fun SystemLogsPanel(
                     LogItem("Transmission", "[ ✓ BIT-PERFECT ]", androidx.compose.ui.graphics.Color(0xFF55FF55))
                 } else if (sourceSampleRate > 0) {
                     LogItem("Transmission", "[ ✗ RESAMPLED ]", androidx.compose.ui.graphics.Color(0xFFFF5555))
+                } else {
+                    LogItem("Transmission", "[ ⋯ NO STREAM ]", TerminalGray)
                 }
                 
                 val rateText = if (isSampleRateUnverified) {

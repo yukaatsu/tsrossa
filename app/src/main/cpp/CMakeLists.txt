@@ -20,6 +20,9 @@ add_library(
         kewmobile
         SHARED
         native-lib.cpp
+        UsbDacController.cpp
+        AudioStreamer.cpp
+        AudioEngineState.cpp
         ${libusb_SOURCE_DIR}/libusb/core.c
         ${libusb_SOURCE_DIR}/libusb/descriptor.c
         ${libusb_SOURCE_DIR}/libusb/hotplug.c
