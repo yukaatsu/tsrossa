@@ -197,8 +197,30 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
 
         // BIT-PERFECT BYPASS
         if (g_audioState.currentVolume >= 0.999f && delta == 0.0f) {
+          int src_bits = g_audioState.sourceBitDepth.load();
           if (sf_size == 4) {
-            memcpy(dst_bytes, src, num_samples * sizeof(int32_t));
+            // 32-bit subslot container (UAC standard Type I PCM: left-aligned with zero padding in LSB)
+            if (src_bits == 32) {
+              memcpy(dst_bytes, src, num_samples * sizeof(int32_t));
+            } else if (src_bits == 16) {
+              // 16-bit source in 32-bit subslot: 16-bit audio in upper 2 bytes, zeros in lower 2 bytes
+              for (size_t s = 0; s < num_samples; s++) {
+                int32_t val32 = src[s] & 0xFFFF0000;
+                dst_bytes[s * 4 + 0] = 0;
+                dst_bytes[s * 4 + 1] = 0;
+                dst_bytes[s * 4 + 2] = (uint8_t)((val32 >> 16) & 0xFF);
+                dst_bytes[s * 4 + 3] = (uint8_t)((val32 >> 24) & 0xFF);
+              }
+            } else {
+              // 24-bit source in 32-bit subslot: 24-bit audio in upper 3 bytes, zeros in lowest byte
+              for (size_t s = 0; s < num_samples; s++) {
+                int32_t val32 = src[s] & 0xFFFFFF00;
+                dst_bytes[s * 4 + 0] = 0;
+                dst_bytes[s * 4 + 1] = (uint8_t)((val32 >> 8) & 0xFF);
+                dst_bytes[s * 4 + 2] = (uint8_t)((val32 >> 16) & 0xFF);
+                dst_bytes[s * 4 + 3] = (uint8_t)((val32 >> 24) & 0xFF);
+              }
+            }
           } else if (sf_size == 2) {
             for (size_t s = 0; s < num_samples; s++) {
               int32_t val16 = src[s] >> 16;
