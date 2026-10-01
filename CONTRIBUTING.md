@@ -1,65 +1,72 @@
 # Contributing to tsrossa
 
-Thank you for your interest in contributing to **tsrossa**! We are building an open-source, bit-perfect audiophile music player for Android, and community contributions are essential to making it stable and feature-rich.
+Want to help out with tsrossa? That's awesome.
+
+We're trying to build a solid, bit-perfect music player that actually talks directly to USB DACs on Android without the OS audio stack messing with the stream. Since Android devices and USB DACs behave wildly differently depending on the OEM kernel and DAC firmware, real-world testing and code contributions help a ton.
 
 ---
 
-## 🚧 Release Candidate (RC) Notice
+## What We Need Most Right Now
 
-Because the project is currently in the **Release Candidate** phase, testing on diverse hardware is our top priority. The most valuable contributions right now are:
-1. **DAC Hardware Compatibility Reports**: Testing your specific USB DAC or dongle and reporting your experience (success or failure).
-2. **Buffer and Latency Feedback**: Reporting any audio dropouts, pops, or click issues on specific Android OEM devices (Samsung, Xiaomi, Pixel, Sony, etc.).
-3. **Bug Fixes**: Refinements in C++ NDK code, libusb lifecycle management, and Compose UI stability.
+1. **Hardware testing & DAC compatibility:**
+   - Plug in your dongles or desktop DACs.
+   - Let us know if playback works, if volume hardware control works, or if it breaks.
+   - Mention your phone model, Android version, and DAC name.
 
----
+2. **Audio pipeline & stability:**
+   - Bug reports for audio pops, stuttering, sample rate sync issues, or app crashes.
+   - Improvements to the C++ audio engine (`libusb`, threading, buffer management).
 
-## 🛠️ Development Setup
-
-1. Fork the repository on GitHub.
-2. Clone your fork locally:
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/tsrossa.git
-   cd tsrossa
-   ```
-3. Ensure you have the Android SDK (API 34), NDK, and CMake installed via the SDK Manager in Android Studio.
-4. Build the project:
-   ```bash
-   ./gradlew assembleDebug
-   ```
+3. **UI/UX polish:**
+   - Jetpack Compose tweaks, responsiveness, or library browsing improvements.
 
 ---
 
-## 🐛 Reporting Bugs & Incompatibilities
+## Local Setup
 
-When filing an issue, please include:
-- **Phone Model & OS Version**: e.g., Google Pixel 7 (Android 14) or Samsung Galaxy S23 (OneUI 6).
-- **USB DAC Model & Chipset**: e.g., Moondrop Dawn Pro (Dual CS43131), Fiio KA3 (ES9038Q2M), or Apple Dongle.
-- **Audio File Details**: Format, sample rate, and bit depth (e.g., FLAC 24-bit / 96kHz).
-- **Observed Behavior**: Description of what happened (silence, distortion, app crash, stall).
-- **Logcat Output**: If possible, filter by tag `KewAudioEngine` or `UsbAudioController`:
+Grab the repo and build it locally:
+
+```bash
+git clone https://github.com/yukaatsu/tsrossa.git
+cd tsrossa
+./gradlew assembleDebug
+```
+
+Requirements:
+- Android Studio / Android SDK (compileSdk 34)
+- Android NDK & CMake
+- JDK 17
+
+---
+
+## Reporting Issues
+
+If something sounds wrong or crashes, please open an issue and mention:
+- **Phone:** e.g. Samsung Galaxy S23 (OneUI 6 / Android 14)
+- **DAC:** e.g. Moondrop Dawn Pro, Fiio KA3, Snowsky Melody
+- **Track info:** Format, sample rate, bit depth (e.g. FLAC 24-bit / 96 kHz)
+- **What happened:** No sound, stuttering, noise, crash, etc.
+- **Logs (if you have ADB handy):**
   ```bash
-  adb logcat -s KewAudioEngine:V UsbAudioController:V
+  adb logcat -s tsrossa:V native-lib:V UsbExclusive:V
   ```
 
 ---
 
-## 🚀 Submitting a Pull Request (PR)
+## Submitting Changes
 
-1. Create a descriptive branch for your feature or bug fix:
+1. Fork the repo and make your changes on a separate branch.
+2. Keep PRs focused. If you're fixing two unrelated things, use two PRs.
+3. Keep commit messages straightforward and descriptive.
+4. Make sure it actually builds before opening a PR:
    ```bash
-   git checkout -b fix/dac-stall-recovery
+   ./gradlew assembleDebug
    ```
-2. Write clean, readable code following standard Kotlin and C++ conventions.
-3. Commit your changes with clear commit messages following Conventional Commits (e.g., `feat: ...`, `fix: ...`, `docs: ...`).
-4. Push to your fork:
-   ```bash
-   git push origin fix/dac-stall-recovery
-   ```
-5. Open a Pull Request against the `main` branch.
+5. Open your pull request against `main`.
 
 ---
 
-## 📜 Code Style Guidelines
+## Notes on Code
 
-- **Kotlin**: Follow official [Kotlin Coding Conventions](https://kotlinlang.org/docs/coding-conventions.html) and Android Compose best practices.
-- **C++**: Follow C++17 modern idioms. Keep memory management RAII-compliant and thread-safe when dealing with JNI and libusb isochronous transfers.
+- **C++:** We use C++17. The USB streaming thread runs in real-time priority, so keep callbacks fast and avoid heap allocations inside time-critical audio loops.
+- **Kotlin:** Standard Jetpack Compose. Keep UI state predictable and don't block the main thread.
