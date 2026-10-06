@@ -57,6 +57,8 @@ class AudioEngine {
     external fun getLastUsbDiagnostic(): String
     external fun getOutputBitDepth(): Int
     external fun getOutputSampleRate(): Int
+    external fun triggerWarmup(durationMs: Int): Boolean
+    external fun isWarmingUp(): Boolean
 
     // Callback dari C++ saat lagu habis
     var onTrackFinishedCallback: (() -> Unit)? = null

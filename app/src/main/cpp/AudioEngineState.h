@@ -61,6 +61,12 @@ struct AudioEngineState {
   std::atomic<uint32_t> channelsNext{2};
   std::atomic<uint32_t> sampleRateNext{48000};
   std::atomic<bool> hasNextTrack{false};
+
+  // Hardware DAC Warmup & Pre-Roll
+  std::atomic<bool> isWarmingUp{false};
+  std::atomic<uint32_t> warmupSilenceFrames{0};
+  std::atomic<uint32_t> microFadeFrames{0};
+  std::atomic<uint32_t> microFadeTotal{0};
   
   std::string currentFilePath;
   std::string nextFilePath;
@@ -74,6 +80,7 @@ struct AudioEngineState {
   std::atomic<bool> isSwapping{false};
   std::atomic<bool> isSwappingAck{false};
   double phase_accumulator = 0.0;
+  uint32_t iso_fixed_rem = 0; // Jitterless Fixed-Point Bresenham remainder accumulator
   std::atomic<float> targetVolume{1.0f};
   float rawLinearVolume = 1.0f;
   

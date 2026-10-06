@@ -20,3 +20,5 @@ bool clear_next_track_internal();
 void clean_garbage_internal();
 bool seek_to_internal(double targetSeconds);
 double get_position_internal();
+bool trigger_warmup_internal(int durationMs);
+bool is_warming_up_internal();

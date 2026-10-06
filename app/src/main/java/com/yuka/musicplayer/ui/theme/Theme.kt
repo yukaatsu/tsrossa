@@ -12,7 +12,11 @@ import androidx.compose.ui.unit.sp
 
 import androidx.compose.runtime.compositionLocalOf
 
+import androidx.compose.ui.text.font.Font
+import com.yuka.musicplayer.R
+
 val LocalAccentColor = compositionLocalOf { Color(0xFF00FF00) }
+val TerminalFont = FontFamily(Font(R.font.fantasquesans_regular))
 
 fun Color.blendWithWhite(ratio: Float): Color {
     return Color(
@@ -28,6 +32,14 @@ val TrueBlack = Color(0xFF000000)
 val TerminalGreen = Color(0xFF00FF00)
 val TerminalWhite = Color(0xFFF5F5F5)
 val TerminalGray = Color(0xFF888888)
+
+// Tsrossa Signature Neon Sakura Palette
+val SignatureDeepNavy = Color(0xFF070A12)
+val SignatureSurfaceNavy = Color(0xFF101626)
+val SakuraPink = Color(0xFFFF85A1)
+val VividViolet = Color(0xFFA259FF)
+val SubtleMint = Color(0xFF64FFDA)
+val PastelPurple = Color(0xFFB388FF)
 
 private val DarkColorScheme = darkColorScheme(
     primary = TerminalGreen,

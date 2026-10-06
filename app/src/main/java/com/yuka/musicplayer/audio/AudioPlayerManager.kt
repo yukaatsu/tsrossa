@@ -2,8 +2,8 @@ package com.yuka.musicplayer.audio
 
 import android.content.Context
 import android.util.Log
-import com.yuka.musicplayer.PlaybackSource
-import com.yuka.musicplayer.TrackInfo
+import com.yuka.musicplayer.model.PlaybackSource
+import com.yuka.musicplayer.model.TrackInfo
 import java.io.File
 
 object AudioPlayerManager {
@@ -26,6 +26,7 @@ object AudioPlayerManager {
     var onTogglePlay: (() -> Unit)? = null
     var onDacDetached: (() -> Unit)? = null
     var onDacAttached: (() -> Unit)? = null
+    var onDacReady: ((String) -> Unit)? = null
     var onNotificationUpdateRequired: (() -> Unit)? = null
 
     fun initialize(context: Context) {
@@ -42,6 +43,16 @@ object AudioPlayerManager {
             if (!isDacConnected) {
                 Log.e("AudioPlayerManager", "initUsbDac failed for FD $fd! Closing USB connection to avoid wedged state.")
                 usbAudioController.closeDevice()
+            } else {
+                val dacName = try {
+                    val infoJson = org.json.JSONObject(audioEngine.getDacInfo())
+                    infoJson.optString("productName", "USB DAC")
+                } catch (e: Exception) {
+                    "USB DAC"
+                }
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    onDacReady?.invoke(dacName)
+                }
             }
             Log.i("AudioPlayerManager", "USB DAC initialized. Connected: $isDacConnected")
             notifyStateChanged()

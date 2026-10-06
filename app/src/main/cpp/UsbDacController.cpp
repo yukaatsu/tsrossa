@@ -9,6 +9,7 @@
 #include <set>
 #include <linux/usbdevice_fs.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 void control_thread_func() {
@@ -245,6 +246,7 @@ int LIBUSB_CALL hotplug_callback(libusb_context *ctx,
 void close_usb_dac_internal() {
   if (g_audioState.usbHandle != nullptr) {
     stop_and_join_iso_thread("closeUsbDac");
+    stop_and_join_decode_thread();
 
     for (int iface : g_audioState.claimedInterfaces) {
       int rr = libusb_release_interface(g_audioState.usbHandle, iface);
@@ -260,7 +262,25 @@ void close_usb_dac_internal() {
     g_audioState.subframeSize.store(0);
     g_audioState.sampleRate.store(0);
     g_audioState.channels.store(0);
+    g_audioState.currentAltSetting.store(0);
     g_audioState.hasValidatedRate.store(false);
+    g_audioState.isPlaying.store(false);
+    g_audioState.isWarmingUp.store(false);
+    g_audioState.warmupSilenceFrames.store(0);
+    g_audioState.currentFilePath = "";
+    g_audioState.nextFilePath = "";
+    g_audioState.hasNextTrack.store(false);
+    g_audioState.decodedFrames.store(0);
+    g_audioState.pcmIndex.store(0);
+
+    if (!g_audioState.pcmBuffer.empty()) {
+      munlock(g_audioState.pcmBuffer.data(), g_audioState.pcmBuffer.size() * sizeof(int32_t));
+      g_audioState.pcmBuffer.clear();
+    }
+    if (!g_audioState.pcmBufferNext.empty()) {
+      munlock(g_audioState.pcmBufferNext.data(), g_audioState.pcmBufferNext.size() * sizeof(int32_t));
+      g_audioState.pcmBufferNext.clear();
+    }
     
     LOGI("[Thread] Cleanup finished successfully in closeUsbDac");
   }

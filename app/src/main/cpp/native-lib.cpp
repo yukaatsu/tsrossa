@@ -282,3 +282,14 @@ Java_com_yuka_musicplayer_audio_AudioEngine_getLastUsbDiagnostic(JNIEnv *env, jo
   std::lock_guard<std::mutex> lock(g_usbDiagMutex);
   return env->NewStringUTF(g_lastUsbDiagnostic.c_str());
 }
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_triggerWarmup(JNIEnv *env, jobject thiz, jint durationMs) {
+  ApiMutexLock lock(__func__);
+  return trigger_warmup_internal(durationMs) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_isWarmingUp(JNIEnv *env, jobject thiz) {
+  return is_warming_up_internal() ? JNI_TRUE : JNI_FALSE;
+}
