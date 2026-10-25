@@ -8,6 +8,7 @@
 void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer);
 void stop_and_join_iso_thread(const char* caller_reason);
 void stop_and_join_decode_thread();
+void decoder_thread_func();
 void playAudio_cleanup_on_negotiation_failure();
 
 // High level streaming controls

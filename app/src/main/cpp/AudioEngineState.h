@@ -96,6 +96,7 @@ struct AudioEngineState {
   std::atomic<uint64_t> nextTotalFrames{0};
   std::atomic<uint64_t> nextDecodedFrames{0};
   std::unique_ptr<AudioDecoder> nextActiveDecoder;
+  std::unique_ptr<AudioDecoder> activeDecoder;
   std::atomic<uint32_t> channelsNext{2};
   std::atomic<uint32_t> sampleRateNext{48000};
   std::atomic<bool> hasNextTrack{false};
@@ -118,7 +119,7 @@ struct AudioEngineState {
   std::atomic<int> swappingZeroUrbCount{0};
   uint32_t iso_fixed_rem = 0; // Jitterless Fixed-Point Bresenham remainder accumulator
   std::atomic<float> targetVolume{1.0f};
-  float rawLinearVolume = 1.0f;
+  std::atomic<float> rawLinearVolume{1.0f};
   
   std::atomic<uint32_t> prepareNextGen{0};
   

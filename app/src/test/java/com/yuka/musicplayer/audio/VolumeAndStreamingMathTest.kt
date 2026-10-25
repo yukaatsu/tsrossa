@@ -83,4 +83,63 @@ class VolumeAndStreamingMathTest {
         val targetHw5Step2 = AudioEngine.quantizeHardwareVolumeTarget(0.05f, minDb, maxDb, resDb2, preferHardwareVolume = true)
         assertEquals(0, targetHw5Step2.toInt() % 512)
     }
+
+    @Test
+    fun `ring buffer modulo indexing streams 300s 96kHz track to 100 percent without truncation`() {
+        val sampleRate = 96_000L
+        val durationSec = 300L // 5 minutes (like ReoNa - Katappo no Kutsushita)
+        val totalFrames = sampleRate * durationSec // 28,800,000 frames (230.4 MB)
+        val ringCapacityFrames = (64L * 1024L * 1024L) / 8L // 8,388,608 frames (64 MB)
+
+        var pcmIndex = 0L
+        var decodedFrames = 0L
+        val chunkFrames = 16_384L
+        val safetyFrames = 65_536L
+
+        // Simulate streaming until track finishes
+        while (pcmIndex < totalFrames) {
+            // Producer (decoder_thread_func) fills ring buffer up to capacity
+            while (decodedFrames < totalFrames &&
+                (decodedFrames - pcmIndex) + chunkFrames + safetyFrames <= ringCapacityFrames
+            ) {
+                val writeSlot = decodedFrames % ringCapacityFrames
+                val contiguous = ringCapacityFrames - writeSlot
+                val toDecode = minOf(chunkFrames, totalFrames - decodedFrames, contiguous)
+                assertTrue(writeSlot + toDecode <= ringCapacityFrames)
+                decodedFrames += toDecode
+            }
+            // Consumer (fill_iso_packet_buffer) advances playback
+            val step = minOf(48_000L, decodedFrames - pcmIndex)
+            assertTrue("Decoder must stay ahead of playback", step > 0)
+            pcmIndex += step
+        }
+
+        assertEquals(totalFrames, decodedFrames)
+        assertEquals(totalFrames, pcmIndex)
+    }
+
+    @Test
+    fun `ring buffer consumer contiguous slot calculation prevents boundary overshoot during wrap-around`() {
+        val ringCapacityFrames = (64L * 1024L * 1024L) / 8L // 8,388,608 frames
+        // Position consumer 50 frames before the ring boundary
+        val pcmIndex = ringCapacityFrames - 50L
+        val framesNeeded = 192L // e.g. 192 frames for 2ms @ 96kHz packet
+
+        val bufFrame = pcmIndex % ringCapacityFrames
+        val contiguous = ringCapacityFrames - bufFrame
+        val firstChunk = minOf(framesNeeded, contiguous)
+
+        // First read stops exactly at ring buffer end
+        assertEquals(50L, firstChunk)
+        assertEquals(ringCapacityFrames, bufFrame + firstChunk)
+
+        // Second read wraps to 0
+        val nextPcmIndex = pcmIndex + firstChunk
+        val nextBufFrame = nextPcmIndex % ringCapacityFrames
+        assertEquals(0L, nextBufFrame)
+        val nextContiguous = ringCapacityFrames - nextBufFrame
+        val secondChunk = minOf(framesNeeded - firstChunk, nextContiguous)
+        assertEquals(142L, secondChunk)
+        assertEquals(framesNeeded, firstChunk + secondChunk)
+    }
 }

@@ -81,6 +81,15 @@ struct AudioDecoder {
     return 0;
   }
 
+  bool seek(uint64_t targetFrame) {
+    if (codec == AudioCodec::FLAC && pFlac != nullptr) {
+      return drflac_seek_to_pcm_frame(pFlac, (drflac_uint64)targetFrame) != 0;
+    } else if (codec == AudioCodec::WAV && isWavInit) {
+      return drwav_seek_to_pcm_frame(&wav, (drwav_uint64)targetFrame) != 0;
+    }
+    return false;
+  }
+
   void close() {
     if (codec == AudioCodec::FLAC && pFlac != nullptr) {
       drflac_close(pFlac);
