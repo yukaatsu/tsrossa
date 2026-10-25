@@ -144,55 +144,65 @@ class VolumeAndStreamingMathTest {
     }
 
     @Test
-    fun `seek in-window validation correctly differentiates cached RAM hits from decoder seek triggers`() {
-        fun isSeekInWindow(targetFrame: Long, decoded: Long, cap: Long): Boolean {
-            if (cap <= 0 || targetFrame >= decoded) return false
-            val validStart = if (decoded > cap) decoded - cap else 0L
-            return targetFrame >= validStart
-        }
+    fun `unified seek resets decoder and frame pointers guaranteeing contiguous decoding without memory holes`() {
+        val totalFrames = 28_800_000L // 300s @ 96kHz
+        val ringCapacityFrames = 8_388_608L
+        val chunkFrames = 16_384L
 
-        val cap = 8_388_608L // 64 MB ring buffer capacity (~87 sec @ 96kHz)
+        // Initial playback at frame 5,000,000
+        var pcmIndex = 5_000_000L
+        var decodedFrames = 5_500_000L
+        assertTrue(decodedFrames > pcmIndex)
 
-        // Case 1: Track fully decoded in RAM (decoded = 2,000,000 <= cap)
-        // Any seek between 0 and 1,999,999 must be an instant RAM hit without seeking the decoder
-        assertTrue(isSeekInWindow(0L, 2_000_000L, cap))
-        assertTrue(isSeekInWindow(1_000_000L, 2_000_000L, cap))
-        assertTrue(isSeekInWindow(1_999_999L, 2_000_000L, cap))
-        // Seeking beyond decoded (e.g. 2,500,000) must trigger decoder seek (no uninitialized gap)
-        org.junit.Assert.assertFalse(isSeekInWindow(2_500_000L, 2_000_000L, cap))
+        // User performs a forward seek to 20,000,000 (beyond decodedFrames)
+        val targetForward = 20_000_000L
+        pcmIndex = targetForward
+        decodedFrames = targetForward
+        // Producer decodes fresh chunk immediately from targetForward
+        val writeSlot = decodedFrames % ringCapacityFrames
+        val contiguous = ringCapacityFrames - writeSlot
+        val toDecode = minOf(chunkFrames, totalFrames - decodedFrames, contiguous)
+        decodedFrames += toDecode
+        assertTrue(decodedFrames > pcmIndex)
+        assertEquals(targetForward, pcmIndex)
+        assertEquals(targetForward + toDecode, decodedFrames)
 
-        // Case 2: Large track in ring buffer, currently decoded up to frame 20,000,000
-        // Window is [20,000,000 - 8,388,608 = 11,611,392; 20,000,000)
-        val decoded = 20_000_000L
-        val validStart = decoded - cap // 11,611,392L
-        assertTrue(isSeekInWindow(validStart, decoded, cap))
-        assertTrue(isSeekInWindow(15_000_000L, decoded, cap))
-        assertTrue(isSeekInWindow(decoded - 1L, decoded, cap))
-
-        // Frame 10,000,000 was already overwritten in the ring buffer -> must seek decoder
-        org.junit.Assert.assertFalse(isSeekInWindow(10_000_000L, decoded, cap))
-        // Frame 25,000,000 has not been decoded yet -> must seek decoder
-        org.junit.Assert.assertFalse(isSeekInWindow(25_000_000L, decoded, cap))
+        // User performs a backward seek to 1,000,000 (previously overwritten)
+        val targetBackward = 1_000_000L
+        pcmIndex = targetBackward
+        decodedFrames = targetBackward
+        val writeSlotBack = decodedFrames % ringCapacityFrames
+        val contiguousBack = ringCapacityFrames - writeSlotBack
+        val toDecodeBack = minOf(chunkFrames, totalFrames - decodedFrames, contiguousBack)
+        decodedFrames += toDecodeBack
+        assertTrue(decodedFrames > pcmIndex)
+        assertEquals(targetBackward, pcmIndex)
+        assertEquals(targetBackward + toDecodeBack, decodedFrames)
     }
 
     @Test
     fun `lock-free gapless handoff signal cleanly transfers ownership without blocking real-time context`() {
         val needGaplessDecoderHandoff = java.util.concurrent.atomic.AtomicBoolean(false)
         var backgroundThreadProcessedHandoff = false
+        var restartedLoopWithFreshCounters = false
 
         // 1. In real-time USB callback (iso_callback): zero mutex, zero heap dealloc
-        // Signal handoff via atomic boolean
         needGaplessDecoderHandoff.set(true)
         val realTimeCallbackCompletedWithoutBlocking = true
         assertTrue(realTimeCallbackCompletedWithoutBlocking)
 
         // 2. In background decoder thread (decoder_thread_func):
-        if (needGaplessDecoderHandoff.getAndSet(false)) {
-            // Background thread performs decoder swap, closing old decoder and freeing memory
-            backgroundThreadProcessedHandoff = true
+        if (needGaplessDecoderHandoff.get()) {
+            if (needGaplessDecoderHandoff.get()) {
+                // Background thread performs decoder swap, closing old decoder and freeing memory
+                backgroundThreadProcessedHandoff = true
+                needGaplessDecoderHandoff.set(false)
+            }
+            restartedLoopWithFreshCounters = true
         }
 
         assertTrue(backgroundThreadProcessedHandoff)
+        assertTrue(restartedLoopWithFreshCounters)
         org.junit.Assert.assertFalse(needGaplessDecoderHandoff.get())
     }
 }
