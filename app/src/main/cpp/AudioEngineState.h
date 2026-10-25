@@ -100,6 +100,7 @@ struct AudioEngineState {
   std::atomic<uint32_t> channelsNext{2};
   std::atomic<uint32_t> sampleRateNext{48000};
   std::atomic<bool> hasNextTrack{false};
+  std::atomic<bool> needGaplessDecoderHandoff{false};
 
   // Hardware DAC Warmup & Pre-Roll
   std::atomic<bool> isWarmingUp{false};

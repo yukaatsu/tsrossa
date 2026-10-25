@@ -277,21 +277,43 @@ void decoder_thread_func() {
   constexpr uint64_t CHUNK_FRAMES = 16384ULL;
 
   while (!g_audioState.cancelDecoding.load()) {
+    // 1. Handle gapless decoder handover outside real-time USB callback
+    if (g_audioState.needGaplessDecoderHandoff.exchange(false, std::memory_order_acq_rel)) {
+      std::lock_guard<std::mutex> lock(g_audioState.decoderMutex);
+      if (g_audioState.activeDecoder != nullptr) {
+        g_audioState.activeDecoder->close();
+      }
+      g_audioState.activeDecoder = std::move(g_audioState.nextActiveDecoder);
+    }
+
     uint64_t total = g_audioState.totalFrames.load(std::memory_order_acquire);
     uint64_t current = g_audioState.decodedFrames.load(std::memory_order_acquire);
     uint64_t capacity = g_audioState.pcmBufferCapacityFrames.load(std::memory_order_acquire);
     uint32_t channels = g_audioState.channels.load(std::memory_order_acquire);
     if (channels == 0) channels = 2;
 
-    if (current >= total || g_audioState.activeDecoder == nullptr) {
-      std::unique_lock<std::mutex> lock(g_audioState.decoderMutex);
-      if (g_audioState.cancelDecoding.load()) break;
-      g_audioState.decoderCv.wait_for(lock, std::chrono::milliseconds(50), [] {
-        return g_audioState.cancelDecoding.load() ||
-               (g_audioState.activeDecoder != nullptr &&
-                g_audioState.decodedFrames.load() < g_audioState.totalFrames.load());
-      });
-      continue;
+    // Check if waiting is needed (fully decoded or decoder not set)
+    bool hasHandoff = g_audioState.needGaplessDecoderHandoff.load(std::memory_order_acquire);
+    if (!hasHandoff) {
+      bool needWait = false;
+      {
+        std::lock_guard<std::mutex> lock(g_audioState.decoderMutex);
+        if (current >= total || g_audioState.activeDecoder == nullptr) {
+          needWait = true;
+        }
+      }
+      if (needWait) {
+        std::unique_lock<std::mutex> lock(g_audioState.decoderMutex);
+        if (g_audioState.cancelDecoding.load()) break;
+        g_audioState.decoderCv.wait_for(lock, std::chrono::milliseconds(50), [] {
+          return g_audioState.cancelDecoding.load() ||
+                 g_audioState.needGaplessDecoderHandoff.load(std::memory_order_acquire) ||
+                 (g_audioState.activeDecoder != nullptr &&
+                  g_audioState.decodedFrames.load(std::memory_order_acquire) <
+                  g_audioState.totalFrames.load(std::memory_order_acquire));
+        });
+        continue;
+      }
     }
 
     uint64_t readIdx = g_audioState.pcmIndex.load(std::memory_order_relaxed);
@@ -749,14 +771,9 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
           g_audioState.currentFilePath = g_audioState.nextFilePath;
           g_audioState.nextFilePath = "";
 
-          // Hand over nextActiveDecoder to activeDecoder
-          {
-            std::lock_guard<std::mutex> dlock(g_audioState.decoderMutex);
-            g_audioState.activeDecoder = std::move(g_audioState.nextActiveDecoder);
-          }
-          if (nextDecoded < nextTotal) {
-            g_audioState.decoderCv.notify_one();
-          }
+          // Signal decoder thread to perform decoder swap & cleanup outside real-time USB callback
+          g_audioState.needGaplessDecoderHandoff.store(true, std::memory_order_release);
+          g_audioState.decoderCv.notify_one();
 
           {
             std::lock_guard<std::mutex> lock(g_controlMutex);
@@ -901,10 +918,12 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
         std::lock_guard<std::mutex> dlock(g_audioState.decoderMutex);
         g_audioState.activeDecoder = std::move(g_audioState.nextActiveDecoder);
       }
-      if (handoverDecoded < handoverTotal) {
+      if (g_audioState.decodeThread == nullptr) {
         g_audioState.cancelDecoding.store(false);
         g_audioState.isDecoding.store(true);
         g_audioState.decodeThread = new std::thread(decoder_thread_func);
+      } else {
+        g_audioState.decoderCv.notify_one();
       }
       g_audioState.isSwapping.store(false);
       g_audioState.isPlaying.store(true);
@@ -1404,20 +1423,13 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
     return -3;
   }
 
-  // === STEP 4: SPAWN BACKGROUND DECODE THREAD (IF NEEDED) ===
-  if (g_audioState.decodedFrames.load() < g_audioState.totalFrames.load()) {
+  // === STEP 4: ENSURE BACKGROUND DECODE THREAD IS RUNNING ===
+  if (g_audioState.decodeThread == nullptr) {
     g_audioState.cancelDecoding.store(false);
     g_audioState.isDecoding.store(true);
     g_audioState.decodeThread = new std::thread(decoder_thread_func);
   } else {
-    {
-      std::lock_guard<std::mutex> dlock(g_audioState.decoderMutex);
-      if (g_audioState.activeDecoder != nullptr) {
-        g_audioState.activeDecoder->close();
-        g_audioState.activeDecoder.reset();
-      }
-    }
-    g_audioState.isDecoding.store(false);
+    g_audioState.decoderCv.notify_one();
   }
 
   snprintf(dbg, sizeof(dbg), "=== playAudio SUCCESS: isPlaying=true, activeIsoTransfers=%d ===",
@@ -1452,6 +1464,7 @@ bool resume_audio_internal() {
 void stop_audio_internal() {
   g_audioState.isPlaying = false;
   g_audioState.isSwapping.store(false);
+  g_audioState.needGaplessDecoderHandoff.store(false);
   stop_and_join_decode_thread();
   {
     std::lock_guard<std::mutex> lock(g_audioState.decoderMutex);
@@ -1580,6 +1593,7 @@ bool clear_next_track_internal() {
   g_audioState.prepareNextGen++;
   ApiMutexLock lock(__func__);
   g_audioState.hasNextTrack.store(false);
+  g_audioState.needGaplessDecoderHandoff.store(false);
   g_audioState.nextFilePath = "";
   if (!g_audioState.pcmBufferNext.empty()) {
     g_audioState.pcmBufferNext.clear();
@@ -1629,8 +1643,20 @@ bool seek_to_internal(double targetSeconds) {
     targetFrame = (total > 0) ? (total - 1) : 0;
   }
 
-  if (total > cap && cap > 0) {
-    // Sliding-window Ring Buffer mode: seek file decoder and reset indices
+  // Check if targetFrame is already buffered within the valid RAM window
+  bool inWindow = false;
+  if (cap > 0 && targetFrame < decoded) {
+    uint64_t validStart = (decoded > cap) ? (decoded - cap) : 0;
+    if (targetFrame >= validStart) {
+      inWindow = true;
+    }
+  }
+
+  if (inWindow) {
+    // Instant seek within valid buffered RAM window
+    g_audioState.pcmIndex.store(targetFrame);
+  } else {
+    // Outside current window or ahead of decode: seek decoder & reset streaming pointers uniformly
     std::unique_lock<std::mutex> lock(g_audioState.decoderMutex);
     if (g_audioState.activeDecoder != nullptr) {
       g_audioState.activeDecoder->seek(targetFrame);
@@ -1638,20 +1664,6 @@ bool seek_to_internal(double targetSeconds) {
     g_audioState.decodedFrames.store(targetFrame);
     g_audioState.pcmIndex.store(targetFrame);
     g_audioState.decoderCv.notify_one();
-  } else {
-    // Fully buffered in RAM (or non-ring background decode)
-    if (targetFrame >= decoded && g_audioState.isDecoding.load()) {
-      std::unique_lock<std::mutex> lock(g_audioState.decoderMutex);
-      if (g_audioState.activeDecoder != nullptr) {
-        g_audioState.activeDecoder->seek(targetFrame);
-      }
-      g_audioState.decodedFrames.store(targetFrame);
-      g_audioState.pcmIndex.store(targetFrame);
-      g_audioState.decoderCv.notify_one();
-    } else {
-      if (targetFrame >= decoded) targetFrame = (decoded > 0) ? (decoded - 1) : 0;
-      g_audioState.pcmIndex.store(targetFrame);
-    }
   }
 
   return true;
