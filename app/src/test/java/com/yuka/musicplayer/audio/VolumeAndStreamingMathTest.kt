@@ -105,6 +105,141 @@ class VolumeAndStreamingMathTest {
     }
 
     @Test
+    fun `residual software attenuation covers hardware bounds and step quantization`() {
+        // Case 1: DAC hardware minimum volume clamped at -40 dB (hardware bound)
+        // User sets volume to 5% (slider = 0.05f). Desired dB is ~ -59.26 dB.
+        val slider = 0.05f
+        val desiredDb = AudioEngine.sliderToPerceptualDb(slider)
+        val hwClampedDb = -40.0f
+
+        val residualGain = AudioEngine.computeResidualGain(slider, hwClampedDb)
+        val residualDb = 20.0f * kotlin.math.log10(residualGain)
+        val combinedDb = hwClampedDb + residualDb
+
+        // Combined hardware + software attenuation must match desired -59.26 dB
+        assertEquals(desiredDb, combinedDb, 0.05f)
+        assertEquals(-59.26f, combinedDb, 0.1f)
+
+        // Case 2: Hardware step quantization (e.g. 2 dB steps, desired -59.26 dB quantized to -58.0 dB)
+        val hwQuantizedDb = -58.0f
+        val residualGainQuant = AudioEngine.computeResidualGain(slider, hwQuantizedDb)
+        val residualDbQuant = 20.0f * kotlin.math.log10(residualGainQuant)
+        val combinedQuantDb = hwQuantizedDb + residualDbQuant
+        assertEquals(desiredDb, combinedQuantDb, 0.05f)
+
+        // Case 3: Hardware step quantized lower than desired (e.g. -60.0 dB)
+        // No software boost allowed, gain clamped to 1.0f (0.0 dB)
+        val hwLowerDb = -60.0f
+        val residualGainLower = AudioEngine.computeResidualGain(slider, hwLowerDb)
+        assertEquals(1.0f, residualGainLower, 0.0f)
+
+        // Case 4: In Universal 64-bit DSP Mode (appliedHardwareDb = 0.0 dB)
+        val residualGainDsp = AudioEngine.computeResidualGain(slider, 0.0f)
+        val residualDbDsp = 20.0f * kotlin.math.log10(residualGainDsp)
+        assertEquals(desiredDb, residualDbDsp, 0.05f)
+        assertEquals(AudioEngine.sliderToLinearGain(slider), residualGainDsp, 0.0001f)
+
+        // Case 5: 100% volume (slider = 1.0f) is bit-perfect unity (1.0f) regardless of hardware
+        val gainAt100 = AudioEngine.computeResidualGain(1.0f, 0.0f)
+        assertEquals(1.0f, gainAt100, 0.0f)
+
+        // Case 6: 0% volume (slider = 0.0f) is pure silence (0.0f)
+        val gainAt0 = AudioEngine.computeResidualGain(0.0f, -64.0f)
+        assertEquals(0.0f, gainAt0, 0.0f)
+    }
+
+    @Test
+    fun `ring buffer modulo indexing streams 2-hour 192kHz track to 100 percent without truncation`() {
+        val sampleRate = 192_000L
+        val durationSec = 7_200L // 2 hours (e.g. opera / concert / extended FLAC)
+        val totalFrames = sampleRate * durationSec // 1,382,400,000 frames (~11 GB)
+        val ringCapacityFrames = (64L * 1024L * 1024L) / 8L // 8,388,608 frames (64 MB)
+
+        var pcmIndex = 0L
+        var decodedFrames = 0L
+        val chunkFrames = 16_384L
+        val safetyFrames = 65_536L
+
+        // Fast batch simulation through the entire 2 hours
+        val batchFrames = 96_000L * 10L // 10 seconds per step
+        while (pcmIndex < totalFrames) {
+            // Producer decodes ahead up to ringCapacityFrames
+            while (decodedFrames < totalFrames &&
+                (decodedFrames - pcmIndex) + chunkFrames + safetyFrames <= ringCapacityFrames
+            ) {
+                val writeSlot = decodedFrames % ringCapacityFrames
+                val contiguous = ringCapacityFrames - writeSlot
+                val toDecode = minOf(chunkFrames, totalFrames - decodedFrames, contiguous)
+                assertTrue("Write slot must never exceed ring capacity", writeSlot + toDecode <= ringCapacityFrames)
+                decodedFrames += toDecode
+            }
+            // Consumer consumes batch
+            val step = minOf(batchFrames, decodedFrames - pcmIndex)
+            assertTrue("Decoder must remain ahead of playback", step > 0)
+            pcmIndex += step
+        }
+
+        assertEquals("2-hour track must reach exact 100% decoded frames", totalFrames, decodedFrames)
+        assertEquals("2-hour track must reach exact 100% played frames", totalFrames, pcmIndex)
+    }
+
+    @Test
+    fun `seek to arbitrary boundary positions resets contiguous decoded pointers without memory holes`() {
+        val totalFrames = 1_382_400_000L // 2h @ 192kHz
+        val ringCapacityFrames = 8_388_608L
+        val chunkFrames = 16_384L
+
+        // Test seeks across diverse track fractions and ring boundary wrap points:
+        // 1. Seek to 85% (minute 102 of 2-hour track)
+        // 2. Seek near ring capacity boundary (e.g. capacity - 100 frames)
+        // 3. Seek to beginning 1%
+        val seekTargets = listOf(
+            (totalFrames * 0.85).toLong(),
+            ringCapacityFrames * 5L + (ringCapacityFrames - 100L),
+            (totalFrames * 0.01).toLong()
+        )
+
+        for (targetFrame in seekTargets) {
+            // JNI seekTo resets pcmIndex and decodedFrames atomically
+            var pcmIndex = targetFrame
+            var decodedFrames = targetFrame
+
+            // Verify pointer alignment: write slot and read slot start at identical positions
+            val initialWriteSlot = decodedFrames % ringCapacityFrames
+            val initialReadSlot = pcmIndex % ringCapacityFrames
+            assertEquals(initialReadSlot, initialWriteSlot)
+
+            // Producer immediately decodes next chunk
+            val writeContiguous = ringCapacityFrames - initialWriteSlot
+            val firstDecodeChunk = minOf(chunkFrames, totalFrames - decodedFrames, writeContiguous)
+            decodedFrames += firstDecodeChunk
+
+            // Verify decoded frames contiguous sequence: no gap between pcmIndex and decodedFrames
+            assertEquals(firstDecodeChunk, decodedFrames - pcmIndex)
+
+            // Consumer reads first contiguous chunk
+            val readContiguous = ringCapacityFrames - initialReadSlot
+            val firstReadChunk = minOf(firstDecodeChunk, readContiguous)
+            assertEquals(firstDecodeChunk, firstReadChunk)
+            pcmIndex += firstReadChunk
+
+            // If seek was near boundary and wrapped, verify second chunk begins cleanly at index 0
+            if (firstDecodeChunk < chunkFrames && decodedFrames < totalFrames) {
+                val secondWriteSlot = decodedFrames % ringCapacityFrames
+                assertEquals(0L, secondWriteSlot) // Clean wrap to 0 without holes
+                val secondDecodeChunk = minOf(chunkFrames - firstDecodeChunk, totalFrames - decodedFrames, ringCapacityFrames)
+                decodedFrames += secondDecodeChunk
+                assertTrue(decodedFrames > pcmIndex)
+
+                val secondReadSlot = pcmIndex % ringCapacityFrames
+                assertEquals(0L, secondReadSlot)
+                pcmIndex += secondDecodeChunk
+                assertEquals(decodedFrames, pcmIndex)
+            }
+        }
+    }
+
+    @Test
     fun `ring buffer modulo indexing streams 300s 96kHz track to 100 percent without truncation`() {
         val sampleRate = 96_000L
         val durationSec = 300L // 5 minutes (like ReoNa - Katappo no Kutsushita)

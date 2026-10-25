@@ -89,7 +89,7 @@ fun VolumeModalSheet(
         val trackBgColor = m3SubtleFill(alpha = 0.12f)
         val trackFillColor = accent.copy(alpha = 0.36f)
 
-        val isHwMode = isHardwareVolumeActive || isHardwareVolumeEnabled
+        val isHwMode = isHardwareVolumeActive || (isHardwareVolumeSupported && isHardwareVolumeEnabled)
         val modeBadgeText = if (isHwMode) "HYBRID HARDWARE UAC" else "UNIVERSAL 64-BIT DSP"
         val badgeColor = if (isHwMode) Color(0xFFFFD700) else accent
 

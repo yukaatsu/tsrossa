@@ -94,6 +94,26 @@ class AudioEngine {
             if (rawTarget > maxDb.toInt()) rawTarget = maxDb.toInt()
             return rawTarget.toShort()
         }
+
+        /**
+         * Calculates residual software attenuation to complement hardware attenuation.
+         * When hardware volume is active, hardware attenuates by [appliedHardwareDb].
+         * The residual dB is (desiredDb - appliedHardwareDb).
+         * If residual dB < -0.05 dB, returns linear gain 10^(residualDb / 20.0).
+         * Otherwise returns 1.0f (exact bit-perfect unity).
+         */
+        @JvmStatic
+        fun computeResidualGain(slider: Float, appliedHardwareDb: Float): Float {
+            if (slider <= 0.0f) return 0.0f
+            if (slider >= 1.0f) return 1.0f
+            val desiredDb = sliderToPerceptualDb(slider)
+            val residualDb = desiredDb - appliedHardwareDb
+            return if (residualDb < -0.05f) {
+                Math.pow(10.0, (residualDb / 20.0)).toFloat()
+            } else {
+                1.0f
+            }
+        }
     }
 
 
