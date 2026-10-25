@@ -31,4 +31,56 @@ class VolumeAndStreamingMathTest {
         // 10^(-59.26 / 20) ≈ 0.001089
         assertTrue("Gain at 5% should be ~0.0011, got $gainAt5Percent", gainAt5Percent in 0.0010f..0.0012f)
     }
+
+    @Test
+    fun `uac volume range validation preserves valid range and provides -64dB fallback for broken range`() {
+        // Valid range: -96 dB to 0 dB, step 0.5 dB (128)
+        val valid = AudioEngine.sanitizeUacVolumeRange((-24576).toShort(), 0.toShort(), 128.toShort())
+        assertEquals((-24576).toShort(), valid.minDb)
+        assertEquals(0.toShort(), valid.maxDb)
+        assertEquals(128.toShort(), valid.resDb)
+
+        // Invalid inverted range: min >= max
+        val inverted = AudioEngine.sanitizeUacVolumeRange(0.toShort(), (-100).toShort(), 256.toShort())
+        assertEquals((-16384).toShort(), inverted.minDb) // -64 dB fallback
+        assertEquals(0.toShort(), inverted.maxDb)
+        assertEquals(256.toShort(), inverted.resDb)
+
+        // Invalid shallow range (< 6 dB, e.g. 4 dB)
+        val shallow = AudioEngine.sanitizeUacVolumeRange((-1024).toShort(), 0.toShort(), 256.toShort())
+        assertEquals((-16384).toShort(), shallow.minDb)
+        assertEquals(0.toShort(), shallow.maxDb)
+
+        // Invalid zero or negative step -> defaults to 256 (1 dB)
+        val zeroStep = AudioEngine.sanitizeUacVolumeRange((-16384).toShort(), 0.toShort(), 0.toShort())
+        assertEquals(256.toShort(), zeroStep.resDb)
+    }
+
+    @Test
+    fun `hardware volume target locks to 0dB in 64-bit DSP mode and applies step quantization in hardware mode`() {
+        val minDb = (-16384).toShort() // -64 dB
+        val maxDb = 0.toShort()        //   0 dB
+        val resDb = 256.toShort()      //   1 dB step
+
+        // In 64-Bit DSP mode (preferHardwareVolume = false), hardware register is locked at 0 dB (maxDb)
+        val targetDspMode = AudioEngine.quantizeHardwareVolumeTarget(0.5f, minDb, maxDb, resDb, preferHardwareVolume = false)
+        assertEquals(maxDb, targetDspMode)
+
+        // In Hardware Volume mode at 100% volume -> 0 dB (maxDb)
+        val targetHw100 = AudioEngine.quantizeHardwareVolumeTarget(1.0f, minDb, maxDb, resDb, preferHardwareVolume = true)
+        assertEquals(maxDb, targetHw100)
+
+        // In Hardware Volume mode at 0% volume -> minDb (-64 dB)
+        val targetHw0 = AudioEngine.quantizeHardwareVolumeTarget(0.0f, minDb, maxDb, resDb, preferHardwareVolume = true)
+        assertEquals(minDb, targetHw0)
+
+        // In Hardware Volume mode at 5% volume: desired ~ -59.26 dB -> rounded to nearest 1 dB step = -59 dB (-15104)
+        val targetHw5 = AudioEngine.quantizeHardwareVolumeTarget(0.05f, minDb, maxDb, resDb, preferHardwareVolume = true)
+        assertEquals((-59 * 256).toShort(), targetHw5)
+
+        // Test with 2 dB step (512): -59 dB quantizes to -58 dB (-14848) or -60 dB (-15360)
+        val resDb2 = 512.toShort()
+        val targetHw5Step2 = AudioEngine.quantizeHardwareVolumeTarget(0.05f, minDb, maxDb, resDb2, preferHardwareVolume = true)
+        assertEquals(0, targetHw5Step2.toInt() % 512)
+    }
 }

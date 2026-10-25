@@ -12,6 +12,12 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+static inline void lib_usb_clear_halt_if_needed() {
+  if (g_audioState.usbHandle != nullptr) {
+    libusb_clear_halt(g_audioState.usbHandle, 0);
+  }
+}
+
 void control_thread_func() {
   while (!g_audioState.stopControlThread.load()) {
     ControlRequest req;
@@ -96,55 +102,88 @@ void control_thread_func() {
       continue;
 
     if (req.type == 1) { // SET_CUR Volume
-      int target_db;
-      if (req.volume <= 0.01f) {
-        target_db = g_audioState.minVolumeDb;
-      } else {
-        float db = 20.0f * std::log10(req.volume);
-        target_db = g_audioState.maxVolumeDb + (int)(db * 256.0f);
-        if (target_db < g_audioState.minVolumeDb)
-          target_db = g_audioState.minVolumeDb;
-      }
-      if (target_db > g_audioState.maxVolumeDb)
-        target_db = g_audioState.maxVolumeDb;
+      if (g_audioState.usbHandle != nullptr && g_audioState.isHardwareVolumeSupported.load() &&
+          g_audioState.featureUnitId.load() > 0) {
+        int16_t target_db = g_audioState.maxVolumeDb.load();
+        float desired_db = 0.0f;
 
-      uint16_t vol_data = (uint16_t)target_db;
-      unsigned char *raw_buf = (unsigned char *)&vol_data;
-      LOGI("USBExclusive: [HEX DUMP] Sending SET_CUR Volume | req.vol=%.3f, "
-           "target_db_dec=%d | Raw Byte Array (Little Endian): [%02X %02X]",
-           req.volume, target_db, raw_buf[0], raw_buf[1]);
-
-      int r = -1;
-      int retries = 3;
-      while (retries >= 0) {
-        if (g_audioState.uacVersion == 1 || g_audioState.uacVersion == 2) {
-          if (g_audioState.volumeChannel == 0) {
-            r = libusb_control_transfer(
-                g_audioState.usbHandle, 0x21, 0x01, (0x02 << 8) | 0,
-                (g_audioState.featureUnitId << 8) | g_audioState.acInterfaceNum,
-                raw_buf, 2, 100);
-          } else {
-            r = libusb_control_transfer(
-                g_audioState.usbHandle, 0x21, 0x01, (0x02 << 8) | 1,
-                (g_audioState.featureUnitId << 8) | g_audioState.acInterfaceNum,
-                raw_buf, 2, 100);
-            libusb_control_transfer(
-                g_audioState.usbHandle, 0x21, 0x01, (0x02 << 8) | 2,
-                (g_audioState.featureUnitId << 8) | g_audioState.acInterfaceNum,
-                raw_buf, 2, 100);
+        if (!g_audioState.preferHardwareVolume.load()) {
+          // In Universal 64-Bit DSP Mode, lock DAC hardware at 0dB (maxVolumeDb)
+          target_db = g_audioState.maxVolumeDb.load();
+          desired_db = 0.0f;
+        } else if (req.volume <= 0.0f) {
+          target_db = g_audioState.minVolumeDb.load();
+          desired_db = -128.0f;
+        } else {
+          desired_db = compute_perceptual_db(req.volume);
+          int32_t raw_target = (int32_t)g_audioState.maxVolumeDb.load() +
+                               (int32_t)std::lround(desired_db * 256.0f);
+          int16_t step = (g_audioState.resVolumeDb.load() > 0) ? g_audioState.resVolumeDb.load() : 1;
+          if (step > 1) {
+            raw_target = ((raw_target - g_audioState.maxVolumeDb.load()) / step) * step +
+                         g_audioState.maxVolumeDb.load();
           }
+          if (raw_target < g_audioState.minVolumeDb.load())
+            raw_target = g_audioState.minVolumeDb.load();
+          if (raw_target > g_audioState.maxVolumeDb.load())
+            raw_target = g_audioState.maxVolumeDb.load();
+          target_db = (int16_t)raw_target;
         }
-        if (r >= 0)
-          break;
-        retries--;
-        if (retries >= 0)
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-      if (r < 0) {
-        LOGE("Hardware volume SET_CUR failed! Falling back to software volume.");
+
+        uint8_t vol_buf[2] = {(uint8_t)(target_db & 0xFF),
+                              (uint8_t)((target_db >> 8) & 0xFF)};
+        int r_master = -1;
+        int r_ch = -1;
+        uint8_t ac_iface = (uint8_t)(g_audioState.acInterfaceNum.load() & 0xFF);
+        uint16_t wIndex = (uint16_t)((g_audioState.featureUnitId.load() << 8) | ac_iface);
+
+        if (g_audioState.volumeMasterSupported.load() || g_audioState.volumeChannel.load() == 0) {
+          r_master = libusb_control_transfer(
+              g_audioState.usbHandle, 0x21, 0x01, (0x02 << 8) | 0x00,
+              wIndex, vol_buf, 2, 200);
+          if (r_master < 0) lib_usb_clear_halt_if_needed();
+        }
+        if (g_audioState.volumePerChannelSupported.load() || g_audioState.volumeChannel.load() != 0 || r_master < 0) {
+          int r1 = libusb_control_transfer(
+              g_audioState.usbHandle, 0x21, 0x01, (0x02 << 8) | 0x01,
+              wIndex, vol_buf, 2, 200);
+          if (r1 < 0) lib_usb_clear_halt_if_needed();
+          int r2 = libusb_control_transfer(
+              g_audioState.usbHandle, 0x21, 0x01, (0x02 << 8) | 0x02,
+              wIndex, vol_buf, 2, 200);
+          if (r2 < 0) lib_usb_clear_halt_if_needed();
+          r_ch = (r1 >= 0 || r2 >= 0) ? 2 : -1;
+        }
+
+        if (r_master >= 0 || r_ch >= 0) {
+          if (g_audioState.preferHardwareVolume.load()) {
+            int16_t actual_target_db = target_db;
+            uint8_t cur_buf[2] = {0, 0};
+            int ch_to_read = (r_master >= 0) ? 0 : 1;
+            uint8_t req_cur = (g_audioState.uacVersion.load() == 1) ? 0x81 : 0x01;
+            int r_cur = libusb_control_transfer(
+                g_audioState.usbHandle, 0xA1, req_cur, (0x02 << 8) | ch_to_read,
+                wIndex, cur_buf, 2, 100);
+            if (r_cur == 2) {
+              actual_target_db = (int16_t)(cur_buf[0] | (cur_buf[1] << 8));
+            } else if (r_cur < 0) {
+              lib_usb_clear_halt_if_needed();
+            }
+            float actual_hw_db = (float)(actual_target_db - g_audioState.maxVolumeDb.load()) / 256.0f;
+            g_audioState.appliedHardwareDb.store(actual_hw_db);
+            g_audioState.isHardwareVolumeActive.store(true);
+          } else {
+            g_audioState.appliedHardwareDb.store(0.0f);
+            g_audioState.isHardwareVolumeActive.store(false);
+          }
+        } else {
+          LOGW("Hardware volume SET_CUR failed, falling back to 64-bit DSP volume");
+          g_audioState.appliedHardwareDb.store(0.0f);
+          g_audioState.isHardwareVolumeActive.store(false);
+        }
+      } else {
+        g_audioState.appliedHardwareDb.store(0.0f);
         g_audioState.isHardwareVolumeActive.store(false);
-        float scaled_vol = calculate_scaled_volume(g_audioState.rawLinearVolume);
-        g_audioState.targetVolume.store(scaled_vol);
       }
     } else if (req.type == 2) { // SET_CUR Sample Rate
       unsigned char data[4] = {0};
@@ -170,6 +209,34 @@ void control_thread_func() {
                                        req.altSetting);
     }
   }
+}
+
+void set_volume(float volume) {
+  g_audioState.rawLinearVolume = volume;
+  ControlRequest req;
+  req.type = 1; // SET_CUR Volume
+  req.volume = volume;
+  {
+    std::lock_guard<std::mutex> lock(g_controlMutex);
+    std::queue<ControlRequest> new_queue;
+    while (!g_controlQueue.empty()) {
+      ControlRequest r = g_controlQueue.front();
+      g_controlQueue.pop();
+      if (r.type != 1) new_queue.push(r);
+    }
+    new_queue.push(req);
+    g_controlQueue = new_queue;
+    g_controlCv.notify_one();
+  }
+}
+
+void set_hardware_volume_enabled(bool enabled) {
+  g_audioState.preferHardwareVolume.store(enabled);
+  set_volume(g_audioState.rawLinearVolume);
+}
+
+bool is_hardware_volume_enabled() {
+  return g_audioState.preferHardwareVolume.load();
 }
 
 int get_subframe_size(const struct libusb_interface_descriptor *alt) {
@@ -371,6 +438,12 @@ void close_usb_dac_internal() {
     g_audioState.lastIsoPacketTimeNs.store(0);
     g_audioState.isWarmingUp.store(false);
     g_audioState.warmupSilenceFrames.store(0);
+    g_audioState.isHardwareVolumeActive.store(false);
+    g_audioState.isHardwareVolumeSupported.store(false);
+    g_audioState.appliedHardwareDb.store(0.0f);
+    g_audioState.volumeMasterSupported.store(false);
+    g_audioState.volumePerChannelSupported.store(false);
+    g_audioState.featureUnitId.store(-1);
     g_audioState.currentFilePath = "";
     g_audioState.nextFilePath = "";
     g_audioState.hasNextTrack.store(false);
@@ -518,6 +591,10 @@ bool init_usb_dac_internal(int fd) {
   g_audioState.clockSelectorPin = 1;
   g_audioState.sourceBitDepthNext.store(0);
   g_audioState.isHardwareVolumeActive.store(false);
+  g_audioState.isHardwareVolumeSupported.store(false);
+  g_audioState.volumeMasterSupported.store(false);
+  g_audioState.volumePerChannelSupported.store(false);
+  g_audioState.appliedHardwareDb.store(0.0f);
   g_audioState.deviceWedged.store(false);
   g_audioState.isSwapping.store(false);
   g_audioState.swappingZeroUrbCount.store(0);
@@ -538,6 +615,8 @@ bool init_usb_dac_internal(int fd) {
     int id;
     int sourceId;
     int volumeChannel;
+    bool masterSupported = false;
+    bool perChannelSupported = false;
   };
 
   std::vector<ClockSourceCandidate> clockSources;
@@ -598,22 +677,33 @@ bool init_usb_dac_internal(int fd) {
             } else if (subtype == 0x06) { // FEATURE_UNIT
               int unitId = alt->extra[pos + 3];
               int srcId = (len >= 5) ? alt->extra[pos + 4] : -1;
-              int bmaPos =
-                  (g_audioState.uacVersion.load() == 1) ? pos + 6 : pos + 5;
-              int volCh = 0;
-              if (bmaPos < pos + len) {
-                uint8_t masterControls = alt->extra[bmaPos];
-                bool hasMasterVol = false;
-                if (g_audioState.uacVersion.load() == 1 &&
-                    (masterControls & 0x02))
-                  hasMasterVol = true;
-                if (g_audioState.uacVersion.load() == 2 &&
-                    (masterControls & 0x0C))
-                  hasMasterVol = true;
+              bool masterVol = false;
+              bool ch1Vol = false;
 
-                volCh = hasMasterVol ? 0 : 1;
+              if (g_audioState.uacVersion.load() == 1) {
+                int bControlSize = (len >= 6) ? alt->extra[pos + 5] : 1;
+                if (bControlSize <= 0) bControlSize = 1;
+                int masterPos = pos + 6;
+                uint8_t masterControls = (masterPos < pos + len) ? alt->extra[masterPos] : 0;
+                int ch1Pos = masterPos + bControlSize;
+                uint8_t ch1Controls = (ch1Pos < pos + len) ? alt->extra[ch1Pos] : 0;
+                int numChannels = (len > 7 && bControlSize > 0) ? ((len - 7) / bControlSize) : 0;
+
+                masterVol = (masterControls & 0x02) != 0;
+                ch1Vol = (numChannels >= 1) && ((ch1Controls & 0x02) != 0);
+              } else { // UAC2
+                int masterPos = pos + 5;
+                uint8_t masterControls = (masterPos < pos + len) ? alt->extra[masterPos] : 0;
+                int ch1Pos = masterPos + 4;
+                uint8_t ch1Controls = (ch1Pos < pos + len) ? alt->extra[ch1Pos] : 0;
+                int numChannels = (len > 6) ? ((len - 6) / 4 - 1) : 0;
+
+                masterVol = (masterControls & 0x0C) != 0;
+                ch1Vol = (numChannels >= 1) && ((ch1Controls & 0x0C) != 0);
               }
-              featureUnits.push_back({unitId, srcId, volCh});
+
+              int volCh = masterVol ? 0 : (ch1Vol ? 1 : 0);
+              featureUnits.push_back({unitId, srcId, volCh, masterVol, ch1Vol});
             } else if (subtype == 0x0A &&
                        g_audioState.uacVersion.load() == 2) { // CLOCK_SOURCE
               uint8_t clockId = alt->extra[pos + 3];
@@ -652,6 +742,15 @@ bool init_usb_dac_internal(int fd) {
     }
     g_audioState.featureUnitId.store(chosenFu.id);
     g_audioState.volumeChannel.store(chosenFu.volumeChannel);
+    g_audioState.volumeMasterSupported.store(chosenFu.masterSupported);
+    g_audioState.volumePerChannelSupported.store(chosenFu.perChannelSupported);
+    g_audioState.isHardwareVolumeSupported.store(chosenFu.masterSupported || chosenFu.perChannelSupported);
+  } else {
+    g_audioState.featureUnitId.store(-1);
+    g_audioState.volumeChannel.store(0);
+    g_audioState.volumeMasterSupported.store(false);
+    g_audioState.volumePerChannelSupported.store(false);
+    g_audioState.isHardwareVolumeSupported.store(false);
   }
 
   // Resolve Playback Clock Source (avoid selecting Microphone Capture Clock Source on headset DACs)
@@ -1011,11 +1110,6 @@ bool init_usb_dac_internal(int fd) {
           g_audioState.usbHandle, desc.iProduct, string_buf, sizeof(string_buf));
       if (string_res > 0) {
         g_audioState.dacProductName = std::string(reinterpret_cast<char*>(string_buf), string_res);
-        std::string lowerProduct = g_audioState.dacProductName;
-        std::transform(lowerProduct.begin(), lowerProduct.end(), lowerProduct.begin(), ::tolower);
-        if (lowerProduct.find("celest") != std::string::npos || lowerProduct.find("ruyi") != std::string::npos) {
-          g_audioState.isForceSoftwareVolume.store(true);
-        }
       }
     }
 
@@ -1033,70 +1127,99 @@ bool init_usb_dac_internal(int fd) {
                                       g_audioState.claimedInterfaces.end(),
                                       g_audioState.acInterfaceNum.load()) !=
                             g_audioState.claimedInterfaces.end();
-  if (!g_audioState.isForceSoftwareVolume.load() && g_audioState.featureUnitId != -1 && acInterfaceClaimed) {
-    g_audioState.isHardwareVolumeActive.store(true);
-    g_audioState.targetVolume.store(1.0f); // Bit-Perfect
-    if (g_audioState.uacVersion == 1) {
-      uint16_t min_vol = 0, max_vol = 0;
-      libusb_control_transfer(g_audioState.usbHandle, 0xA1, 0x82,
-                              (0x02 << 8) | g_audioState.volumeChannel,
-                              (g_audioState.featureUnitId << 8) |
-                                  g_audioState.acInterfaceNum,
-                              (unsigned char *)&min_vol, 2, 1000);
-      libusb_control_transfer(g_audioState.usbHandle, 0xA1, 0x83,
-                              (0x02 << 8) | g_audioState.volumeChannel,
-                              (g_audioState.featureUnitId << 8) |
-                                  g_audioState.acInterfaceNum,
-                              (unsigned char *)&max_vol, 2, 1000);
-      g_audioState.minVolumeDb = (int16_t)min_vol;
-      g_audioState.maxVolumeDb = (int16_t)max_vol;
-      LOGI("UAC1 Volume Range: min=%.2fdB, max=%.2fdB",
-           (float)g_audioState.minVolumeDb / 256.0f, (float)g_audioState.maxVolumeDb / 256.0f);
+  if (g_audioState.isHardwareVolumeSupported.load() &&
+      g_audioState.featureUnitId.load() > 0 && acInterfaceClaimed) {
+    bool rangeValid = false;
+    uint8_t ac_iface = (uint8_t)(g_audioState.acInterfaceNum.load() & 0xFF);
+    uint16_t wIndex = (uint16_t)((g_audioState.featureUnitId.load() << 8) | ac_iface);
+    int ch = g_audioState.volumeChannel.load();
+
+    if (g_audioState.uacVersion.load() == 1) {
+      uint8_t min_buf[2] = {0, 0};
+      uint8_t max_buf[2] = {0, 0};
+      uint8_t res_buf[2] = {0, 1};
+      int rMin = libusb_control_transfer(
+          g_audioState.usbHandle, 0xA1, 0x82,
+          (0x02 << 8) | ch,
+          wIndex, min_buf, 2, 1000);
+      if (rMin < 0) lib_usb_clear_halt_if_needed();
+
+      int rMax = libusb_control_transfer(
+          g_audioState.usbHandle, 0xA1, 0x83,
+          (0x02 << 8) | ch,
+          wIndex, max_buf, 2, 1000);
+      if (rMax < 0) lib_usb_clear_halt_if_needed();
+
+      int rRes = libusb_control_transfer(
+          g_audioState.usbHandle, 0xA1, 0x84,
+          (0x02 << 8) | ch,
+          wIndex, res_buf, 2, 1000);
+      if (rRes < 0) lib_usb_clear_halt_if_needed();
+
+      if (rMin == 2 && rMax == 2) {
+        g_audioState.minVolumeDb.store((int16_t)((min_buf[1] << 8) | min_buf[0]));
+        g_audioState.maxVolumeDb.store((int16_t)((max_buf[1] << 8) | max_buf[0]));
+        int16_t res = (rRes == 2) ? (int16_t)((res_buf[1] << 8) | res_buf[0]) : 256;
+        if (res <= 0) res = 256;
+        g_audioState.resVolumeDb.store(res);
+        rangeValid = (g_audioState.minVolumeDb.load() < g_audioState.maxVolumeDb.load()) &&
+                     ((g_audioState.maxVolumeDb.load() - g_audioState.minVolumeDb.load()) >= (6 * 256));
+      }
     } else {
-      for (int ch = 0; ch <= 2; ch++) {
-        unsigned char range_buf[256] = {0};
-        int r = libusb_control_transfer(g_audioState.usbHandle, 0xA1, 0x02,
-                                        (0x02 << 8) | ch,
-                                        (g_audioState.featureUnitId << 8) |
-                                            g_audioState.acInterfaceNum,
-                                        range_buf, sizeof(range_buf), 1000);
-        if (r >= 2) {
-          int num_subranges = range_buf[0] | (range_buf[1] << 8);
-          for (int s = 0; s < num_subranges; s++) {
-            int offset = 2 + (s * 6);
-            if (offset + 6 <= r) {
-              int16_t sub_min = (int16_t)(range_buf[offset] | (range_buf[offset + 1] << 8));
-              int16_t sub_max = (int16_t)(range_buf[offset + 2] | (range_buf[offset + 3] << 8));
-              int16_t sub_res = (int16_t)(range_buf[offset + 4] | (range_buf[offset + 5] << 8));
-              LOGI("UAC2 Volume Range [ch=%d, sub=%d]: min=%d (%.2fdB), max=%d (%.2fdB), res=%d (%.2fdB)",
-                   ch, s, sub_min, (float)sub_min / 256.0f, sub_max, (float)sub_max / 256.0f, sub_res, (float)sub_res / 256.0f);
-              if (ch == g_audioState.volumeChannel || ch == 0) {
-                g_audioState.minVolumeDb = sub_min;
-                g_audioState.maxVolumeDb = sub_max;
-              }
-            }
+      uint8_t range_buf[64];
+      memset(range_buf, 0, sizeof(range_buf));
+      int r = libusb_control_transfer(
+          g_audioState.usbHandle, 0xA1, 0x02,
+          (0x02 << 8) | ch,
+          wIndex, range_buf,
+          sizeof(range_buf), 1000);
+      if (r < 0) {
+        r = libusb_control_transfer(
+            g_audioState.usbHandle, 0xA1, 0x82,
+            (0x02 << 8) | ch,
+            wIndex, range_buf,
+            sizeof(range_buf), 1000);
+      }
+      if (r >= 8) {
+        uint16_t num_subranges = range_buf[0] | (range_buf[1] << 8);
+        if (num_subranges >= 1) {
+          g_audioState.minVolumeDb.store((int16_t)(range_buf[2] | (range_buf[3] << 8)));
+          g_audioState.maxVolumeDb.store((int16_t)(range_buf[4] | (range_buf[5] << 8)));
+          int16_t res = (int16_t)(range_buf[6] | (range_buf[7] << 8));
+          if (res <= 0) res = 256;
+          g_audioState.resVolumeDb.store(res);
+
+          for (int i = 1; i < num_subranges && (2 + i * 6 + 5) < r; i++) {
+            int16_t next_min = (int16_t)(range_buf[2 + i * 6] | (range_buf[2 + i * 6 + 1] << 8));
+            int16_t next_max = (int16_t)(range_buf[2 + i * 6 + 2] | (range_buf[2 + i * 6 + 3] << 8));
+            if (next_min < g_audioState.minVolumeDb.load()) g_audioState.minVolumeDb.store(next_min);
+            if (next_max > g_audioState.maxVolumeDb.load()) g_audioState.maxVolumeDb.store(next_max);
           }
+          rangeValid = (g_audioState.minVolumeDb.load() < g_audioState.maxVolumeDb.load()) &&
+                       ((g_audioState.maxVolumeDb.load() - g_audioState.minVolumeDb.load()) >= (6 * 256));
         }
-      }
-
-      if (g_audioState.minVolumeDb >= g_audioState.maxVolumeDb) {
-        g_audioState.minVolumeDb = -32512; // -127 dB * 256
-        g_audioState.maxVolumeDb = 0;
+      } else {
+        lib_usb_clear_halt_if_needed();
       }
     }
 
-    ControlRequest initVolReq;
-    initVolReq.type = 1;
-    initVolReq.volume = g_audioState.rawLinearVolume;
-    {
-      std::lock_guard<std::mutex> lock(g_controlMutex);
-      g_controlQueue.push(initVolReq);
-      g_controlCv.notify_one();
+    if (!rangeValid) {
+      LOGW("DAC reported invalid/shallow UAC volume range (min=%d, max=%d). Using standard fallback.",
+           g_audioState.minVolumeDb.load(), g_audioState.maxVolumeDb.load());
+      g_audioState.minVolumeDb.store(-16384); // -64 dB
+      g_audioState.maxVolumeDb.store(0);      //   0 dB
+      g_audioState.resVolumeDb.store(256);    //   1 dB
     }
+
+    LOGI("Hardware Volume Initialized: min=%.2fdB, max=%.2fdB, res=%.2fdB, preferHw=%d",
+         (float)g_audioState.minVolumeDb.load() / 256.0f,
+         (float)g_audioState.maxVolumeDb.load() / 256.0f,
+         (float)g_audioState.resVolumeDb.load() / 256.0f,
+         g_audioState.preferHardwareVolume.load());
+    set_volume(g_audioState.rawLinearVolume);
   } else {
     g_audioState.isHardwareVolumeActive.store(false);
-    float scaled_vol = calculate_scaled_volume(g_audioState.rawLinearVolume);
-    g_audioState.targetVolume.store(scaled_vol);
+    g_audioState.appliedHardwareDb.store(0.0f);
   }
 
   snprintf(dbg, sizeof(dbg), "=== initUsbDac SUCCESS: VID=%04X, PID=%04X, Product='%s', Manufacturer='%s', UAC=%d, Claimed=%zu ifaces ===",

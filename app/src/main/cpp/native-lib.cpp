@@ -61,22 +61,8 @@ Java_com_yuka_musicplayer_audio_AudioEngine_setSoftwareVolume(JNIEnv *env, jobje
   ApiMutexLock lock(__func__);
   g_audioState.rawLinearVolume = vol;
 
-  if (g_audioState.isHardwareVolumeActive.load()) {
-    ControlRequest req;
-    req.type = 1;
-    req.volume = vol;
-    {
-      std::lock_guard<std::mutex> lock2(g_controlMutex);
-      std::queue<ControlRequest> new_queue;
-      while (!g_controlQueue.empty()) {
-        ControlRequest r = g_controlQueue.front();
-        g_controlQueue.pop();
-        if (r.type != 1) new_queue.push(r);
-      }
-      new_queue.push(req);
-      g_controlQueue = new_queue;
-      g_controlCv.notify_one();
-    }
+  if (g_audioState.preferHardwareVolume.load() && g_audioState.isHardwareVolumeSupported.load()) {
+    set_volume(vol);
   }
 
   float scaled_vol = calculate_scaled_volume(vol);
@@ -172,6 +158,22 @@ Java_com_yuka_musicplayer_audio_AudioEngine_prepareNextTrack(JNIEnv *env, jobjec
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_isHardwareVolumeSupported(JNIEnv *env, jobject thiz) {
+  return g_audioState.isHardwareVolumeSupported.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_setHardwareVolumeEnabled(JNIEnv *env, jobject thiz, jboolean enabled) {
+  ApiMutexLock lock(__func__);
+  set_hardware_volume_enabled(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_isHardwareVolumeEnabled(JNIEnv *env, jobject thiz) {
+  return is_hardware_volume_enabled() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_yuka_musicplayer_audio_AudioEngine_isHardwareVolumeActive(JNIEnv *env, jobject thiz) {
   return g_audioState.isHardwareVolumeActive.load() ? JNI_TRUE : JNI_FALSE;
 }
@@ -252,6 +254,8 @@ Java_com_yuka_musicplayer_audio_AudioEngine_getDacInfo(JNIEnv *env, jobject thiz
   json += "\"vid\":" + std::to_string(g_audioState.dacVid.load()) + ",";
   json += "\"pid\":" + std::to_string(g_audioState.dacPid.load()) + ",";
   json += "\"isHardwareVolumeActive\":" + std::string(g_audioState.isHardwareVolumeActive.load() ? "true" : "false") + ",";
+  json += "\"isHardwareVolumeSupported\":" + std::string(g_audioState.isHardwareVolumeSupported.load() ? "true" : "false") + ",";
+  json += "\"isHardwareVolumeEnabled\":" + std::string(g_audioState.preferHardwareVolume.load() ? "true" : "false") + ",";
   json += "\"isForceSoftwareVolume\":" + std::string(g_audioState.isForceSoftwareVolume.load() ? "true" : "false") + ",";
   json += "\"minVolumeDb\":" + std::to_string(g_audioState.minVolumeDb.load()) + ",";
   json += "\"maxVolumeDb\":" + std::to_string(g_audioState.maxVolumeDb.load()) + ",";

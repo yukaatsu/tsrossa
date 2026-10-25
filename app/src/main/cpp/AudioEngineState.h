@@ -156,8 +156,8 @@ struct AudioEngineState {
   std::atomic<float> appliedHardwareDb{0.0f}; // Actual dB currently absorbed by DAC hardware
   std::atomic<int> featureUnitId{-1};
   std::atomic<int> volumeChannel{0};
-  bool volumeMasterSupported = false;
-  bool volumePerChannelSupported = false;
+  std::atomic<bool> volumeMasterSupported{false};
+  std::atomic<bool> volumePerChannelSupported{false};
   std::atomic<int16_t> minVolumeDb{-32768};
   std::atomic<int16_t> maxVolumeDb{0};
   std::atomic<int16_t> resVolumeDb{256};

@@ -53,6 +53,47 @@ class AudioEngine {
             val db = sliderToPerceptualDb(slider)
             return Math.pow(10.0, (db / 20.0)).toFloat()
         }
+
+        data class UacVolumeRange(val minDb: Short, val maxDb: Short, val resDb: Short)
+
+        @JvmStatic
+        fun sanitizeUacVolumeRange(minDb: Short, maxDb: Short, resDb: Short): UacVolumeRange {
+            val minInt = minDb.toInt()
+            val maxInt = maxDb.toInt()
+            val isValid = (minInt < maxInt) && ((maxInt - minInt) >= (6 * 256))
+            return if (isValid) {
+                val step = if (resDb <= 0) 256.toShort() else resDb
+                UacVolumeRange(minDb, maxDb, step)
+            } else {
+                // Safe standard fallback: -64 dB to 0 dB, step 1 dB
+                UacVolumeRange((-16384).toShort(), 0.toShort(), 256.toShort())
+            }
+        }
+
+        @JvmStatic
+        fun quantizeHardwareVolumeTarget(
+            slider: Float,
+            minDb: Short,
+            maxDb: Short,
+            resDb: Short,
+            preferHardwareVolume: Boolean
+        ): Short {
+            if (!preferHardwareVolume) {
+                return maxDb
+            }
+            if (slider <= 0.0f) {
+                return minDb
+            }
+            val desiredDb = sliderToPerceptualDb(slider)
+            var rawTarget = maxDb.toInt() + Math.round(desiredDb * 256.0f).toInt()
+            val step = if (resDb > 0) resDb.toInt() else 1
+            if (step > 1) {
+                rawTarget = ((rawTarget - maxDb.toInt()) / step) * step + maxDb.toInt()
+            }
+            if (rawTarget < minDb.toInt()) rawTarget = minDb.toInt()
+            if (rawTarget > maxDb.toInt()) rawTarget = maxDb.toInt()
+            return rawTarget.toShort()
+        }
     }
 
 

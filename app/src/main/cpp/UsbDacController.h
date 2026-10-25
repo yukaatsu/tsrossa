@@ -12,3 +12,6 @@ int resolve_effective_usb_speed(libusb_device *dev, libusb_device_handle *handle
 bool init_usb_dac_internal(int fd);
 void close_usb_dac_internal();
 void control_thread_func();
+void set_volume(float volume);
+void set_hardware_volume_enabled(bool enabled);
+bool is_hardware_volume_enabled();
