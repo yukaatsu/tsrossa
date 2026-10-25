@@ -1,10 +1,15 @@
 package com.yuka.musicplayer.ui.dialogs
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -12,12 +17,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.yuka.musicplayer.audio.AudioEngine
 import com.yuka.musicplayer.ui.components.CyberBottomSheet
 import com.yuka.musicplayer.ui.components.GlyphVolume
 import com.yuka.musicplayer.ui.theme.LocalAccentColor
@@ -26,7 +33,6 @@ import com.yuka.musicplayer.ui.theme.TerminalFont
 import com.yuka.musicplayer.ui.theme.m3OnSurface
 import com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant
 import com.yuka.musicplayer.ui.theme.m3SubtleFill
-import kotlin.math.log10
 import kotlin.math.roundToInt
 
 /**
@@ -40,6 +46,9 @@ fun VolumeModalSheet(
     visible: Boolean,
     currentVolume: Float,
     isHardwareVolumeActive: Boolean,
+    isHardwareVolumeSupported: Boolean = false,
+    isHardwareVolumeEnabled: Boolean = false,
+    onToggleHardwareVolume: ((Boolean) -> Unit)? = null,
     onVolumeChange: (Float) -> Unit,
     onDismissRequest: () -> Unit
 ) {
@@ -71,7 +80,7 @@ fun VolumeModalSheet(
                 volPercent >= 100 -> "0.0 dB (Bit-Perfect)"
                 volPercent <= 0 -> "-∞ dB (Muted)"
                 else -> {
-                    val db = 20.0 * log10(volPercent / 100.0)
+                    val db = AudioEngine.sliderToPerceptualDb(volPercent / 100f)
                     String.format(java.util.Locale.US, "%.1f dB", db)
                 }
             }
@@ -79,6 +88,10 @@ fun VolumeModalSheet(
 
         val trackBgColor = m3SubtleFill(alpha = 0.12f)
         val trackFillColor = accent.copy(alpha = 0.36f)
+
+        val isHwMode = isHardwareVolumeActive || isHardwareVolumeEnabled
+        val modeBadgeText = if (isHwMode) "HYBRID HARDWARE UAC" else "UNIVERSAL 64-BIT DSP"
+        val badgeColor = if (isHwMode) Color(0xFFFFD700) else accent
 
         Column(
             modifier = Modifier
@@ -92,25 +105,76 @@ fun VolumeModalSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     GlyphVolume(color = accent, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = badgeColor.copy(alpha = 0.12f),
+                            border = BorderStroke(
+                                width = 1.dp,
+                                color = badgeColor.copy(alpha = if (isHardwareVolumeSupported) 0.45f else 0.25f)
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .then(
+                                    if (isHardwareVolumeSupported && onToggleHardwareVolume != null) {
+                                        Modifier.clickable {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onToggleHardwareVolume(!isHardwareVolumeEnabled)
+                                        }
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(5.dp)
+                                        .clip(CircleShape)
+                                        .background(badgeColor)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = modeBadgeText,
+                                    color = badgeColor,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = TerminalFont
+                                )
+                                if (isHardwareVolumeSupported && onToggleHardwareVolume != null) {
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text(
+                                        text = "⇄",
+                                        color = badgeColor.copy(alpha = 0.8f),
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
                         Text(
-                            text = if (isHardwareVolumeActive) "Hardware DAC Volume" else "64-Bit DSP Volume",
-                            color = m3OnSurface(),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = ModernSansFont
-                        )
-                        Text(
-                            text = "Swipe horizontally to adjust volume",
+                            text = if (isHardwareVolumeSupported && onToggleHardwareVolume != null) {
+                                "Tap badge to toggle • Swipe to adjust"
+                            } else {
+                                "Swipe horizontally to adjust volume"
+                            },
                             color = m3OnSurfaceVariant(),
-                            fontSize = 11.5.sp,
+                            fontSize = 11.sp,
                             fontFamily = ModernSansFont
                         )
                     }
                 }
+                Spacer(modifier = Modifier.width(8.dp))
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
                         text = "$volPercent%",

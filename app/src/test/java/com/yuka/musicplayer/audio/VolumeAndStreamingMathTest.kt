@@ -33,6 +33,26 @@ class VolumeAndStreamingMathTest {
     }
 
     @Test
+    fun `ui volume db text formatting displays expected audiophile readouts`() {
+        fun formatDb(volPercent: Int): String {
+            return when {
+                volPercent >= 100 -> "0.0 dB (Bit-Perfect)"
+                volPercent <= 0 -> "-∞ dB (Muted)"
+                else -> {
+                    val db = AudioEngine.sliderToPerceptualDb(volPercent / 100f)
+                    String.format(java.util.Locale.US, "%.1f dB", db)
+                }
+            }
+        }
+
+        assertEquals("0.0 dB (Bit-Perfect)", formatDb(100))
+        assertEquals("-∞ dB (Muted)", formatDb(0))
+        assertEquals("-59.3 dB", formatDb(5))
+        assertEquals("-22.6 dB", formatDb(50))
+        assertEquals("-8.0 dB", formatDb(75))
+    }
+
+    @Test
     fun `uac volume range validation preserves valid range and provides -64dB fallback for broken range`() {
         // Valid range: -96 dB to 0 dB, step 0.5 dB (128)
         val valid = AudioEngine.sanitizeUacVolumeRange((-24576).toShort(), 0.toShort(), 128.toShort())

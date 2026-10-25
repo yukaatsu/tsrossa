@@ -540,11 +540,30 @@ fun KewApp(audioEngine: AudioEngine) {
     var searchQuery by remember { mutableStateOf("") }
 
     var isHardwareVolumeActive by remember { mutableStateOf(false) }
+    var isHardwareVolumeSupported by remember { mutableStateOf(false) }
+    var isHardwareVolumeEnabled by remember {
+        mutableStateOf(sharedPref.getBoolean("dac_hw_volume_enabled", false))
+    }
 
+    val onToggleHardwareVolume: (Boolean) -> Unit = remember {
+        { enabled ->
+            isHardwareVolumeEnabled = enabled
+            sharedPref.edit().putBoolean("dac_hw_volume_enabled", enabled).apply()
+            audioEngine.setHardwareVolumeEnabled(enabled)
+            isHardwareVolumeActive = audioEngine.isHardwareVolumeActive()
+            isHardwareVolumeSupported = audioEngine.isHardwareVolumeSupported()
+        }
+    }
+
+    LaunchedEffect(isHardwareVolumeEnabled) {
+        audioEngine.setHardwareVolumeEnabled(isHardwareVolumeEnabled)
+    }
 
     LaunchedEffect(Unit) {
+        audioEngine.setHardwareVolumeEnabled(isHardwareVolumeEnabled)
         while(true) {
             isHardwareVolumeActive = audioEngine.isHardwareVolumeActive()
+            isHardwareVolumeSupported = audioEngine.isHardwareVolumeSupported()
             delay(500)
         }
     }
@@ -848,7 +867,9 @@ fun KewApp(audioEngine: AudioEngine) {
         com.yuka.musicplayer.audio.AudioPlayerManager.onDacReady = { dacName ->
             coroutineScope.launch(Dispatchers.Main) {
                 isDacConnected = true
+                audioEngine.setHardwareVolumeEnabled(isHardwareVolumeEnabled)
                 isHardwareVolumeActive = audioEngine.isHardwareVolumeActive()
+                isHardwareVolumeSupported = audioEngine.isHardwareVolumeSupported()
                 Toast.makeText(context, "USB DAC Ready: $dacName", Toast.LENGTH_SHORT).show()
             }
         }
@@ -856,6 +877,8 @@ fun KewApp(audioEngine: AudioEngine) {
             coroutineScope.launch(Dispatchers.Main) {
                 isPlaying = false
                 isDacConnected = false
+                isHardwareVolumeActive = false
+                isHardwareVolumeSupported = false
                 showWarmupHud = false
                 isWarmingUpState = false
                 Toast.makeText(context, "USB DAC disconnected. Playback paused.", Toast.LENGTH_SHORT).show()
@@ -1074,6 +1097,7 @@ fun KewApp(audioEngine: AudioEngine) {
                         com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying = true
                         formatIncompatibleError = null
                         isHardwareVolumeActive = audioEngine.isHardwareVolumeActive()
+                        isHardwareVolumeSupported = audioEngine.isHardwareVolumeSupported()
                         syncPreparedNextTrack()
                     }
                 }
@@ -2036,6 +2060,9 @@ fun KewApp(audioEngine: AudioEngine) {
                         playbackPosition = targetSec
                     },
                     isHardwareVolumeActive = isHardwareVolumeActive,
+                    isHardwareVolumeSupported = isHardwareVolumeSupported,
+                    isHardwareVolumeEnabled = isHardwareVolumeEnabled,
+                    onToggleHardwareVolume = onToggleHardwareVolume,
                     onCollapse = { isNowPlayingExpanded = false },
                     modifier = Modifier.fillMaxSize()
                 )
