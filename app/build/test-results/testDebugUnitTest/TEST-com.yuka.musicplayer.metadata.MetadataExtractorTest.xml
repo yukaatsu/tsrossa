@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.yuka.musicplayer.metadata.MetadataExtractorTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-24T19:53:23" hostname="Yukas-MacBook-Pro.local" time="0.075">
+  <properties/>
+  <testcase name="testNonExistentFileFallback" classname="com.yuka.musicplayer.metadata.MetadataExtractorTest" time="0.065"/>
+  <testcase name="testWaveExtensionResolution" classname="com.yuka.musicplayer.metadata.MetadataExtractorTest" time="0.001"/>
+  <testcase name="testCorruptFileHandling" classname="com.yuka.musicplayer.metadata.MetadataExtractorTest" time="0.004"/>
+  <testcase name="testMqaDetectionByFilename" classname="com.yuka.musicplayer.metadata.MetadataExtractorTest" time="0.003"/>
+  <testcase name="testWavExtensionResolution" classname="com.yuka.musicplayer.metadata.MetadataExtractorTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

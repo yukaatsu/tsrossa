@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.yuka.musicplayer.util.PlaylistStorageHelperTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-24T19:53:23" hostname="Yukas-MacBook-Pro.local" time="0.023">
+  <properties/>
+  <testcase name="testCreateAndLoadMultiplePlaylists" classname="com.yuka.musicplayer.util.PlaylistStorageHelperTest" time="0.006"/>
+  <testcase name="testRenameAndDeletePlaylist" classname="com.yuka.musicplayer.util.PlaylistStorageHelperTest" time="0.004"/>
+  <testcase name="testAtomicSaveAndCacheInvalidation" classname="com.yuka.musicplayer.util.PlaylistStorageHelperTest" time="0.004"/>
+  <testcase name="testLegacyPlaylistResetWipesOldPlaylistTxt" classname="com.yuka.musicplayer.util.PlaylistStorageHelperTest" time="0.003"/>
+  <testcase name="testAddAndRemoveTracksWithinSpecificPlaylist" classname="com.yuka.musicplayer.util.PlaylistStorageHelperTest" time="0.005"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

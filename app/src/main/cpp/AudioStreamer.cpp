@@ -1,0 +1,1600 @@
+#include "AudioStreamer.h"
+#include "AudioEngineState.h"
+#include "AudioDecoder.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <linux/usbdevice_fs.h>
+#include <pthread.h>
+#include <sched.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
+#include <unistd.h>
+
+void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer);
+
+bool start_iso_streaming_thread(const char *thread_name) {
+  if (g_audioState.isoThread != nullptr || g_audioState.usbHandle == nullptr) {
+    return false;
+  }
+  if (g_audioState.usb_frames_per_sec.load() <= 0) {
+    libusb_device *dev = libusb_get_device(g_audioState.usbHandle);
+    if (dev) {
+      int dev_speed = libusb_get_device_speed(dev);
+      if (dev_speed == LIBUSB_SPEED_UNKNOWN && g_audioState.uacVersion.load() == 2) {
+        dev_speed = LIBUSB_SPEED_HIGH;
+      }
+      int dev_fps = (dev_speed == LIBUSB_SPEED_HIGH || dev_speed == LIBUSB_SPEED_SUPER || dev_speed == 5) ? 8000 : 1000;
+      g_audioState.usb_frames_per_sec.store(dev_fps);
+    } else {
+      g_audioState.usb_frames_per_sec.store((g_audioState.uacVersion.load() == 2) ? 8000 : 1000);
+    }
+  }
+  g_audioState.stopIsoThread.store(false);
+  g_audioState.isoThreadStarted.store(false);
+  g_audioState.isoThreadExited.store(false);
+  g_audioState.stallFaultReported.store(false);
+  g_audioState.isSwapping.store(false);
+  g_audioState.swappingZeroUrbCount.store(0);
+  g_audioState.isSwappingAck.store(false);
+  g_audioState.lastIsoPacketTimeNs.store(0);
+
+  std::string name_copy = thread_name ? thread_name : "TsrossaIso";
+  g_audioState.isoThread = new std::thread([name_copy]() {
+    pthread_setname_np(pthread_self(), name_copy.c_str());
+
+    // 1. Minimum timer slack (1ns) prevents kernel from coalescing wakeups when Android demotes process to background
+    prctl(PR_SET_TIMERSLACK, 1, 0, 0, 0);
+
+    // 2. Maximum urgent nice priority (-20) ensures immediate preemption of UI/compositor threads under CFS
+    setpriority(PRIO_PROCESS, 0, -20);
+    struct sched_param param;
+    param.sched_priority = sched_get_priority_max(SCHED_FIFO);
+    if (param.sched_priority > 2) param.sched_priority = 2; // Real-time audio priority
+    pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+
+    // 3. CPU Affinity: Include ALL online cores (or avoid restrictive mask) so cpuset transitions never strand the thread
+    long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    for (int c = 0; c < num_cpus; c++) CPU_SET(c, &cpuset);
+    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+
+    // Auto-scale queue based on bus speed and endpoint bInterval:
+    // Synopsys DWC3 xHCI hardware Frame Index (FRINDEX) boundary is 2048 microframes (256ms).
+    // Queueing > 2048 microframes causes FRINDEX wrap-around / -EXDEV and burst overruns.
+    int num_transfers = g_audioState.isoTransfersCount.load();
+    int num_packets = g_audioState.isoPacketsCount.load();
+    int fps = g_audioState.usb_frames_per_sec.load();
+    if (fps >= 8000) {
+      if (num_transfers <= 0 || num_transfers > 32) num_transfers = 24;
+      if (num_packets <= 0 || num_packets > 64) num_packets = 64; // 64 microframes = 8ms per URB; 24 * 8ms = 192ms total runway
+    } else if (fps >= 4000) {
+      if (num_transfers <= 0 || num_transfers > 24) num_transfers = 20;
+      if (num_packets <= 0 || num_packets > 32) num_packets = 32; // 32 * 250us = 8ms per URB
+    } else if (fps >= 2000) {
+      if (num_transfers <= 0 || num_transfers > 24) num_transfers = 16;
+      if (num_packets <= 0 || num_packets > 16) num_packets = 16; // 16 * 500us = 8ms per URB
+    } else {
+      if (num_transfers <= 0 || num_transfers > 24) num_transfers = 16;
+      if (num_packets <= 0 || num_packets > 16) num_packets = 16;
+    }
+    int packet_size = g_audioState.maxPacketSize;
+    if (packet_size <= 0) packet_size = 1024;
+    g_audioState.activeIsoTransfers.store(0);
+
+    uint32_t init_sr = g_audioState.sampleRate.load();
+    if (init_sr == 0) init_sr = 44100;
+    uint32_t init_fps = (uint32_t)g_audioState.usb_frames_per_sec.load();
+    if (init_fps == 0) init_fps = 8000;
+    uint32_t init_base_frames = init_sr / init_fps;
+    uint32_t init_remainder = init_sr % init_fps;
+    int init_channels = g_audioState.channels.load();
+    if (init_channels <= 0) init_channels = 2;
+    int init_sf = g_audioState.subframeSize.load();
+    if (init_sf <= 0) init_sf = 2;
+
+    uint32_t init_rem_acc = 0;
+    int first_sub_err = 0;
+
+    for (int i = 0; i < num_transfers; i++) {
+      struct libusb_transfer *transfer = libusb_alloc_transfer(num_packets);
+      uint8_t *buffer = nullptr;
+      if (posix_memalign((void **)&buffer, 64, num_packets * packet_size) != 0 || buffer == nullptr) {
+        buffer = (uint8_t *)calloc(num_packets, packet_size);
+      } else {
+        memset(buffer, 0, num_packets * packet_size);
+      }
+      if (buffer) {
+        mlock(buffer, num_packets * packet_size);
+      }
+      libusb_fill_iso_transfer(transfer, g_audioState.usbHandle,
+                               g_audioState.epAddress, buffer,
+                               num_packets * packet_size, num_packets,
+                               iso_callback, nullptr, 1000);
+
+      for (int p = 0; p < num_packets; p++) {
+        int audio_frames = (int)init_base_frames;
+        init_rem_acc += init_remainder;
+        if (init_rem_acc >= init_fps) {
+          audio_frames++;
+          init_rem_acc -= init_fps;
+        }
+        int bytes_to_send = audio_frames * init_channels * init_sf;
+        if (bytes_to_send > packet_size) bytes_to_send = packet_size;
+
+        transfer->iso_packet_desc[p].length = bytes_to_send;
+      }
+
+      g_audioState.transfers.push_back(transfer);
+      g_audioState.activeIsoTransfers.fetch_add(1);
+      int sub_res = libusb_submit_transfer(transfer);
+      if (sub_res < 0) {
+        g_audioState.activeIsoTransfers.fetch_sub(1);
+        if (first_sub_err == 0) {
+          first_sub_err = sub_res;
+          char errBuf[256];
+          snprintf(errBuf, sizeof(errBuf),
+                   "ERROR: libusb_submit_transfer[0] failed: %d (%s), ep=0x%02X, pkts=%d, pkt_size=%d",
+                   sub_res, libusb_error_name(sub_res), g_audioState.epAddress, num_packets, packet_size);
+          record_usb_diag(errBuf);
+        }
+      }
+    }
+    g_audioState.iso_fixed_rem = init_rem_acc;
+
+    if (g_audioState.activeIsoTransfers.load() == 0) {
+      for (auto *t : g_audioState.transfers) {
+        if (t->buffer) {
+          munlock(t->buffer, t->length);
+          free(t->buffer);
+        }
+        libusb_free_transfer(t);
+      }
+      g_audioState.transfers.clear();
+      g_audioState.isoThreadExited.store(true);
+      {
+        std::lock_guard<std::mutex> lk(g_isoStartMutex);
+        g_isoStartCv.notify_all();
+      }
+      return;
+    }
+
+    g_audioState.isoThreadStarted.store(true);
+    {
+      std::lock_guard<std::mutex> lk(g_isoStartMutex);
+      g_isoStartCv.notify_all();
+    }
+
+    uint32_t loop_count = 0;
+    while (!g_audioState.stopIsoThread.load()) {
+      struct timeval tv = {0, 1000}; // 1ms polling avoids CFS scheduler wakeup jitter under compositor load
+      auto poll_start = std::chrono::steady_clock::now();
+      libusb_handle_events_timeout_completed(g_audioState.usbContext, &tv, nullptr);
+      auto poll_dur_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - poll_start).count();
+      if (poll_dur_us > 25000) { // Delayed >25ms
+        __android_log_print(ANDROID_LOG_WARN, "TSROSSA_DIAG",
+                            "STALL in libusb_handle_events: %lld us on CPU %d (activeUrbs=%d)",
+                            (long long)poll_dur_us, sched_getcpu(), g_audioState.activeIsoTransfers.load());
+      }
+    }
+
+    for (auto *t : g_audioState.transfers) {
+      libusb_cancel_transfer(t);
+    }
+
+    auto start_time = std::chrono::steady_clock::now();
+    bool timeout_hit = false;
+    while (g_audioState.activeIsoTransfers.load() > 0) {
+      struct timeval tv = {0, 10000};
+      libusb_handle_events_timeout_completed(g_audioState.usbContext, &tv, nullptr);
+      auto now = std::chrono::steady_clock::now();
+      if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count() > 1000) {
+        LOGE("CRITICAL: Timeout waiting for transfers to cancel! Leaking memory to prevent DMA UAF.");
+        timeout_hit = true;
+        break;
+      }
+    }
+
+    if (timeout_hit) {
+      g_audioState.deviceWedged.store(true);
+      for (auto *t : g_audioState.transfers) {
+        g_audioState.orphanTransfers.push_back(t);
+      }
+      g_audioState.transfers.clear();
+    } else {
+      for (auto *t : g_audioState.transfers) {
+        if (t->buffer) {
+          munlock(t->buffer, t->length);
+          free(t->buffer);
+        }
+        libusb_free_transfer(t);
+      }
+      g_audioState.transfers.clear();
+    }
+
+    // Safely report USB stall fault on exit without synchronous JNI / AttachCurrentThread in audio thread
+    if (g_audioState.stallFaultReported.load()) {
+      g_audioState.stallFaultReported.store(false);
+      std::lock_guard<std::mutex> lock(g_controlMutex);
+      ControlRequest req;
+      req.type = REQ_EVENT_USB_STALL_FAULT;
+      g_controlQueue.push(req);
+      g_controlCv.notify_one();
+    }
+
+    g_audioState.isoThreadExited.store(true);
+    {
+      std::lock_guard<std::mutex> lk(g_isoStartMutex);
+      g_isoStartCv.notify_all();
+    }
+  });
+
+  // Synchronous barrier: wait for initial USB transfers to queue without busy-polling
+  {
+    std::unique_lock<std::mutex> lk(g_isoStartMutex);
+    g_isoStartCv.wait_for(lk, std::chrono::milliseconds(100), [] {
+      return g_audioState.isoThreadStarted.load() || g_audioState.isoThreadExited.load();
+    });
+  }
+
+  return true;
+}
+
+void stop_and_join_decode_thread() {
+  if (g_audioState.decodeThread != nullptr) {
+    g_audioState.cancelDecoding.store(true);
+    if (g_audioState.decodeThread->joinable())
+      g_audioState.decodeThread->join();
+    delete g_audioState.decodeThread;
+    g_audioState.decodeThread = nullptr;
+  }
+  g_audioState.isDecoding.store(false);
+}
+
+void stop_and_join_iso_thread(const char* caller_reason) {
+  g_audioState.stopIsoThread.store(true);
+  std::thread *t = g_audioState.isoThread;
+  if (t != nullptr) {
+    g_audioState.isoThread = nullptr;
+    if (t->joinable()) {
+      LOGI("[Thread] Waiting for isoThread from %s...", caller_reason);
+      bool exited = false;
+      for (int i = 0; i < 200; i++) { // 2s timeout
+        if (g_audioState.isoThreadExited.load()) { exited = true; break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      if (!exited) {
+        LOGE("FATAL: isoThread did not exit! Detaching to prevent ANR.");
+        g_audioState.deviceWedged.store(true);
+        t->detach();
+      } else {
+        t->join();
+        LOGI("[Thread] Joined isoThread successfully in %s", caller_reason);
+      }
+    }
+    delete t;
+  }
+  g_audioState.transfers.clear();
+  g_audioState.activeIsoTransfers.store(0);
+}
+
+void playAudio_cleanup_on_negotiation_failure() {
+  stop_and_join_decode_thread();
+  if (!g_audioState.pcmBuffer.empty()) {
+    g_audioState.pcmBuffer.clear();
+  }
+  g_audioState.currentFilePath = "";
+  g_audioState.isPlaying.store(false);
+  g_audioState.isSwapping.store(false);
+}
+
+void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
+  if (g_audioState.stopIsoThread.load() ||
+      g_audioState.usbHandle == nullptr ||
+      transfer->status == LIBUSB_TRANSFER_CANCELLED ||
+      transfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+    g_audioState.activeIsoTransfers.fetch_sub(1);
+    return;
+  }
+
+  // Handle transient vs critical errors
+  if (transfer->status == LIBUSB_TRANSFER_ERROR ||
+      transfer->status == LIBUSB_TRANSFER_TIMED_OUT ||
+      transfer->status == LIBUSB_TRANSFER_STALL ||
+      transfer->status == LIBUSB_TRANSFER_OVERFLOW) {
+
+    if (g_audioState.stopIsoThread.load() || g_audioState.usbHandle == nullptr) {
+      g_audioState.activeIsoTransfers.fetch_sub(1);
+      return;
+    }
+
+    uint64_t now = get_time_ms();
+    if (now - g_audioState.lastErrorTimeMs > 100) {
+      g_audioState.consecutiveErrors.store(0);
+    }
+    g_audioState.lastErrorTimeMs = now;
+
+    int err_count = g_audioState.consecutiveErrors.fetch_add(1) + 1;
+    if (err_count > 50) {
+      LOGE("USBExclusive: CRITICAL THRESHOLD REACHED (>50 errors in 100ms)! Aborting transfer. Status: %d",
+           transfer->status);
+      g_audioState.activeIsoTransfers.fetch_sub(1);
+      g_audioState.stopIsoThread.store(true);
+      g_audioState.stallFaultReported.store(true);
+      return;
+    }
+
+    LOGW("USBExclusive: Transient USB error %d (count=%d/50). Recovering...",
+         transfer->status, err_count);
+  } else {
+    g_audioState.consecutiveErrors.store(0);
+  }
+
+  int num_packets = transfer->num_iso_packets;
+  uint8_t *buffer = transfer->buffer;
+
+  uint32_t sr = g_audioState.sampleRate.load();
+  uint32_t usb_frames_per_sec = (uint32_t)g_audioState.usb_frames_per_sec.load();
+  if (usb_frames_per_sec == 0) usb_frames_per_sec = (g_audioState.uacVersion.load() == 2) ? 8000 : 1000;
+  uint32_t base_frames = sr / usb_frames_per_sec;
+  uint32_t remainder_rate = sr % usb_frames_per_sec;
+
+  // Jitter tracking across transfers
+  auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  int64_t last_ns = g_audioState.lastIsoPacketTimeNs.exchange(now_ns);
+  if (last_ns > 0) {
+    int64_t delta_ns = now_ns - last_ns;
+    int64_t expected_ns = (1000000000LL / usb_frames_per_sec) * num_packets;
+    int64_t jitter = std::abs(delta_ns - expected_ns);
+    int64_t current_max = g_audioState.maxIsoJitterNs.load();
+    if (jitter > current_max) {
+      g_audioState.maxIsoJitterNs.store(jitter);
+    }
+    if (delta_ns > 20000000LL) { // Callback gap > 20ms
+      __android_log_print(ANDROID_LOG_WARN, "TSROSSA_DIAG",
+                          "CALLBACK STALL: gap=%lld us (expected %lld us) on CPU %d, activeUrbs=%d",
+                          (long long)(delta_ns / 1000), (long long)(expected_ns / 1000),
+                          sched_getcpu(), g_audioState.activeIsoTransfers.load());
+    }
+  }
+
+  // Check packet statuses with rate-limiting to prevent logcat flooding
+  int bad_packets = 0;
+  int first_bad_status = 0;
+  for (int p = 0; p < num_packets; p++) {
+    int st = transfer->iso_packet_desc[p].status;
+    if (st != LIBUSB_TRANSFER_COMPLETED) {
+      bad_packets++;
+      if (first_bad_status == 0) first_bad_status = st;
+    }
+  }
+  if (bad_packets > 0) {
+    static int64_t last_packet_err_log_ns = 0;
+    if (now_ns - last_packet_err_log_ns > 200000000LL) { // max once every 200ms
+      last_packet_err_log_ns = now_ns;
+      __android_log_print(ANDROID_LOG_WARN, "TSROSSA_DIAG",
+                          "PACKET ERROR: badPackets=%d/%d, firstStatus=%d (activeUrbs=%d)",
+                          bad_packets, num_packets, first_bad_status, g_audioState.activeIsoTransfers.load());
+    }
+  }
+
+  // Soft swapping check (drains all in-flight URBs with zeroes to reach true 0V DC)
+  if (g_audioState.isSwapping.load()) {
+    int zero_urbs = g_audioState.swappingZeroUrbCount.fetch_add(1);
+    if (zero_urbs >= 6) {
+      g_audioState.isSwappingAck.store(true);
+    }
+    int data_offset = 0;
+    for (int i = 0; i < num_packets; i++) {
+      int audio_frames_to_send = (int)base_frames;
+      g_audioState.iso_fixed_rem += remainder_rate;
+      if (g_audioState.iso_fixed_rem >= usb_frames_per_sec) {
+        audio_frames_to_send++;
+        g_audioState.iso_fixed_rem -= usb_frames_per_sec;
+      }
+
+      int bytes_to_send = audio_frames_to_send * g_audioState.channels.load() *
+                          g_audioState.subframeSize.load();
+      if (bytes_to_send > g_audioState.maxPacketSize)
+        bytes_to_send = g_audioState.maxPacketSize;
+
+      memset(buffer + data_offset, 0, bytes_to_send);
+      transfer->iso_packet_desc[i].length = bytes_to_send;
+      data_offset += bytes_to_send;
+    }
+    if (!g_audioState.stopIsoThread.load()) {
+      libusb_submit_transfer(transfer);
+    }
+    return;
+  }
+
+  g_audioState.isSwappingAck.store(false);
+  int data_offset = 0;
+
+  for (int i = 0; i < num_packets; i++) {
+    int audio_frames_to_send = (int)base_frames;
+    g_audioState.iso_fixed_rem += remainder_rate;
+    if (g_audioState.iso_fixed_rem >= usb_frames_per_sec) {
+      audio_frames_to_send++;
+      g_audioState.iso_fixed_rem -= usb_frames_per_sec;
+    }
+
+    int bytes_to_send = audio_frames_to_send * g_audioState.channels.load() *
+                        g_audioState.subframeSize.load();
+    if (bytes_to_send > g_audioState.maxPacketSize) {
+      bytes_to_send = g_audioState.maxPacketSize;
+    }
+    int bytes_filled = 0;
+
+    // HARDWARE DAC WARMUP / PRE-ROLL ZERO-PADDING
+    uint32_t silenceRemaining = g_audioState.warmupSilenceFrames.load();
+    if (silenceRemaining > 0 && (g_audioState.isPlaying.load() || g_audioState.isWarmingUp.load())) {
+      int dst_bytes_per_frame = g_audioState.channels.load() * g_audioState.subframeSize.load();
+      if (dst_bytes_per_frame > 0) {
+        int bytes_needed = bytes_to_send - bytes_filled;
+        int frames_needed = bytes_needed / dst_bytes_per_frame;
+        int frames_to_zero = std::min((int)silenceRemaining, frames_needed);
+        if (frames_to_zero > 0) {
+          int zero_bytes = frames_to_zero * dst_bytes_per_frame;
+          memset(buffer + data_offset + bytes_filled, 0, zero_bytes);
+          bytes_filled += zero_bytes;
+          if (g_audioState.warmupSilenceFrames.fetch_sub(frames_to_zero) <= (uint32_t)frames_to_zero) {
+            // Keep currentVolume at its starting point (0.0f) so smooth micro-ramp fades in audio
+          }
+        }
+      }
+    }
+
+    while (bytes_filled < bytes_to_send && g_audioState.isPlaying.load() &&
+           !g_audioState.pcmBuffer.empty()) {
+      size_t currentIndex = g_audioState.pcmIndex.load(std::memory_order_relaxed);
+      size_t totalFrames = g_audioState.decodedFrames.load(std::memory_order_acquire);
+      size_t src_bytes_per_frame =
+          g_audioState.channels.load() * sizeof(int32_t);
+      size_t dst_bytes_per_frame =
+          g_audioState.channels.load() * g_audioState.subframeSize.load();
+
+      size_t bytes_needed = bytes_to_send - bytes_filled;
+      size_t frames_needed = bytes_needed / dst_bytes_per_frame;
+      size_t frames_avail =
+          (totalFrames > currentIndex) ? (totalFrames - currentIndex) : 0;
+      size_t frames_to_read = std::min(frames_needed, frames_avail);
+
+      if (frames_to_read == 0 && g_audioState.isDecoding.load()) {
+        // Decoder is lagging behind playback: fill current packet with silence to prevent squeaks/clicks
+        memset(buffer + data_offset + bytes_filled, 0, bytes_needed);
+        bytes_filled += bytes_needed;
+        break;
+      }
+
+      if (frames_to_read > 0) {
+        size_t num_samples = frames_to_read * g_audioState.channels.load();
+        int sf_size = g_audioState.subframeSize.load();
+        float target_vol = g_audioState.isHardwareVolumeActive.load() ? 1.0f : g_audioState.targetVolume.load();
+        float delta = 0.0f;
+        if (std::abs(target_vol - g_audioState.currentVolume) > 0.001f) {
+          delta = (target_vol - g_audioState.currentVolume) / (float)std::max((size_t)1024, num_samples);
+        } else {
+          g_audioState.currentVolume = target_vol;
+        }
+
+        int32_t *src = (int32_t *)((uint8_t *)g_audioState.pcmBuffer.data() +
+                                   (currentIndex * src_bytes_per_frame));
+        uint8_t *dst_bytes = (uint8_t *)(buffer + data_offset + bytes_filled);
+
+        // BIT-PERFECT BYPASS
+        if (g_audioState.currentVolume >= 0.999f && target_vol >= 0.999f && delta == 0.0f) {
+          g_audioState.bitPerfectDirectPassActive.store(true);
+          if (sf_size == 4) {
+            // 32-bit subslot container (UAC standard Type I PCM):
+            // In dr_flac and dr_wav, samples are always scaled to full 32-bit signed range (left-aligned).
+            // Direct 32-bit integer transfer preserves bit-perfect audio for all bit depths (16-bit, 24-bit, 32-bit).
+            memcpy(dst_bytes, src, num_samples * sizeof(int32_t));
+          } else if (sf_size == 2) {
+            for (size_t s = 0; s < num_samples; s++) {
+              int32_t val16 = src[s] >> 16;
+              dst_bytes[s * 2] = (uint8_t)(val16 & 0xFF);
+              dst_bytes[s * 2 + 1] = (uint8_t)((val16 >> 8) & 0xFF);
+            }
+          } else if (sf_size == 3) {
+            for (size_t s = 0; s < num_samples; s++) {
+              int32_t val24 = src[s] >> 8;
+              dst_bytes[s * 3] = (uint8_t)(val24 & 0xFF);
+              dst_bytes[s * 3 + 1] = (uint8_t)((val24 >> 8) & 0xFF);
+              dst_bytes[s * 3 + 2] = (uint8_t)((val24 >> 16) & 0xFF);
+            }
+          }
+        } else {
+          g_audioState.bitPerfectDirectPassActive.store(false);
+          int effective_bits = (sf_size == 4) ? 24 : (sf_size * 8);
+          float half_lsb = (float)(1 << (32 - effective_bits));
+
+          // Volume scaling with accurate TPDF dither
+          for (size_t s = 0; s < num_samples; s++) {
+            if (delta != 0.0f) {
+              g_audioState.currentVolume += delta;
+              if ((delta > 0 && g_audioState.currentVolume > target_vol) ||
+                  (delta < 0 && g_audioState.currentVolume < target_vol)) {
+                g_audioState.currentVolume = target_vol;
+                delta = 0.0f;
+              }
+            }
+
+            double cur_vol = static_cast<double>(g_audioState.currentVolume);
+            if (cur_vol > 1.0) cur_vol = 1.0;
+            if (cur_vol < 0.0) cur_vol = 0.0;
+
+            double scaled = static_cast<double>(src[s]) * cur_vol;
+            // Apply TPDF dither strictly when volume is attenuated below full-scale
+            if (cur_vol < 0.999 && cur_vol > 0.0001) {
+              double randA = static_cast<double>(fast_uniform_rand()) * static_cast<double>(half_lsb);
+              double randB = static_cast<double>(fast_uniform_rand()) * static_cast<double>(half_lsb);
+              scaled += (randA - randB);
+            }
+
+            if (scaled > 2147483647.0) scaled = 2147483647.0;
+            if (scaled < -2147483648.0) scaled = -2147483648.0;
+
+            int32_t val32 = static_cast<int32_t>(scaled);
+            if (sf_size == 2) {
+              int32_t val16 = val32 >> 16;
+              dst_bytes[s * 2] = val16 & 0xFF;
+              dst_bytes[s * 2 + 1] = (val16 >> 8) & 0xFF;
+            } else if (sf_size == 3) {
+              int32_t val24 = val32 >> 8;
+              dst_bytes[s * 3] = val24 & 0xFF;
+              dst_bytes[s * 3 + 1] = (val24 >> 8) & 0xFF;
+              dst_bytes[s * 3 + 2] = (val24 >> 16) & 0xFF;
+            } else if (sf_size == 4) {
+              dst_bytes[s * 4] = val32 & 0xFF;
+              dst_bytes[s * 4 + 1] = (val32 >> 8) & 0xFF;
+              dst_bytes[s * 4 + 2] = (val32 >> 16) & 0xFF;
+              dst_bytes[s * 4 + 3] = (val32 >> 24) & 0xFF;
+            }
+          }
+        }
+
+        g_audioState.pcmIndex.store(currentIndex + frames_to_read);
+        bytes_filled += frames_to_read * g_audioState.channels.load() * sf_size;
+      }
+
+      // Check for End-of-Track (or buffering)
+      size_t nowIndex = g_audioState.pcmIndex.load(std::memory_order_relaxed);
+      size_t nowTotal = g_audioState.decodedFrames.load(std::memory_order_acquire);
+      if (nowIndex >= nowTotal) {
+        if (g_audioState.isDecoding.load()) {
+          // Still decoding: wait and pad packet with silence
+          size_t remainingBytes = bytes_to_send - bytes_filled;
+          if (remainingBytes > 0) {
+            memset(buffer + data_offset + bytes_filled, 0, remainingBytes);
+            bytes_filled += remainingBytes;
+          }
+          break;
+        }
+
+        LOGI("[AudioStreamer] Track reached end of stream (nowIndex=%zu, nowTotal=%zu, hasNext=%d)",
+             nowIndex, nowTotal, g_audioState.hasNextTrack.load() ? 1 : 0);
+
+        // Track is fully played to the end: Check Gapless handover
+        if (g_audioState.hasNextTrack.load()) {
+          bool format_changed = (g_audioState.sampleRate.load() !=
+                                 g_audioState.sampleRateNext.load()) ||
+                                (g_audioState.channels.load() !=
+                                 g_audioState.channelsNext.load()) ||
+                                (g_audioState.sourceBitDepth.load() !=
+                                 g_audioState.sourceBitDepthNext.load());
+
+          if (format_changed) {
+            LOGW("Gapless aborted due to format change. Notifying track finished for normal advance.");
+            g_audioState.hasNextTrack.store(false);
+            g_audioState.isFinished.store(true);
+            g_audioState.isPlaying.store(false);
+
+            {
+              std::lock_guard<std::mutex> lock(g_controlMutex);
+              ControlRequest evReq;
+              evReq.type = REQ_EVENT_TRACK_FINISHED;
+              g_controlQueue.push(evReq);
+              g_controlCv.notify_one();
+            }
+            break;
+          }
+
+          LOGI("[AudioStreamer] Performing seamless gapless transition to: %s", g_audioState.nextFilePath.c_str());
+          {
+            std::unique_lock<std::mutex> lock(g_stateMutex, std::try_to_lock);
+            if (lock.owns_lock()) {
+              g_audioState.pcmBufferGarbage = std::move(g_audioState.pcmBuffer);
+            } else {
+              g_audioState.pcmBuffer.clear();
+            }
+          }
+          g_audioState.pcmBuffer = std::move(g_audioState.pcmBufferNext);
+          g_audioState.sampleRate.store(g_audioState.sampleRateNext.load());
+          g_audioState.channels.store(g_audioState.channelsNext.load());
+          g_audioState.sourceBitDepth.store(g_audioState.sourceBitDepthNext.load());
+          g_audioState.hasNextTrack.store(false);
+          size_t nextTotalFrames = g_audioState.pcmBuffer.size() / g_audioState.channels.load();
+          g_audioState.decodedFrames.store(nextTotalFrames);
+          g_audioState.totalFrames.store(nextTotalFrames);
+          g_audioState.pendingSeekSeconds.store(-1.0);
+          g_audioState.pcmIndex.store(0);
+          g_audioState.currentFilePath = g_audioState.nextFilePath;
+          g_audioState.nextFilePath = "";
+
+          {
+            std::lock_guard<std::mutex> lock(g_controlMutex);
+            ControlRequest evReq;
+            evReq.type = REQ_EVENT_TRACK_TRANSITION;
+            evReq.eventArg = g_audioState.currentFilePath;
+            g_controlQueue.push(evReq);
+            g_controlCv.notify_one();
+          }
+        } else {
+          // No next track prepared: mark finished and dispatch REQ_EVENT_TRACK_FINISHED
+          LOGI("[AudioStreamer] No next track pre-buffered. Emitting REQ_EVENT_TRACK_FINISHED.");
+          g_audioState.isFinished.store(true);
+          g_audioState.isPlaying.store(false);
+
+          {
+            std::lock_guard<std::mutex> lock(g_controlMutex);
+            ControlRequest evReq;
+            evReq.type = REQ_EVENT_TRACK_FINISHED;
+            g_controlQueue.push(evReq);
+            g_controlCv.notify_one();
+          }
+          break;
+        }
+      }
+    }
+
+    if (bytes_filled < bytes_to_send) {
+      memset(buffer + data_offset + bytes_filled, 0, bytes_to_send - bytes_filled);
+    }
+
+    transfer->iso_packet_desc[i].length = bytes_to_send;
+    data_offset += bytes_to_send;
+  }
+
+  if (!g_audioState.stopIsoThread.load()) {
+    int r = libusb_submit_transfer(transfer);
+    if (r != 0) {
+      LOGE("libusb_submit_transfer failed: %d", r);
+      if (r == LIBUSB_ERROR_PIPE) {
+        libusb_clear_halt(g_audioState.usbHandle, g_audioState.epAddress);
+        r = libusb_submit_transfer(transfer);
+      }
+      if (r != 0) {
+        g_audioState.activeIsoTransfers.fetch_sub(1);
+        g_audioState.stopIsoThread.store(true);
+        g_audioState.stallFaultReported.store(true);
+      }
+    }
+  } else {
+    g_audioState.activeIsoTransfers.fetch_sub(1);
+  }
+}
+
+int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env) {
+  if (g_audioState.deviceWedged.load()) {
+    LOGE("Refusing to start playAudio because device is wedged from previous timeout. Reconnect required.");
+    return -4;
+  }
+  g_audioState.sampleRateUnverified.store(false);
+  g_audioState.isFinished = false;
+  g_audioState.pendingSeekSeconds.store(-1.0);
+
+  if (g_audioState.callbackObj != nullptr)
+    env->DeleteGlobalRef(g_audioState.callbackObj);
+  g_audioState.callbackObj = env->NewGlobalRef(thiz);
+
+  // === OPTIMIZATION 1: INSTANT GAPLESS HANDOVER ON MANUAL NEXT ===
+  bool reusedPrebuffer = false;
+  uint32_t newSampleRate = 0;
+  uint32_t newChannels = 0;
+  uint32_t newSourceBitDepth = 0;
+  uint64_t totalFrames = 0;
+  size_t initialRead = 0;
+  std::shared_ptr<AudioDecoder> decoder = nullptr;
+
+  if (g_audioState.hasNextTrack.load() &&
+      g_audioState.nextFilePath == savedPath &&
+      !g_audioState.pcmBufferNext.empty()) {
+    bool format_match = (g_audioState.sampleRate.load() == g_audioState.sampleRateNext.load()) &&
+                        (g_audioState.channels.load() == g_audioState.channelsNext.load()) &&
+                        (g_audioState.sourceBitDepth.load() == g_audioState.sourceBitDepthNext.load());
+    if (format_match && g_audioState.isoThread != nullptr && !g_audioState.stopIsoThread.load() &&
+        g_audioState.activeIsoTransfers.load() > 0) {
+      LOGI("playAudio: INSTANT GAPLESS HANDOVER for manual Next -> %s", savedPath.c_str());
+
+      // Handshake with iso_callback: instruct it to send silence while buffer is being moved
+      g_audioState.swappingZeroUrbCount.store(0);
+      g_audioState.isSwappingAck.store(false);
+      g_audioState.isSwapping.store(true);
+      auto wait_start = std::chrono::steady_clock::now();
+      bool ack_timeout = false;
+      while (!g_audioState.isSwappingAck.load() && !g_audioState.stopIsoThread.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - wait_start).count() > 60) {
+          ack_timeout = true;
+          break;
+        }
+      }
+
+      if (ack_timeout) {
+        LOGW("playAudio: isSwappingAck timeout during gapless handover, safely restarting isoThread");
+        stop_and_join_iso_thread("gapless handover timeout");
+      }
+
+      stop_and_join_decode_thread();
+      {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        g_audioState.pcmBufferGarbage = std::move(g_audioState.pcmBuffer);
+      }
+      g_audioState.pcmBuffer = std::move(g_audioState.pcmBufferNext);
+      g_audioState.sampleRate.store(g_audioState.sampleRateNext.load());
+      g_audioState.channels.store(g_audioState.channelsNext.load());
+      g_audioState.sourceBitDepth.store(g_audioState.sourceBitDepthNext.load());
+      g_audioState.hasNextTrack.store(false);
+      size_t handoverFrames = g_audioState.pcmBuffer.size() / g_audioState.channels.load();
+      g_audioState.decodedFrames.store(handoverFrames);
+      g_audioState.totalFrames.store(handoverFrames);
+      g_audioState.pcmIndex.store(0);
+      double pendingSeek = g_audioState.pendingSeekSeconds.exchange(-1.0);
+      if (pendingSeek >= 0.0 && g_audioState.sampleRate.load() > 0) {
+        size_t seekFrame = static_cast<size_t>(pendingSeek * (double)g_audioState.sampleRate.load());
+        if (seekFrame >= handoverFrames) seekFrame = (handoverFrames > 0) ? (handoverFrames - 1) : 0;
+        g_audioState.pcmIndex.store(seekFrame);
+      }
+      g_audioState.currentFilePath = savedPath;
+      g_audioState.nextFilePath = "";
+      g_audioState.isSwapping.store(false);
+      g_audioState.isPlaying.store(true);
+      if (ack_timeout) {
+        start_iso_streaming_thread("TsrossaIso");
+      }
+      return 0; // ZERO DELAY INSTANT START!
+    } else {
+      LOGI("playAudio: Reusing pre-buffered pcmBufferNext across format change for %s", savedPath.c_str());
+      stop_and_join_decode_thread();
+      if (g_audioState.isoThread != nullptr) {
+        stop_and_join_iso_thread("reusing next buffer across format change");
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        g_audioState.pcmBufferGarbage = std::move(g_audioState.pcmBuffer);
+      }
+      g_audioState.pcmBuffer = std::move(g_audioState.pcmBufferNext);
+      newSampleRate = g_audioState.sampleRateNext.load();
+      newChannels = g_audioState.channelsNext.load();
+      newSourceBitDepth = g_audioState.sourceBitDepthNext.load();
+      totalFrames = g_audioState.pcmBuffer.size() / (newChannels > 0 ? newChannels : 2);
+      initialRead = totalFrames;
+      g_audioState.hasNextTrack.store(false);
+      g_audioState.decodedFrames.store(totalFrames);
+      g_audioState.totalFrames.store(totalFrames);
+      g_audioState.pcmIndex.store(0);
+      g_audioState.isDecoding.store(false);
+      reusedPrebuffer = true;
+    }
+  }
+
+  if (!reusedPrebuffer) {
+    // Open audio file
+    decoder = std::make_shared<AudioDecoder>();
+    if (!decoder->open(savedPath.c_str())) {
+      char errDiag[512];
+      snprintf(errDiag, sizeof(errDiag), "playAudio ERROR: %s -> %s",
+               decoder->lastOpenError.c_str(), savedPath.c_str());
+      record_usb_diag(errDiag);
+      LOGE("%s", errDiag);
+      return -1;
+    }
+
+    newSampleRate = decoder->sampleRate;
+    newChannels = decoder->channels;
+    newSourceBitDepth = decoder->bitsPerSample;
+    totalFrames = decoder->totalPCMFrameCount;
+  }
+
+  g_audioState.currentFilePath = savedPath;
+  g_audioState.nextFilePath = "";
+  g_audioState.prepareNextGen.fetch_add(1);
+
+  char dbg[512];
+  snprintf(dbg, sizeof(dbg), "=== playAudio START: rate=%u, bitDepth=%u (sf=%d, frames=%llu, reused=%d) ===",
+           newSampleRate, newSourceBitDepth, (int)(newSourceBitDepth / 8), (unsigned long long)totalFrames, reusedPrebuffer ? 1 : 0);
+  record_usb_diag(dbg);
+
+  // Format Compatibility Check
+  if (g_audioState.usbHandle != nullptr) {
+    int target_sf = newSourceBitDepth / 8;
+    if (target_sf == 0) target_sf = 2;
+
+    bool bitDepthSupported = false;
+    for (int bd : g_audioState.supportedBitDepths) {
+      if (bd >= (int)newSourceBitDepth) {
+        bitDepthSupported = true;
+        break;
+      }
+    }
+
+    bool sampleRateSupported = false;
+    if (g_audioState.sampleRateQuerySuccess) {
+      for (uint32_t sr : g_audioState.supportedSampleRates) {
+        if (sr == newSampleRate) {
+          sampleRateSupported = true;
+          break;
+        }
+      }
+    } else {
+      if (!g_audioState.hasValidatedRate.load()) {
+        if (newSampleRate == 44100 || newSampleRate == 48000) {
+          sampleRateSupported = true;
+        }
+      } else {
+        if (newSampleRate == g_audioState.lastKnownGoodSampleRate.load()) {
+          sampleRateSupported = true;
+        }
+      }
+    }
+
+    if (!bitDepthSupported || !sampleRateSupported) {
+      std::string reason;
+      if (!bitDepthSupported && !sampleRateSupported) {
+        reason = std::to_string(newSourceBitDepth) + "-Bit/" + std::to_string(newSampleRate) + "Hz not supported";
+      } else if (!bitDepthSupported) {
+        reason = std::to_string(newSourceBitDepth) + "-Bit not supported";
+      } else {
+        reason = std::to_string(newSampleRate) + "Hz not supported";
+      }
+      LOGE("FORMAT REFUSED: %s — File: %s", reason.c_str(), savedPath.c_str());
+
+      std::string filename = get_file_basename(savedPath);
+
+      {
+        std::lock_guard<std::mutex> hlock(g_audioState.refusedHistoryMutex);
+        g_audioState.refusedTrackHistory.push_back(
+            {filename, (int)newSourceBitDepth, (int)newSampleRate, "format_incompatible"});
+        if (g_audioState.refusedTrackHistory.size() > 5) {
+          g_audioState.refusedTrackHistory.erase(g_audioState.refusedTrackHistory.begin());
+        }
+      }
+
+      if (g_jvm && g_audioState.callbackObj) {
+        jclass clazz = env->GetObjectClass(g_audioState.callbackObj);
+        jmethodID methodId = env->GetMethodID(clazz, "onFormatIncompatible",
+            "(Ljava/lang/String;IILjava/lang/String;)V");
+        if (methodId) {
+          jstring jFilename = env->NewStringUTF(filename.c_str());
+          jstring jReason = env->NewStringUTF(reason.c_str());
+          env->CallVoidMethod(g_audioState.callbackObj, methodId,
+              jFilename, (jint)newSourceBitDepth, (jint)newSampleRate, jReason);
+          env->DeleteLocalRef(jFilename);
+          env->DeleteLocalRef(jReason);
+        }
+      }
+
+      if (decoder != nullptr) decoder->close();
+      g_audioState.currentFilePath = "";
+      return -2;
+    }
+  }
+
+  // === STEP 1: ALLOCATE & PRELOAD AUDIO BUFFER IN RAM BEFORE HARDWARE USB RECONFIG ===
+  if (!reusedPrebuffer) {
+    if (g_audioState.isoThread != nullptr) {
+      g_audioState.swappingZeroUrbCount.store(0);
+      g_audioState.isSwappingAck.store(false);
+      g_audioState.isSwapping.store(true);
+    }
+
+    // Decode first 5.0 seconds into fast staging buffer
+    size_t initialFrames = (size_t)newSampleRate * 5;
+    if (initialFrames > totalFrames) initialFrames = totalFrames;
+
+    std::vector<int32_t> stagingBuffer;
+    try {
+      stagingBuffer.resize(initialFrames * newChannels);
+    } catch (const std::bad_alloc &e) {
+      LOGE("OOM: Not enough memory for %zu staging frames!", initialFrames);
+      if (decoder != nullptr) decoder->close();
+      g_audioState.isSwapping.store(false);
+      return -1;
+    }
+
+    initialRead = decoder->read_pcm_frames_s32(initialFrames, stagingBuffer.data());
+
+    if (g_audioState.isoThread != nullptr) {
+      auto swap_start = std::chrono::steady_clock::now();
+      while (!g_audioState.isSwappingAck.load() && !g_audioState.stopIsoThread.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - swap_start).count() > 120) {
+          break;
+        }
+      }
+    }
+
+    stop_and_join_decode_thread();
+
+    // Allocate full playback buffer in RAM
+    clean_garbage_internal();
+
+    uint64_t targetFrames = totalFrames;
+    uint64_t requiredBytes = targetFrames * (uint64_t)newChannels * sizeof(int32_t);
+    if (requiredBytes > MAX_TRACK_BUFFER_BYTES) {
+      targetFrames = MAX_TRACK_BUFFER_BYTES / ((uint64_t)newChannels * sizeof(int32_t));
+      LOGW("playAudio: Track required %llu bytes, capped to %llu bytes (%llu frames) to prevent OOM kill",
+           (unsigned long long)requiredBytes, (unsigned long long)MAX_TRACK_BUFFER_BYTES, (unsigned long long)targetFrames);
+    }
+
+    try {
+      g_audioState.pcmBuffer.resize(targetFrames * newChannels);
+    } catch (const std::bad_alloc &e) {
+      LOGE("OOM: Not enough memory for %llu frames!", (unsigned long long)targetFrames);
+      if (decoder != nullptr) decoder->close();
+      g_audioState.isSwapping.store(false);
+      return -1;
+    }
+    totalFrames = targetFrames;
+
+    if (initialRead > 0 && !stagingBuffer.empty()) {
+      memcpy(g_audioState.pcmBuffer.data(), stagingBuffer.data(), initialRead * newChannels * sizeof(int32_t));
+    }
+    stagingBuffer.clear();
+    stagingBuffer.shrink_to_fit();
+
+    g_audioState.decodedFrames.store(initialRead);
+    g_audioState.totalFrames.store(totalFrames);
+    g_audioState.pcmIndex.store(0);
+  } else {
+    // Reused prebuffer: clear any old garbage
+    clean_garbage_internal();
+  }
+
+  double pendingSeek = g_audioState.pendingSeekSeconds.exchange(-1.0);
+  if (pendingSeek >= 0.0 && newSampleRate > 0) {
+    size_t seekFrame = static_cast<size_t>(pendingSeek * (double)newSampleRate);
+    if (seekFrame >= totalFrames) seekFrame = (totalFrames > 0) ? (totalFrames - 1) : 0;
+    g_audioState.pcmIndex.store(seekFrame);
+  }
+
+  // Purge any stale finished events from previous track
+  {
+    std::lock_guard<std::mutex> lock(g_controlMutex);
+    std::queue<ControlRequest> filteredQueue;
+    while (!g_controlQueue.empty()) {
+      auto ev = g_controlQueue.front();
+      g_controlQueue.pop();
+      if (ev.type != REQ_EVENT_TRACK_FINISHED) {
+        filteredQueue.push(ev);
+      }
+    }
+    g_controlQueue = std::move(filteredQueue);
+  }
+
+  // Store new track format state
+  int target_sf = newSourceBitDepth / 8;
+  if (target_sf == 0) target_sf = 2;
+
+  uint32_t oldSampleRate = g_audioState.sampleRate.load();
+  int oldSubframeSize = g_audioState.subframeSize.load();
+  bool rate_changed = (oldSampleRate != newSampleRate);
+  bool altsetting_changed = false;
+  bool stream_was_stopped = (g_audioState.isoThread == nullptr || g_audioState.activeIsoTransfers.load() == 0);
+
+  bool needs_reconfig = (target_sf != oldSubframeSize) ||
+                        rate_changed ||
+                        stream_was_stopped ||
+                        g_audioState.isWarmingUp.load();
+
+  if (needs_reconfig) {
+    if (g_audioState.isWarmingUp.load()) {
+      g_audioState.isWarmingUp.store(false);
+      g_audioState.warmupSilenceFrames.store(0);
+    }
+    stop_and_join_iso_thread("format or rate reconfiguration");
+  }
+
+  g_audioState.sampleRate.store(newSampleRate);
+  g_audioState.channels.store(newChannels);
+  g_audioState.sourceBitDepth.store(newSourceBitDepth);
+
+  // === STEP 2: HARDWARE USB INTERFACE & CLOCK NEGOTIATION (STRICT ALSA UAC2 ORDER) ===
+  if (g_audioState.usbHandle != nullptr && needs_reconfig) {
+    bool has_selected_alt = false;
+    AltSettingInfo selected_alt{};
+    if (!g_audioState.validAlts.empty()) {
+      for (const auto &a : g_audioState.validAlts) {
+        if (a.subframe_size == target_sf) {
+          selected_alt = a;
+          has_selected_alt = true;
+          break;
+        }
+      }
+      if (!has_selected_alt) {
+        for (const auto &a : g_audioState.validAlts) {
+          if (a.subframe_size >= target_sf) {
+            selected_alt = a;
+            has_selected_alt = true;
+            break;
+          }
+        }
+      }
+      if (!has_selected_alt) {
+        selected_alt = g_audioState.validAlts[0];
+        has_selected_alt = true;
+      }
+    }
+
+    if (has_selected_alt) {
+      int iface_num = selected_alt.interface_num;
+      if (iface_num < 0) iface_num = g_audioState.usbAudioInterface;
+
+      // 1. Ensure both AUDIO_CONTROL (acInterfaceNum) and AUDIO_STREAMING (iface_num) are claimed
+      auto ensure_claimed = [](int ifnum) {
+        if (ifnum < 0) return;
+        int cr = libusb_claim_interface(g_audioState.usbHandle, ifnum);
+        if (cr != 0 && g_audioState.usbFd >= 0) {
+          struct usbdevfs_disconnect_claim dc;
+          memset(&dc, 0, sizeof(dc));
+          dc.interface = (unsigned int)ifnum;
+          dc.flags = 0;
+          if (ioctl(g_audioState.usbFd, USBDEVFS_DISCONNECT_CLAIM, &dc) < 0) {
+            ioctl(g_audioState.usbFd, USBDEVFS_DISCONNECT, &ifnum);
+            ioctl(g_audioState.usbFd, USBDEVFS_CLAIMINTERFACE, &ifnum);
+          }
+          libusb_claim_interface(g_audioState.usbHandle, ifnum);
+        }
+      };
+      ensure_claimed(g_audioState.acInterfaceNum);
+      ensure_claimed(iface_num);
+
+      // 2. Put DAC in hardware mute (altsetting 0) first
+      if (iface_num >= 0 && g_audioState.currentAltSetting.load() != 0) {
+        libusb_set_interface_alt_setting(g_audioState.usbHandle, iface_num, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        g_audioState.currentAltSetting.store(0);
+      }
+
+      // 2b. If DAC has a UAC2 Clock Selector on the Playback path, select the Playback clock pin
+      if (g_audioState.uacVersion.load() == 2 && g_audioState.clockSelectorId.load() != -1) {
+        uint8_t pin = (uint8_t)g_audioState.clockSelectorPin.load();
+        if (pin == 0) pin = 1;
+        libusb_control_transfer(
+            g_audioState.usbHandle,
+            0x21, 0x01, (0x01 << 8),
+            (g_audioState.clockSelectorId.load() << 8) | g_audioState.acInterfaceNum,
+            &pin, 1, 500);
+      }
+
+      // 3. Negotiate Hardware Sample Rate (SET_CUR 0x21, 0x01) WHILE STILL IN ALTSETTING 0 (DAC MUTED)
+      if (g_audioState.uacVersion.load() == 2 &&
+          g_audioState.clockSourceId != -1) {
+        uint32_t sr = newSampleRate;
+        uint8_t data[4];
+        data[0] = sr & 0xFF;
+        data[1] = (sr >> 8) & 0xFF;
+        data[2] = (sr >> 16) & 0xFF;
+        data[3] = (sr >> 24) & 0xFF;
+
+        int sr_res = -1;
+        for (int retry = 0; retry < 3; retry++) {
+          sr_res = libusb_control_transfer(g_audioState.usbHandle,
+                                           0x21, 0x01, (0x01 << 8),
+                                           (g_audioState.clockSourceId << 8) |
+                                               g_audioState.acInterfaceNum,
+                                           data, 4, 1000);
+          if (sr_res >= 0) break;
+          std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        }
+
+        uint8_t verify_data[4] = {0};
+        int rv = -1;
+        for (int retry = 0; retry < 5; retry++) {
+          rv = libusb_control_transfer(
+              g_audioState.usbHandle,
+              0xA1, 0x01, (0x01 << 8),
+              (g_audioState.clockSourceId << 8) | g_audioState.acInterfaceNum,
+              verify_data, 4, 1000);
+          if (rv >= 4) break;
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        uint32_t verified_sr = 0;
+        if (rv >= 4) {
+          verified_sr = verify_data[0] | (verify_data[1] << 8) |
+                        (verify_data[2] << 16) | (verify_data[3] << 24);
+          g_audioState.lastKnownGoodSampleRate.store(newSampleRate);
+          g_audioState.hasValidatedRate.store(true);
+        } else {
+          g_audioState.sampleRateUnverified.store(true);
+          g_audioState.lastKnownGoodSampleRate.store(newSampleRate);
+        }
+        snprintf(dbg, sizeof(dbg),
+                 "UAC2 Clock Reconfig (Muted): iface=%d alt=%d, SET_CUR=%d, GET_CUR=%d (verified_sr=%u)",
+                 selected_alt.interface_num, selected_alt.altsetting, sr_res, rv, verified_sr);
+        record_usb_diag(dbg);
+      } else if (g_audioState.uacVersion.load() == 1) {
+        uint32_t sr = newSampleRate;
+        unsigned char data[3];
+        data[0] = sr & 0xFF;
+        data[1] = (sr >> 8) & 0xFF;
+        data[2] = (sr >> 16) & 0xFF;
+        libusb_control_transfer(g_audioState.usbHandle, 0x22, 0x01,
+                                (0x01 << 8), selected_alt.ep_out,
+                                data, 3, 1000);
+        g_audioState.lastKnownGoodSampleRate.store(sr);
+      }
+
+      // 4. Essential hardware PLL settling time while still in altsetting 0
+      auto pll_start = std::chrono::steady_clock::now();
+      std::this_thread::sleep_for(std::chrono::milliseconds(40));
+      auto pll_end = std::chrono::steady_clock::now();
+      g_audioState.lastPllRelockUs.store(
+          std::chrono::duration_cast<std::chrono::microseconds>(pll_end - pll_start).count());
+
+      // 5. Activate streaming altsetting as the FINAL hardware step
+      LOGI("playAudio: Activating streaming altsetting %d (bit depth %d bytes)...",
+           selected_alt.altsetting, selected_alt.subframe_size);
+      auto settle_start = std::chrono::steady_clock::now();
+      int r = libusb_set_interface_alt_setting(
+           g_audioState.usbHandle, selected_alt.interface_num, selected_alt.altsetting);
+      int ioctl_alt_res = -999;
+      if (r != 0 && g_audioState.usbFd >= 0) {
+        struct usbdevfs_setinterface setintf;
+        memset(&setintf, 0, sizeof(setintf));
+        setintf.interface = (unsigned int)selected_alt.interface_num;
+        setintf.altsetting = (unsigned int)selected_alt.altsetting;
+        ioctl_alt_res = ioctl(g_audioState.usbFd, USBDEVFS_SETINTERFACE, &setintf);
+      }
+      snprintf(dbg, sizeof(dbg),
+               "Activate Altsetting: iface=%d alt=%d ep=0x%02X maxPkt=%d pktsPerSec=%d -> libusb=%d (%s), ioctl=%d",
+               selected_alt.interface_num, selected_alt.altsetting, selected_alt.ep_out,
+               selected_alt.max_packet_size, selected_alt.packets_per_sec,
+               r, libusb_error_name(r), ioctl_alt_res);
+      record_usb_diag(dbg);
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      auto settle_end = std::chrono::steady_clock::now();
+      g_audioState.lastInterfaceSettleUs.store(
+          std::chrono::duration_cast<std::chrono::microseconds>(settle_end - settle_start).count());
+
+      g_audioState.usbAudioInterface = selected_alt.interface_num;
+      g_audioState.epAddress = selected_alt.ep_out;
+      g_audioState.epFeedback = selected_alt.ep_feedback;
+      g_audioState.isAsync = selected_alt.is_async;
+      g_audioState.maxPacketSize = selected_alt.max_packet_size;
+      if (selected_alt.packets_per_sec > 0) {
+        g_audioState.usb_frames_per_sec.store(selected_alt.packets_per_sec);
+      } else if (g_audioState.uacVersion.load() == 2) {
+        g_audioState.usb_frames_per_sec.store(8000);
+      }
+      g_audioState.subframeSize.store(selected_alt.subframe_size);
+      g_audioState.currentAltSetting.store(selected_alt.altsetting);
+      g_audioState.iso_fixed_rem = 0;
+      altsetting_changed = true;
+    }
+  }
+
+  // === STEP 3: PRE-ROLL PRIMING & IMMEDIATE STREAM LAUNCH ===
+  g_audioState.isSwapping.store(false);
+  g_audioState.swappingZeroUrbCount.store(0);
+  g_audioState.isSwappingAck.store(false);
+
+  if (needs_reconfig) {
+    double silence_duration = (rate_changed || altsetting_changed) ? 0.20 : (stream_was_stopped ? 0.08 : 0.015);
+    uint32_t silence_frames = static_cast<uint32_t>(newSampleRate * silence_duration);
+    g_audioState.warmupSilenceFrames.store(silence_frames);
+    g_audioState.lastAntiPopPaddingUs.store(static_cast<int64_t>(silence_duration * 1000000.0));
+    g_audioState.currentVolume = 0.0f;
+    g_audioState.isPlaying.store(true);
+    // Immediate stream launch within < 1ms of altsetting activation
+    start_iso_streaming_thread("TsrossaIso");
+  } else {
+    // Seamless swap without restarting ISO thread: micro-ramp volume
+    g_audioState.warmupSilenceFrames.store(static_cast<uint32_t>(newSampleRate * 0.015));
+    g_audioState.currentVolume = 0.0f;
+    g_audioState.isPlaying.store(true);
+    if (g_audioState.isoThread == nullptr) {
+      start_iso_streaming_thread("TsrossaIso");
+    }
+  }
+
+  if (g_audioState.usbHandle != nullptr && g_audioState.activeIsoTransfers.load() == 0) {
+    snprintf(dbg, sizeof(dbg),
+             "=== playAudio ERROR: 0 active Isochronous transfers! USB stream failed to start (iface=%d alt=%d ep=0x%02X) ===",
+             g_audioState.usbAudioInterface, g_audioState.currentAltSetting.load(), g_audioState.epAddress);
+    record_usb_diag(dbg);
+    stop_and_join_iso_thread("zero active transfers");
+    if (decoder != nullptr) decoder->close();
+    playAudio_cleanup_on_negotiation_failure();
+    return -3;
+  }
+
+  // === STEP 4: SPAWN BACKGROUND DECODE THREAD WITH INITIAL YIELD (IF NEEDED) ===
+  if (!reusedPrebuffer && decoder != nullptr) {
+    if (initialRead < totalFrames) {
+      g_audioState.cancelDecoding.store(false);
+      g_audioState.isDecoding.store(true);
+      g_audioState.decodeThread = new std::thread([decoder, totalFrames, newChannels, initialRead, newSampleRate]() {
+        pthread_setname_np(pthread_self(), "TsrossaDecode");
+        // Initial 250ms yield so USB streaming and DAC warmup have 100% uninterrupted CPU & I/O,
+        // unless user already sought past the initial buffer
+        for (int w = 0; w < 25; w++) {
+          if (g_audioState.cancelDecoding.load() ||
+              g_audioState.pcmIndex.load(std::memory_order_relaxed) > initialRead / 2) {
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        prctl(PR_SET_TIMERSLACK, 1, 0, 0, 0);
+        setpriority(PRIO_PROCESS, 0, 0); // Normal priority to never starve real-time USB thread
+        size_t framesRead = initialRead;
+        size_t chunkSize = 131072;
+        while (framesRead < totalFrames && !g_audioState.cancelDecoding.load()) {
+          size_t toRead = totalFrames - framesRead;
+          if (toRead > chunkSize) toRead = chunkSize;
+          size_t read = decoder->read_pcm_frames_s32(
+              toRead, g_audioState.pcmBuffer.data() + (framesRead * newChannels));
+          if (read == 0) break;
+          framesRead += read;
+          g_audioState.decodedFrames.store(framesRead, std::memory_order_release);
+          // Only throttle background decode when well ahead of current playback/seek position
+          size_t curIdx = g_audioState.pcmIndex.load(std::memory_order_relaxed);
+          if (framesRead > curIdx + (size_t)newSampleRate * 3) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+          }
+        }
+        decoder->close();
+        g_audioState.isDecoding.store(false);
+        LOGI("Background Pure-RAM preload complete: %zu frames loaded.", framesRead);
+      });
+    } else {
+      decoder->close();
+      g_audioState.isDecoding.store(false);
+    }
+  }
+
+  snprintf(dbg, sizeof(dbg), "=== playAudio SUCCESS: isPlaying=true, activeIsoTransfers=%d ===",
+           g_audioState.activeIsoTransfers.load());
+  record_usb_diag(dbg);
+  return 0;
+}
+
+void pause_audio_internal() {
+  g_audioState.isPlaying.store(false);
+}
+
+bool resume_audio_internal() {
+  g_audioState.isSwapping.store(false);
+  g_audioState.isPlaying.store(true);
+  if ((g_audioState.isoThread == nullptr || g_audioState.isoThreadExited.load()) && g_audioState.usbHandle != nullptr) {
+    LOGW("resumeAudio: isoThread is dead! Falling back to playAudio restart.");
+    g_audioState.isPlaying.store(false);
+    return false;
+  }
+  // After DAC reconnect warmup, pcmBuffer is cleared and decodedFrames reset to 0.
+  // isoThread (TsrossaIsoWarm) may still be alive but there's no PCM data to play.
+  // Return false so Kotlin falls back to playTrack() which re-decodes the file.
+  if (g_audioState.pcmBuffer.empty() || g_audioState.decodedFrames.load() == 0) {
+    LOGW("resumeAudio: No PCM data (buffer empty or decodedFrames=0). Falling back to playAudio restart.");
+    g_audioState.isPlaying.store(false);
+    return false;
+  }
+  return true;
+}
+
+void stop_audio_internal() {
+  g_audioState.isPlaying = false;
+  g_audioState.isSwapping.store(false);
+  stop_and_join_decode_thread();
+  stop_and_join_iso_thread("stopAudio");
+  if (g_audioState.usbHandle != nullptr && g_audioState.usbAudioInterface >= 0) {
+    libusb_set_interface_alt_setting(g_audioState.usbHandle, g_audioState.usbAudioInterface, 0);
+    g_audioState.currentAltSetting.store(0);
+  }
+}
+
+bool prepare_next_track_internal(const std::string &path) {
+  uint32_t myGen = ++g_audioState.prepareNextGen;
+
+  // Wait until primary track finishes its background decode so they don't contend for CPU / I/O
+  while (g_audioState.isDecoding.load()) {
+    if (g_audioState.prepareNextGen.load() != myGen) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+
+  auto nextDecoder = std::make_unique<AudioDecoder>();
+  if (!nextDecoder->open(path.c_str())) {
+    return false;
+  }
+  uint64_t totalFrames = nextDecoder->totalPCMFrameCount;
+  int channels = nextDecoder->channels;
+  int sampleRate = nextDecoder->sampleRate;
+  int bitsPerSample = nextDecoder->bitsPerSample;
+  
+  uint64_t requiredBytes = totalFrames * (uint64_t)channels * sizeof(int32_t);
+  if (requiredBytes > MAX_NEXT_TRACK_BUFFER_BYTES) {
+    LOGW("prepareNextTrack: Next track required %llu bytes, exceeds MAX_NEXT_TRACK_BUFFER_BYTES (%llu). Skipping pre-buffer to preserve RAM.",
+         (unsigned long long)requiredBytes, (unsigned long long)MAX_NEXT_TRACK_BUFFER_BYTES);
+    nextDecoder->close();
+    return false;
+  }
+  
+  std::vector<int32_t> tempBuffer;
+  try {
+    tempBuffer.resize(totalFrames * channels);
+  } catch (const std::bad_alloc &e) {
+    LOGE("OOM: Not enough memory for next track (%llu frames)!", (unsigned long long)totalFrames);
+    nextDecoder->close();
+    return false;
+  }
+  
+  size_t framesRead = 0;
+  size_t chunkSize = sampleRate; // Decode 1 second at a time
+  
+  while (framesRead < totalFrames) {
+    if (g_audioState.prepareNextGen.load() != myGen) {
+      LOGW("prepareNextTrack: Aborted decode by newer generation request!");
+      nextDecoder->close();
+      return false;
+    }
+    
+    size_t toRead = totalFrames - framesRead;
+    if (toRead > chunkSize) toRead = chunkSize;
+    
+    size_t read = nextDecoder->read_pcm_frames_s32(toRead, tempBuffer.data() + (framesRead * channels));
+    if (read == 0) break;
+    framesRead += read;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  
+  nextDecoder->close();
+
+  if (g_audioState.prepareNextGen.load() != myGen) {
+    LOGW("prepareNextTrack: Aborted swap BEFORE COMMIT PHASE by newer request!");
+    return false;
+  }
+
+  std::unique_lock<std::mutex> lock(g_apiMutex, std::defer_lock);
+  bool acquired = false;
+  for (int retry = 0; retry < 50; retry++) {
+    if (g_audioState.prepareNextGen.load() != myGen) {
+      return false;
+    }
+    if (lock.try_lock()) {
+      acquired = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  if (!acquired) {
+    return false;
+  }
+
+  if (g_audioState.prepareNextGen.load() != myGen) {
+    return false;
+  }
+
+  if (!g_audioState.pcmBufferNext.empty()) {
+    g_audioState.pcmBufferNext.clear();
+  }
+  
+  g_audioState.sampleRateNext.store(sampleRate);
+  g_audioState.channelsNext.store(channels);
+  g_audioState.sourceBitDepthNext.store(bitsPerSample);
+  g_audioState.pcmBufferNext = std::move(tempBuffer);
+  g_audioState.nextFilePath = path;
+  g_audioState.hasNextTrack = true;
+  
+  return true;
+}
+
+bool clear_next_track_internal() {
+  g_audioState.prepareNextGen++;
+  ApiMutexLock lock(__func__);
+  g_audioState.hasNextTrack.store(false);
+  g_audioState.nextFilePath = "";
+  if (!g_audioState.pcmBufferNext.empty()) {
+    g_audioState.pcmBufferNext.clear();
+  }
+  g_audioState.sampleRateNext.store(0);
+  g_audioState.channelsNext.store(0);
+  g_audioState.sourceBitDepthNext.store(0);
+  return true;
+}
+
+void clean_garbage_internal() {
+  std::vector<int32_t> localGarbage;
+  {
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    localGarbage.swap(g_audioState.pcmBufferGarbage);
+  }
+  if (!localGarbage.empty()) {
+    localGarbage.clear();
+    localGarbage.shrink_to_fit();
+  }
+}
+
+bool seek_to_internal(double targetSeconds) {
+  if (targetSeconds < 0.0) targetSeconds = 0.0;
+  uint32_t sr = g_audioState.sampleRate.load();
+  size_t decoded = g_audioState.decodedFrames.load();
+  size_t total = g_audioState.totalFrames.load();
+  size_t limit = (g_audioState.isDecoding.load() && total > decoded) ? total : decoded;
+
+  if (sr == 0 || limit == 0) {
+    g_audioState.pendingSeekSeconds.store(targetSeconds);
+    return true;
+  }
+
+  size_t targetFrame = static_cast<size_t>(targetSeconds * (double)sr);
+  if (targetFrame >= limit) {
+    targetFrame = limit - 1;
+  }
+
+  g_audioState.pcmIndex.store(targetFrame);
+  return true;
+}
+
+double get_position_internal() {
+  if (g_audioState.sampleRate == 0) return 0.0;
+  return (double)g_audioState.pcmIndex.load() / (double)g_audioState.sampleRate.load();
+}
+
+bool trigger_warmup_internal(int durationMs) {
+  if (g_audioState.usbHandle == nullptr) {
+    LOGW("trigger_warmup: No USB DAC connected.");
+    return false;
+  }
+
+  // If already warming up, toggle it OFF (cancel)
+  if (g_audioState.isWarmingUp.load()) {
+    LOGI("trigger_warmup: Warmup currently active. Toggling OFF (cancelling).");
+    cancel_warmup_internal();
+    return false;
+  }
+
+  // If playback is actively streaming audio, do not interrupt active stream with manual warmup
+  if (g_audioState.isPlaying.load()) {
+    LOGI("trigger_warmup: Playback active. Skipping warmup trigger.");
+    return true;
+  }
+
+  // Stop any existing paused ISO stream before reconfiguring interface altsetting
+  if (g_audioState.isoThread != nullptr) {
+    stop_and_join_iso_thread("warmup start");
+  }
+
+  uint32_t sr = g_audioState.sampleRate.load();
+  if (sr == 0) {
+    sr = g_audioState.lastKnownGoodSampleRate.load();
+    if (sr == 0) sr = 48000;
+    g_audioState.sampleRate.store(sr);
+  }
+
+  if (g_audioState.channels.load() == 0) {
+    g_audioState.channels.store(2);
+  }
+
+  if (!g_audioState.validAlts.empty()) {
+    const auto &alt = g_audioState.validAlts[0];
+    g_audioState.subframeSize.store(alt.subframe_size);
+    g_audioState.maxPacketSize = alt.max_packet_size;
+    g_audioState.epAddress = alt.ep_out;
+    g_audioState.usbAudioInterface = alt.interface_num;
+
+    libusb_claim_interface(g_audioState.usbHandle, alt.interface_num);
+
+    // 1. Put DAC in hardware mute (altsetting 0) first
+    libusb_set_interface_alt_setting(g_audioState.usbHandle, alt.interface_num, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    g_audioState.currentAltSetting.store(0);
+
+    // 2. Negotiate hardware sample rate while in altsetting 0
+    if (g_audioState.uacVersion.load() == 2 &&
+        g_audioState.clockSourceProgrammable &&
+        g_audioState.clockSourceId != -1) {
+      uint8_t data[4];
+      data[0] = sr & 0xFF;
+      data[1] = (sr >> 8) & 0xFF;
+      data[2] = (sr >> 16) & 0xFF;
+      data[3] = (sr >> 24) & 0xFF;
+      libusb_control_transfer(g_audioState.usbHandle,
+                              0x21, 0x01, (0x01 << 8),
+                              (g_audioState.clockSourceId << 8) | g_audioState.acInterfaceNum,
+                              data, 4, 1000);
+    } else if (g_audioState.uacVersion.load() == 1) {
+      unsigned char data[3];
+      data[0] = sr & 0xFF;
+      data[1] = (sr >> 8) & 0xFF;
+      data[2] = (sr >> 16) & 0xFF;
+      libusb_control_transfer(g_audioState.usbHandle, 0x22, 0x01,
+                              (0x01 << 8), g_audioState.epAddress,
+                              data, 3, 1000);
+    }
+
+    // 3. PLL settling time while still in altsetting 0
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+
+    // 4. Activate streaming altsetting
+    int r = libusb_set_interface_alt_setting(g_audioState.usbHandle, alt.interface_num, alt.altsetting);
+    if (r != 0 && g_audioState.usbFd >= 0) {
+      struct usbdevfs_setinterface setintf;
+      memset(&setintf, 0, sizeof(setintf));
+      setintf.interface = (unsigned int)alt.interface_num;
+      setintf.altsetting = (unsigned int)alt.altsetting;
+      ioctl(g_audioState.usbFd, USBDEVFS_SETINTERFACE, &setintf);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    g_audioState.currentAltSetting.store(alt.altsetting);
+  } else if (g_audioState.subframeSize.load() == 0) {
+    g_audioState.subframeSize.store(4);
+  }
+
+  int dur = (durationMs > 0) ? durationMs : 1500;
+  uint32_t silenceFrames = static_cast<uint32_t>((static_cast<uint64_t>(sr) * dur) / 1000);
+  g_audioState.warmupSilenceFrames.store(silenceFrames);
+  g_audioState.isWarmingUp.store(true);
+
+  // If no track is currently loaded, clear stale buffers to stream pure silence.
+  if (g_audioState.currentFilePath.empty() && g_audioState.pcmBuffer.empty()) {
+    g_audioState.pcmIndex.store(0);
+    g_audioState.decodedFrames.store(0);
+    g_audioState.hasNextTrack.store(false);
+  }
+
+  // Spawn isochronous thread to stream pure silence during warmup
+  start_iso_streaming_thread("TsrossaIsoWarm");
+
+  // Launch background watchdog for warmup completion
+  std::thread([dur]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(dur + 100));
+    ApiMutexLock lock("warmup_watchdog");
+    if (g_audioState.isWarmingUp.load()) {
+      g_audioState.isWarmingUp.store(false);
+      // If user did not start playing music during warmup, cleanly shut down isochronous thread and reset to altsetting 0
+      if (!g_audioState.isPlaying.load()) {
+        stop_and_join_iso_thread("warmup complete");
+        if (g_audioState.usbHandle != nullptr && g_audioState.usbAudioInterface >= 0) {
+          libusb_set_interface_alt_setting(g_audioState.usbHandle, g_audioState.usbAudioInterface, 0);
+          g_audioState.currentAltSetting.store(0);
+        }
+      }
+      LOGI("DAC Warmup completed.");
+    }
+  }).detach();
+
+  return true;
+}
+
+bool cancel_warmup_internal() {
+  if (!g_audioState.isWarmingUp.load()) return false;
+  g_audioState.isWarmingUp.store(false);
+  g_audioState.warmupSilenceFrames.store(0);
+  if (!g_audioState.isPlaying.load()) {
+    stop_and_join_iso_thread("warmup cancelled");
+    if (g_audioState.usbHandle != nullptr && g_audioState.usbAudioInterface >= 0) {
+      libusb_set_interface_alt_setting(g_audioState.usbHandle, g_audioState.usbAudioInterface, 0);
+      g_audioState.currentAltSetting.store(0);
+    }
+  }
+  LOGI("DAC Warmup cancelled.");
+  return true;
+}
+
+bool is_warming_up_internal() {
+  return g_audioState.isWarmingUp.load();
+}

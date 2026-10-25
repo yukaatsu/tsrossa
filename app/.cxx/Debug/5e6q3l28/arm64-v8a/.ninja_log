@@ -1,0 +1,16 @@
+# ninja log v5
+3	317	1792871630379632533	CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/strerror.c.o	c9dc91388676f98c
+4	341	1792871630404654284	CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/os/threads_posix.c.o	fa3b0a140f3836f1
+3	347	1792871630411287545	CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/os/events_posix.c.o	5848fc71ccb21547
+2	350	1792871630413822589	CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/hotplug.c.o	fd7df86accb20251
+3	357	1792871630421598013	CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/sync.c.o	2d6993dcbdfec395
+5	369	1792871630433528520	CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/os/linux_netlink.c.o	af1564fa207bf513
+2	422	1792871630487876484	CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/io.c.o	8300dd340b399788
+2	433	1792871630496963196	CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/descriptor.c.o	afda3727b392e202
+2	447	1792871630512487032	CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/core.c.o	92f277f3cb42a786
+3	542	1792871630609669095	CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/os/linux_usbfs.c.o	60efa4c36c82b56b
+1	995	1792871631058947031	CMakeFiles/kewmobile.dir/AudioEngineState.cpp.o	8dcbc745d29e1276
+1	1531	1792871631591302325	CMakeFiles/kewmobile.dir/AudioStreamer.cpp.o	74391e1f03541b6b
+1	1623	1792871631683696648	CMakeFiles/kewmobile.dir/UsbDacController.cpp.o	9760063715db6bf2
+1	2267	1792871632320681423	CMakeFiles/kewmobile.dir/native-lib.cpp.o	7058fcbb2a9e4e1d
+2267	2417	1792871632451807330	/Users/yuka/Projects/tsrossa-ujicoba/app/build/intermediates/cxx/Debug/5e6q3l28/obj/arm64-v8a/libkewmobile.so	c413e8800efcb562

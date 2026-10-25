@@ -1,0 +1,16 @@
+ninja: Entering directory `/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86'
+[1/15] Building C object CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/os/threads_posix.c.o
+[2/15] Building C object CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/hotplug.c.o
+[3/15] Building C object CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/sync.c.o
+[4/15] Building C object CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/strerror.c.o
+[5/15] Building C object CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/os/events_posix.c.o
+[6/15] Building C object CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/os/linux_netlink.c.o
+[7/15] Building C object CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/io.c.o
+[8/15] Building C object CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/descriptor.c.o
+[9/15] Building C object CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/core.c.o
+[10/15] Building C object CMakeFiles/kewmobile.dir/_deps/libusb-src/libusb/os/linux_usbfs.c.o
+[11/15] Building CXX object CMakeFiles/kewmobile.dir/AudioEngineState.cpp.o
+[12/15] Building CXX object CMakeFiles/kewmobile.dir/AudioStreamer.cpp.o
+[13/15] Building CXX object CMakeFiles/kewmobile.dir/UsbDacController.cpp.o
+[14/15] Building CXX object CMakeFiles/kewmobile.dir/native-lib.cpp.o
+[15/15] Linking CXX shared library /Users/yuka/Projects/tsrossa-ujicoba/app/build/intermediates/cxx/Debug/5e6q3l28/obj/x86/libkewmobile.so

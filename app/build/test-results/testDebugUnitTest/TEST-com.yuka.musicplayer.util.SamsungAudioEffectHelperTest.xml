@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.yuka.musicplayer.util.SamsungAudioEffectHelperTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-10-24T19:53:23" hostname="Yukas-MacBook-Pro.local" time="0.001">
+  <properties/>
+  <testcase name="testSamsungDeviceDetection" classname="com.yuka.musicplayer.util.SamsungAudioEffectHelperTest" time="0.001"/>
+  <testcase name="testIntentActions" classname="com.yuka.musicplayer.util.SamsungAudioEffectHelperTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,4 @@
+/Users/yuka/Library/Android/sdk/cmake/3.22.1/bin/ninja \
+  -C \
+  /Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/armeabi-v7a \
+  kewmobile

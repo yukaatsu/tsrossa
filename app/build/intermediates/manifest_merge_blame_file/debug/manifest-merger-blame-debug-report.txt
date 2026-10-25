@@ -1,0 +1,213 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.yuka.musicplayer"
+4    android:versionCode="14"
+5    android:versionName="1.6.0-BETA" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="26"
+9        android:targetSdkVersion="34" />
+10
+11    <uses-permission
+11-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:5:5-107
+12        android:name="android.permission.READ_EXTERNAL_STORAGE"
+12-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:5:22-77
+13        android:maxSdkVersion="32" />
+13-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:5:78-104
+14    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+14-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:6:5-75
+14-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:6:22-72
+15    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+15-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:7:5-77
+15-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:7:22-74
+16    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+16-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:8:5-92
+16-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:8:22-89
+17    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+17-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:9:5-77
+17-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:9:22-74
+18    <uses-permission android:name="android.permission.WAKE_LOCK" />
+18-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:10:5-68
+18-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:10:22-65
+19    <uses-permission android:name="android.permission.INTERNET" />
+19-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:11:5-67
+19-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:11:22-64
+20    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+20-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:12:5-83
+20-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:12:22-80
+21    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+21-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:13:5-95
+21-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:13:22-92
+22
+23    <uses-feature
+23-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:14:5-86
+24        android:name="android.hardware.usb.host"
+24-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:14:19-59
+25        android:required="true" />
+25-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:14:60-83
+26
+27    <permission
+27-->[androidx.core:core:1.12.0] /Users/yuka/.gradle/caches/transforms-3/37e2ec6515df4d9413630431476ba7b9/transformed/core-1.12.0/AndroidManifest.xml:22:5-24:47
+28        android:name="com.yuka.musicplayer.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+28-->[androidx.core:core:1.12.0] /Users/yuka/.gradle/caches/transforms-3/37e2ec6515df4d9413630431476ba7b9/transformed/core-1.12.0/AndroidManifest.xml:23:9-81
+29        android:protectionLevel="signature" />
+29-->[androidx.core:core:1.12.0] /Users/yuka/.gradle/caches/transforms-3/37e2ec6515df4d9413630431476ba7b9/transformed/core-1.12.0/AndroidManifest.xml:24:9-44
+30
+31    <uses-permission android:name="com.yuka.musicplayer.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+31-->[androidx.core:core:1.12.0] /Users/yuka/.gradle/caches/transforms-3/37e2ec6515df4d9413630431476ba7b9/transformed/core-1.12.0/AndroidManifest.xml:26:5-97
+31-->[androidx.core:core:1.12.0] /Users/yuka/.gradle/caches/transforms-3/37e2ec6515df4d9413630431476ba7b9/transformed/core-1.12.0/AndroidManifest.xml:26:22-94
+32
+33    <application
+33-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:16:5-58:19
+34        android:allowBackup="true"
+34-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:17:9-35
+35        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+35-->[androidx.core:core:1.12.0] /Users/yuka/.gradle/caches/transforms-3/37e2ec6515df4d9413630431476ba7b9/transformed/core-1.12.0/AndroidManifest.xml:28:18-86
+36        android:debuggable="true"
+37        android:enableOnBackInvokedCallback="true"
+37-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:24:9-51
+38        android:extractNativeLibs="true"
+39        android:icon="@mipmap/ic_launcher"
+39-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:18:9-43
+40        android:label="tsrossa"
+40-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:20:9-32
+41        android:requestLegacyExternalStorage="true"
+41-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:23:9-52
+42        android:roundIcon="@mipmap/ic_launcher_round"
+42-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:19:9-54
+43        android:supportsRtl="true"
+43-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:21:9-35
+44        android:theme="@android:style/Theme.Material.NoActionBar" >
+44-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:22:9-66
+45        <activity
+45-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:27:9-42:20
+46            android:name="com.yuka.musicplayer.MainActivity"
+46-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:28:13-41
+47            android:exported="true"
+47-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:29:13-36
+48            android:launchMode="singleTask"
+48-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:30:13-44
+49            android:theme="@android:style/Theme.Material.NoActionBar"
+49-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:32:13-70
+50            android:windowSoftInputMode="adjustNothing" >
+50-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:31:13-56
+51            <intent-filter>
+51-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:33:13-36:29
+52                <action android:name="android.intent.action.MAIN" />
+52-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:34:17-69
+52-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:34:25-66
+53
+54                <category android:name="android.intent.category.LAUNCHER" />
+54-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:35:17-77
+54-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:35:27-74
+55            </intent-filter>
+56            <intent-filter>
+56-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:38:13-40:29
+57                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+57-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:39:17-90
+57-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:39:25-87
+58            </intent-filter>
+59            <!-- Meta-data for USB device filtering can be added here later -->
+60        </activity>
+61
+62        <service
+62-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:44:9-47:40
+63            android:name="com.yuka.musicplayer.audio.AudioForegroundService"
+63-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:45:13-57
+64            android:exported="false"
+64-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:47:13-37
+65            android:foregroundServiceType="mediaPlayback" />
+65-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:46:13-58
+66
+67        <provider
+68            android:name="androidx.core.content.FileProvider"
+68-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:50:13-62
+69            android:authorities="com.yuka.musicplayer.fileprovider"
+69-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:51:13-64
+70            android:exported="false"
+70-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:52:13-37
+71            android:grantUriPermissions="true" >
+71-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:53:13-47
+72            <meta-data
+72-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:54:13-56:54
+73                android:name="android.support.FILE_PROVIDER_PATHS"
+73-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:55:17-67
+74                android:resource="@xml/file_paths" />
+74-->/Users/yuka/Projects/tsrossa-ujicoba/app/src/main/AndroidManifest.xml:56:17-51
+75        </provider>
+76
+77        <activity
+77-->[androidx.compose.ui:ui-tooling-android:1.5.4] /Users/yuka/.gradle/caches/transforms-3/6f8b78feee7cb3dfd7ef374220d0e3f3/transformed/ui-tooling-release/AndroidManifest.xml:23:9-25:39
+78            android:name="androidx.compose.ui.tooling.PreviewActivity"
+78-->[androidx.compose.ui:ui-tooling-android:1.5.4] /Users/yuka/.gradle/caches/transforms-3/6f8b78feee7cb3dfd7ef374220d0e3f3/transformed/ui-tooling-release/AndroidManifest.xml:24:13-71
+79            android:exported="true" />
+79-->[androidx.compose.ui:ui-tooling-android:1.5.4] /Users/yuka/.gradle/caches/transforms-3/6f8b78feee7cb3dfd7ef374220d0e3f3/transformed/ui-tooling-release/AndroidManifest.xml:25:13-36
+80
+81        <provider
+81-->[androidx.emoji2:emoji2:1.4.0] /Users/yuka/.gradle/caches/transforms-3/b1e406781b4803401b33a45dfee41a0f/transformed/emoji2-1.4.0/AndroidManifest.xml:24:9-32:20
+82            android:name="androidx.startup.InitializationProvider"
+82-->[androidx.emoji2:emoji2:1.4.0] /Users/yuka/.gradle/caches/transforms-3/b1e406781b4803401b33a45dfee41a0f/transformed/emoji2-1.4.0/AndroidManifest.xml:25:13-67
+83            android:authorities="com.yuka.musicplayer.androidx-startup"
+83-->[androidx.emoji2:emoji2:1.4.0] /Users/yuka/.gradle/caches/transforms-3/b1e406781b4803401b33a45dfee41a0f/transformed/emoji2-1.4.0/AndroidManifest.xml:26:13-68
+84            android:exported="false" >
+84-->[androidx.emoji2:emoji2:1.4.0] /Users/yuka/.gradle/caches/transforms-3/b1e406781b4803401b33a45dfee41a0f/transformed/emoji2-1.4.0/AndroidManifest.xml:27:13-37
+85            <meta-data
+85-->[androidx.emoji2:emoji2:1.4.0] /Users/yuka/.gradle/caches/transforms-3/b1e406781b4803401b33a45dfee41a0f/transformed/emoji2-1.4.0/AndroidManifest.xml:29:13-31:52
+86                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+86-->[androidx.emoji2:emoji2:1.4.0] /Users/yuka/.gradle/caches/transforms-3/b1e406781b4803401b33a45dfee41a0f/transformed/emoji2-1.4.0/AndroidManifest.xml:30:17-75
+87                android:value="androidx.startup" />
+87-->[androidx.emoji2:emoji2:1.4.0] /Users/yuka/.gradle/caches/transforms-3/b1e406781b4803401b33a45dfee41a0f/transformed/emoji2-1.4.0/AndroidManifest.xml:31:17-49
+88            <meta-data
+88-->[androidx.lifecycle:lifecycle-process:2.6.2] /Users/yuka/.gradle/caches/transforms-3/39432916a0a0afb42c4c886ead20ad01/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:29:13-31:52
+89                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+89-->[androidx.lifecycle:lifecycle-process:2.6.2] /Users/yuka/.gradle/caches/transforms-3/39432916a0a0afb42c4c886ead20ad01/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:30:17-78
+90                android:value="androidx.startup" />
+90-->[androidx.lifecycle:lifecycle-process:2.6.2] /Users/yuka/.gradle/caches/transforms-3/39432916a0a0afb42c4c886ead20ad01/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:31:17-49
+91            <meta-data
+91-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:29:13-31:52
+92                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+92-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:30:17-85
+93                android:value="androidx.startup" />
+93-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:31:17-49
+94        </provider>
+95
+96        <receiver
+96-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:34:9-52:20
+97            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+97-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:35:13-76
+98            android:directBootAware="false"
+98-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:36:13-44
+99            android:enabled="true"
+99-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:37:13-35
+100            android:exported="true"
+100-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:38:13-36
+101            android:permission="android.permission.DUMP" >
+101-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:39:13-57
+102            <intent-filter>
+102-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:40:13-42:29
+103                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+103-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:17-91
+103-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:25-88
+104            </intent-filter>
+105            <intent-filter>
+105-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:43:13-45:29
+106                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+106-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:17-85
+106-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:25-82
+107            </intent-filter>
+108            <intent-filter>
+108-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:46:13-48:29
+109                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+109-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:17-88
+109-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:25-85
+110            </intent-filter>
+111            <intent-filter>
+111-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:49:13-51:29
+112                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+112-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:17-95
+112-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/yuka/.gradle/caches/transforms-3/72b01709e3025dacda0db4c1f2342267/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:25-92
+113            </intent-filter>
+114        </receiver>
+115    </application>
+116
+117</manifest>

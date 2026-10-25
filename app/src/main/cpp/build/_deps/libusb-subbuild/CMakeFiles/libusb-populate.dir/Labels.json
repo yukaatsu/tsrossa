@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/CMakeFiles/libusb-populate"
+		},
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/CMakeFiles/libusb-populate.rule"
+		},
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/CMakeFiles/libusb-populate-complete.rule"
+		},
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-build.rule"
+		},
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-configure.rule"
+		},
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-download.rule"
+		},
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-install.rule"
+		},
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-patch.rule"
+		},
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-test.rule"
+		},
+		{
+			"file" : "/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libusb-populate"
+		],
+		"name" : "libusb-populate"
+	}
+}

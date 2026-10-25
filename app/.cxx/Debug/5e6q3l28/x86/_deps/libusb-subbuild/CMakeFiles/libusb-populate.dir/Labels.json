@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/CMakeFiles/libusb-populate"
+		},
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/CMakeFiles/libusb-populate.rule"
+		},
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/CMakeFiles/libusb-populate-complete.rule"
+		},
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-build.rule"
+		},
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-configure.rule"
+		},
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-download.rule"
+		},
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-install.rule"
+		},
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-mkdir.rule"
+		},
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-patch.rule"
+		},
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-test.rule"
+		},
+		{
+			"file" : "/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libusb-populate"
+		],
+		"name" : "libusb-populate"
+	}
+}

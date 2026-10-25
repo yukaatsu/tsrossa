@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

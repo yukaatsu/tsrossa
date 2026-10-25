@@ -1,0 +1,21 @@
+# ninja log v5
+1	207	1792871626019569203	libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-mkdir	f0e0b7a76a8c649e
+1	207	1792871626019569203	/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/arm64-v8a/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-mkdir	f0e0b7a76a8c649e
+208	2815	1792871628627517354	libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-download	d4d7d4b3d1717af0
+208	2815	1792871628627517354	/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/arm64-v8a/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-download	d4d7d4b3d1717af0
+2815	3790	0	libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-update	113b2e8a7fa733a1
+2815	3790	0	/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/arm64-v8a/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-update	113b2e8a7fa733a1
+3790	3835	1792871629647485855	libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-patch	97988b75351c5973
+3790	3835	1792871629647485855	/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/arm64-v8a/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-patch	97988b75351c5973
+3835	3881	1792871629694060098	libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-configure	4678bd18f0aba542
+3835	3881	1792871629694060098	/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/arm64-v8a/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-configure	4678bd18f0aba542
+3881	3924	1792871629736497723	libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-build	9b5c7d91bb26fbba
+3881	3924	1792871629736497723	/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/arm64-v8a/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-build	9b5c7d91bb26fbba
+3924	3969	1792871629781710083	libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-install	519a64e4835606b9
+3924	3969	1792871629781710083	/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/arm64-v8a/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-install	519a64e4835606b9
+3969	4014	1792871629826624784	libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-test	4a673d3c404c855e
+3969	4014	1792871629826624784	/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/arm64-v8a/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-test	4a673d3c404c855e
+4014	4082	1792871629894348305	CMakeFiles/libusb-populate-complete	f31fc6d18afe1477
+4014	4082	1792871629894348305	libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-done	f31fc6d18afe1477
+4014	4082	1792871629894348305	/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/arm64-v8a/_deps/libusb-subbuild/CMakeFiles/libusb-populate-complete	f31fc6d18afe1477
+4014	4082	1792871629894348305	/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/arm64-v8a/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-done	f31fc6d18afe1477

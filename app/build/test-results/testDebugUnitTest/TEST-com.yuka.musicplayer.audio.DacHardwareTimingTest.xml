@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.yuka.musicplayer.audio.DacHardwareTimingTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-10-24T19:53:23" hostname="Yukas-MacBook-Pro.local" time="0.037">
+  <properties/>
+  <testcase name="testJsonParsingMatchesTimingTelemetryFormat" classname="com.yuka.musicplayer.audio.DacHardwareTimingTest" time="0.009"/>
+  <testcase name="testIsoBresenhamAccumulatorHighSpeed8000Fps" classname="com.yuka.musicplayer.audio.DacHardwareTimingTest" time="0.024"/>
+  <testcase name="testWarmupAllowedWhenPaused" classname="com.yuka.musicplayer.audio.DacHardwareTimingTest" time="0.001"/>
+  <testcase name="testBufferProfileParameters" classname="com.yuka.musicplayer.audio.DacHardwareTimingTest" time="0.0"/>
+  <testcase name="testWarmupSilencePaddingCalculations" classname="com.yuka.musicplayer.audio.DacHardwareTimingTest" time="0.0"/>
+  <testcase name="testBitrateKbpsCalculation" classname="com.yuka.musicplayer.audio.DacHardwareTimingTest" time="0.0"/>
+  <testcase name="testSpeedResolutionHeuristicRules" classname="com.yuka.musicplayer.audio.DacHardwareTimingTest" time="0.001"/>
+  <testcase name="testIsoBresenhamAccumulatorJitterSuppression" classname="com.yuka.musicplayer.audio.DacHardwareTimingTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,14 @@
+# Target labels
+ libusb-populate
+# Source files and their labels
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/CMakeFiles/libusb-populate
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/CMakeFiles/libusb-populate.rule
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/CMakeFiles/libusb-populate-complete.rule
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-build.rule
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-configure.rule
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-download.rule
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-install.rule
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-mkdir.rule
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-patch.rule
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-test.rule
+/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86/_deps/libusb-subbuild/libusb-populate-prefix/src/libusb-populate-stamp/libusb-populate-update.rule
