@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <libusb.h>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -12,6 +13,22 @@
 #include <jni.h>
 
 #include "AudioCommon.h"
+#include "AudioDecoder.h"
+
+struct AtomicFloat {
+  std::atomic<float> val{1.0f};
+  AtomicFloat(float v = 1.0f) : val(v) {}
+  AtomicFloat(const AtomicFloat &other) : val(other.val.load()) {}
+  operator float() const { return val.load(); }
+  float load() const { return val.load(); }
+  void store(float v) { val.store(v); }
+  float operator=(float v) { val.store(v); return v; }
+  float operator+=(float d) {
+    float cur = val.load();
+    while (!val.compare_exchange_weak(cur, cur + d)) {}
+    return cur + d;
+  }
+};
 
 struct AltSettingInfo {
   int interface_num;
@@ -60,17 +77,25 @@ struct AudioEngineState {
 
   std::vector<AltSettingInfo> validAlts;
 
-  // RAM Playback Buffer (Raw PCM Int32 for UAC1/UAC2)
+  // Audio Buffer & Streaming Ring-Buffer State
   std::vector<int32_t> pcmBuffer;
-  std::atomic<size_t> pcmIndex{0};
+  std::atomic<uint64_t> pcmBufferCapacityFrames{0};
+  std::atomic<uint64_t> totalFrames{0};
+  std::atomic<uint64_t> decodedFrames{0};
+  std::atomic<uint64_t> pcmIndex{0};
   std::atomic<uint32_t> channels{0};
   std::atomic<uint32_t> sampleRate{0};
   std::atomic<int> subframeSize{0}; // 2=16-bit, 3=24-bit, 4=32-bit
   std::atomic<int> activeIsoTransfers{0};
   std::atomic<int> usb_frames_per_sec{1000};
 
-  // Gapless pre-loading buffers
+  // Next Track Buffer (For Gapless Playback with Ring Buffer handoff)
   std::vector<int32_t> pcmBufferNext;
+  std::vector<int32_t> nextPcmBuffer;
+  std::atomic<uint64_t> nextPcmBufferCapacityFrames{0};
+  std::atomic<uint64_t> nextTotalFrames{0};
+  std::atomic<uint64_t> nextDecodedFrames{0};
+  std::unique_ptr<AudioDecoder> nextActiveDecoder;
   std::atomic<uint32_t> channelsNext{2};
   std::atomic<uint32_t> sampleRateNext{48000};
   std::atomic<bool> hasNextTrack{false};
@@ -97,14 +122,12 @@ struct AudioEngineState {
   
   std::atomic<uint32_t> prepareNextGen{0};
   
-  float currentVolume = 1.0f; // Only accessed by isoThread
-
-  std::atomic<size_t> totalFrames{0};
-  std::atomic<size_t> decodedFrames{0};
   std::atomic<double> pendingSeekSeconds{-1.0};
   std::atomic<bool> isDecoding{false};
   std::atomic<bool> cancelDecoding{false};
   std::thread *decodeThread = nullptr;
+  std::condition_variable decoderCv;
+  std::mutex decoderMutex;
 
   // ISO Thread
   std::thread *isoThread = nullptr;
@@ -125,22 +148,32 @@ struct AudioEngineState {
   std::atomic<int> dacVid{0};
   std::atomic<int> dacPid{0};
 
-  // Hardware Volume State
+  // Hardware & Universal Hybrid Volume Control State
+  std::atomic<bool> isHardwareVolumeSupported{false};
   std::atomic<bool> isHardwareVolumeActive{false};
+  // Default false = Universal 64-Bit DSP Mode (100% compatible with all DACs including AD1 & M06Pro 2)
+  std::atomic<bool> preferHardwareVolume{false};
+  std::atomic<float> appliedHardwareDb{0.0f}; // Actual dB currently absorbed by DAC hardware
+  std::atomic<int> featureUnitId{-1};
+  std::atomic<int> volumeChannel{0};
+  bool volumeMasterSupported = false;
+  bool volumePerChannelSupported = false;
+  std::atomic<int16_t> minVolumeDb{-32768};
+  std::atomic<int16_t> maxVolumeDb{0};
+  std::atomic<int16_t> resVolumeDb{256};
+  AtomicFloat currentVolume{1.0f};
+  float currentSoftwareVolume = 1.0f;
+
   std::atomic<bool> isForceSoftwareVolume{false};
   std::atomic<bool> deviceWedged{false};
   std::atomic<bool> sampleRateUnverified{false};
   std::atomic<uint32_t> lastKnownGoodSampleRate{48000};
   std::atomic<bool> hasValidatedRate{false};
   std::atomic<int> uacVersion{0}; // 1 or 2
-  std::atomic<int> featureUnitId{-1};
   std::atomic<int> clockSourceId{-1};
   std::atomic<int> clockSelectorId{-1};
   std::atomic<int> clockSelectorPin{1};
   std::atomic<bool> clockSourceProgrammable{true};
-  std::atomic<int> minVolumeDb{0}; // in 1/256 dB
-  std::atomic<int> maxVolumeDb{0};
-  std::atomic<int> volumeChannel{0};
   std::atomic<int> acInterfaceNum{0}; // 0 for master, 1 for L/R parallel
   std::vector<int> claimedInterfaces;
   std::atomic<int> consecutiveErrors{0};

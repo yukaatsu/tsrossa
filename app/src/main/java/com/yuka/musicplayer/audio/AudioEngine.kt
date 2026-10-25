@@ -26,6 +26,33 @@ class AudioEngine {
             setUsbBufferProfile(transfers, packets)
             return transfers to packets
         }
+
+        /**
+         * Converts a normalized UI slider value [0.0f..1.0f] into a perceptual attenuation in dB.
+         * Uses the unified psychoacoustic curve: dB(v) = -64.0 * (1 - v) * sqrt(1 - v)
+         * - 100% (1.00) ->   0.00 dB (Bit-Perfect Unity)
+         * -  75% (0.75) ->  -8.00 dB
+         * -  50% (0.50) -> -22.63 dB
+         * -  10% (0.10) -> -54.64 dB
+         * -   5% (0.05) -> -59.26 dB (Safe & quiet on sensitive IEMs + 2Vrms Dongle DACs)
+         * -   1% (0.01) -> -63.04 dB
+         * -   0% (0.00) -> -Infinity (Mute)
+         */
+        @JvmStatic
+        fun sliderToPerceptualDb(slider: Float): Float {
+            if (slider <= 0.0f) return Float.NEGATIVE_INFINITY
+            if (slider >= 1.0f) return 0.0f
+            val complement = 1.0f - slider
+            return -64.0f * complement * kotlin.math.sqrt(complement)
+        }
+
+        @JvmStatic
+        fun sliderToLinearGain(slider: Float): Float {
+            if (slider <= 0.0f) return 0.0f
+            if (slider >= 1.0f) return 1.0f
+            val db = sliderToPerceptualDb(slider)
+            return Math.pow(10.0, (db / 20.0)).toFloat()
+        }
     }
 
 
@@ -38,7 +65,11 @@ class AudioEngine {
     external fun pauseAudio()
     external fun resumeAudio(): Boolean
     external fun stopAudio()
+    external fun setVolume(volume: Float)
     external fun setSoftwareVolume(volume: Float)
+    external fun isHardwareVolumeSupported(): Boolean
+    external fun setHardwareVolumeEnabled(enabled: Boolean)
+    external fun isHardwareVolumeEnabled(): Boolean
     external fun isHardwareVolumeActive(): Boolean
     external fun getPosition(): Double
     external fun seekTo(positionSeconds: Double): Boolean

@@ -17,9 +17,29 @@
 extern JavaVM *g_jvm;
 extern std::mutex g_apiMutex;
 
-// Safe RAM allocation budgets to prevent Android LMKD from killing the process
-constexpr uint64_t MAX_TRACK_BUFFER_BYTES = 160ULL * 1024 * 1024; // 160 MB limit (~36 min @ 96kHz / ~79 min @ 44.1kHz)
-constexpr uint64_t MAX_NEXT_TRACK_BUFFER_BYTES = 96ULL * 1024 * 1024; // 96 MB limit for gapless pre-buffer
+// Security & Streaming Ring Buffer Constants
+// 64 MB sliding-window ring buffer (~87 sec window @ 96kHz stereo, unbounded total track duration)
+constexpr uint64_t MAX_RING_BUFFER_BYTES = 64ULL * 1024 * 1024;
+constexpr uint64_t MAX_NEXT_RING_BUFFER_BYTES = 32ULL * 1024 * 1024;
+constexpr uint64_t RING_BUFFER_SAFETY_FRAMES = 65536ULL; // Keep 64K frames safety gap before read pointer
+
+// Legacy aliases kept for compatibility
+constexpr uint64_t MAX_TRACK_BUFFER_BYTES = MAX_RING_BUFFER_BYTES;
+constexpr uint64_t MAX_NEXT_TRACK_BUFFER_BYTES = MAX_NEXT_RING_BUFFER_BYTES;
+
+// Unified Psychoacoustic Volume Curve: dB(v) = -64.0f * (1 - v) * sqrt(1 - v)
+inline float compute_perceptual_db(float slider) {
+  if (slider <= 0.0f) return -128.0f;
+  if (slider >= 1.0f) return 0.0f;
+  float comp = 1.0f - slider;
+  return -64.0f * comp * std::sqrt(comp);
+}
+
+inline float db_to_linear_gain(float db) {
+  if (db <= -127.0f) return 0.0f;
+  if (db >= 0.0f) return 1.0f;
+  return std::pow(10.0f, db / 20.0f);
+}
 
 struct ApiMutexLock {
   const char *func;
