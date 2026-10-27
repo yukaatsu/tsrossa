@@ -5,9 +5,183 @@ import com.yuka.musicplayer.model.TrackInfo
 import java.io.File
 
 /**
- * Pure calculation logic for determining upcoming tracks in the Queue panel.
+ * Pure calculation logic for determining upcoming tracks, shuffle order, and playlist resolution.
  */
 object QueueHelper {
+
+    fun indexOfTrack(list: List<File>, track: File?): Int {
+        if (track == null) return -1
+        val targetPath = track.absolutePath
+        return list.indexOfFirst { it.absolutePath == targetPath }
+    }
+
+    fun resolvePlaylistTracks(
+        playlistTrackPaths: List<String>?,
+        fallbackTrackPaths: List<String>,
+        supportedFileMap: Map<String, File>
+    ): List<File> {
+        val paths = if (!playlistTrackPaths.isNullOrEmpty()) {
+            playlistTrackPaths
+        } else {
+            fallbackTrackPaths
+        }
+        return paths.mapNotNull { path ->
+            supportedFileMap[path] ?: File(path).takeIf { it.exists() && it.isFile }
+        }
+    }
+
+    fun getNextTrackFile(
+        isAutoAdvance: Boolean,
+        consumeQueue: Boolean,
+        repeatMode: Int,
+        currentTrack: File?,
+        upNextQueue: List<File>,
+        activeList: List<File>,
+        isShuffleEnabled: Boolean,
+        shuffledList: List<File>,
+        currentShuffleIndex: Int
+    ): File? {
+        if (upNextQueue.isNotEmpty()) {
+            return upNextQueue.first()
+        }
+
+        if (isAutoAdvance && repeatMode == 1 && currentTrack != null) {
+            return currentTrack
+        }
+
+        if (activeList.isEmpty()) {
+            return null
+        }
+
+        if (isShuffleEnabled) {
+            if (shuffledList.isNotEmpty()) {
+                val effectiveShuffleIdx = if (
+                    currentShuffleIndex in shuffledList.indices &&
+                    currentTrack != null &&
+                    shuffledList[currentShuffleIndex].absolutePath == currentTrack.absolutePath
+                ) {
+                    currentShuffleIndex
+                } else {
+                    indexOfTrack(shuffledList, currentTrack)
+                }
+                if (effectiveShuffleIdx != -1) {
+                    return if (effectiveShuffleIdx + 1 < shuffledList.size) {
+                        shuffledList[effectiveShuffleIdx + 1]
+                    } else if (repeatMode == 2) {
+                        shuffledList.first()
+                    } else {
+                        null
+                    }
+                }
+            }
+        }
+
+        val currentIndex = indexOfTrack(activeList, currentTrack)
+        return if (currentIndex != -1 && currentIndex + 1 < activeList.size) {
+            activeList[currentIndex + 1]
+        } else if (repeatMode == 2 && activeList.isNotEmpty()) {
+            activeList.first()
+        } else {
+            null
+        }
+    }
+
+    fun getNextTrackFile(
+        isAutoAdvance: Boolean,
+        consumeQueue: Boolean,
+        repeatMode: RepeatMode,
+        currentTrack: File?,
+        upNextQueue: List<File>,
+        activeList: List<File>,
+        isShuffleEnabled: Boolean,
+        shuffledList: List<File>,
+        currentShuffleIndex: Int
+    ): File? = getNextTrackFile(
+        isAutoAdvance = isAutoAdvance,
+        consumeQueue = consumeQueue,
+        repeatMode = when (repeatMode) {
+            RepeatMode.OFF -> 0
+            RepeatMode.ONE -> 1
+            RepeatMode.ALL -> 2
+        },
+        currentTrack = currentTrack,
+        upNextQueue = upNextQueue,
+        activeList = activeList,
+        isShuffleEnabled = isShuffleEnabled,
+        shuffledList = shuffledList,
+        currentShuffleIndex = currentShuffleIndex
+    )
+
+    fun calculatePreviousTrack(
+        playbackHistory: MutableList<File> = mutableListOf(),
+        activeList: List<File>,
+        currentTrack: File?,
+        isShuffleEnabled: Boolean,
+        shuffledList: List<File>,
+        currentShuffleIndex: Int,
+        repeatMode: Int = 0
+    ): File? {
+        if (activeList.isEmpty()) return null
+
+        while (playbackHistory.isNotEmpty()) {
+            val prev = playbackHistory.removeAt(playbackHistory.size - 1)
+            if (indexOfTrack(activeList, prev) != -1) {
+                return prev
+            }
+        }
+
+        if (isShuffleEnabled && shuffledList.isNotEmpty()) {
+            val effectiveShuffleIdx = if (
+                currentShuffleIndex in shuffledList.indices &&
+                currentTrack != null &&
+                shuffledList[currentShuffleIndex].absolutePath == currentTrack.absolutePath
+            ) {
+                currentShuffleIndex
+            } else {
+                indexOfTrack(shuffledList, currentTrack)
+            }
+            if (effectiveShuffleIdx != -1) {
+                return if (effectiveShuffleIdx > 0) {
+                    shuffledList[effectiveShuffleIdx - 1]
+                } else if (repeatMode == 2) {
+                    shuffledList.last()
+                } else {
+                    currentTrack
+                }
+            }
+        }
+
+        val currentIndex = indexOfTrack(activeList, currentTrack)
+        return if (currentIndex > 0) {
+            activeList[currentIndex - 1]
+        } else if (repeatMode == 2 && activeList.isNotEmpty()) {
+            activeList.last()
+        } else {
+            currentTrack
+        }
+    }
+
+    fun calculatePreviousTrack(
+        playbackHistory: MutableList<File> = mutableListOf(),
+        activeList: List<File>,
+        currentTrack: File?,
+        isShuffleEnabled: Boolean,
+        shuffledList: List<File>,
+        currentShuffleIndex: Int,
+        repeatMode: RepeatMode
+    ): File? = calculatePreviousTrack(
+        playbackHistory = playbackHistory,
+        activeList = activeList,
+        currentTrack = currentTrack,
+        isShuffleEnabled = isShuffleEnabled,
+        shuffledList = shuffledList,
+        currentShuffleIndex = currentShuffleIndex,
+        repeatMode = when (repeatMode) {
+            RepeatMode.OFF -> 0
+            RepeatMode.ONE -> 1
+            RepeatMode.ALL -> 2
+        }
+    )
 
     fun calculateUpcomingTracks(
         currentTrack: TrackInfo?,
@@ -19,7 +193,7 @@ object QueueHelper {
     ): List<File> {
         if (isShuffleEnabled && shuffledList.isNotEmpty()) {
             val startIndex = if (currentTrack?.file != null) {
-                val idx = shuffledList.indexOfFirst { it.absolutePath == currentTrack.file.absolutePath }
+                val idx = indexOfTrack(shuffledList, currentTrack.file)
                 if (idx != -1) idx else currentShuffleIndex
             } else {
                 currentShuffleIndex
@@ -34,7 +208,7 @@ object QueueHelper {
                 afterCurrent
             }
         } else if (activeList.isNotEmpty()) {
-            val currentIndex = activeList.indexOfFirst { it.absolutePath == currentTrack?.file?.absolutePath }
+            val currentIndex = indexOfTrack(activeList, currentTrack?.file)
             if (currentIndex != -1) {
                 val afterCurrent = if (currentIndex + 1 < activeList.size) {
                     activeList.subList(currentIndex + 1, activeList.size)
@@ -67,7 +241,7 @@ object QueueHelper {
 
         if (currentShuffledList.isNotEmpty() && deckPaths == activePaths) {
             if (currentFile != null) {
-                val idx = currentShuffledList.indexOfFirst { it.absolutePath == currentFile.absolutePath }
+                val idx = indexOfTrack(currentShuffledList, currentFile)
                 if (idx != -1) {
                     return Pair(currentShuffledList, idx)
                 }
@@ -76,7 +250,7 @@ object QueueHelper {
             }
         }
 
-        return if (currentFile != null && activeList.any { it.absolutePath == currentFile.absolutePath }) {
+        return if (currentFile != null && indexOfTrack(activeList, currentFile) != -1) {
             val remaining = activeList.filter { it.absolutePath != currentFile.absolutePath }.shuffled()
             Pair(listOf(currentFile) + remaining, 0)
         } else {
@@ -130,6 +304,19 @@ object QueueHelper {
                 val ensured = ensureShuffleDeck(activeList, currentTrack?.file, deck, deckIndex)
                 deck = ensured.first
                 deckIndex = ensured.second
+            } else {
+                val effectiveShuffleIdx = if (
+                    deckIndex in deck.indices &&
+                    currentTrack?.file != null &&
+                    deck[deckIndex].absolutePath == currentTrack.file.absolutePath
+                ) {
+                    deckIndex
+                } else {
+                    indexOfTrack(deck, currentTrack?.file)
+                }
+                if (effectiveShuffleIdx != -1) {
+                    deckIndex = effectiveShuffleIdx
+                }
             }
 
             val nextIndex = deckIndex + 1
@@ -156,10 +343,7 @@ object QueueHelper {
         }
 
         val currentTrackFile = currentTrack?.file
-        val currentIndex = activeList.indexOfFirst {
-            it.absolutePath == currentTrackFile?.absolutePath ||
-            it.canonicalPath == currentTrackFile?.canonicalPath
-        }
+        val currentIndex = indexOfTrack(activeList, currentTrackFile)
         val nextFile = if (currentIndex != -1 && currentIndex + 1 < activeList.size) {
             activeList[currentIndex + 1]
         } else if (currentIndex == -1 && activeList.isNotEmpty()) {
@@ -192,10 +376,10 @@ object QueueHelper {
         // 1. History stack
         while (playbackHistory.isNotEmpty()) {
             val prev = playbackHistory.removeAt(playbackHistory.size - 1)
-            if (activeList.any { it.absolutePath == prev.absolutePath || it.canonicalPath == prev.canonicalPath }) {
+            if (indexOfTrack(activeList, prev) != -1) {
                 var newShuffleIdx = currentShuffleIndex
                 if (isShuffleEnabled && shuffledList.isNotEmpty()) {
-                    val idx = shuffledList.indexOfFirst { it.absolutePath == prev.absolutePath || it.canonicalPath == prev.canonicalPath }
+                    val idx = indexOfTrack(shuffledList, prev)
                     if (idx != -1) newShuffleIdx = idx
                 }
                 return PrevTrackResult(prev, newShuffleIdx)
@@ -204,19 +388,26 @@ object QueueHelper {
 
         // 2. Shuffle mode fallback
         if (isShuffleEnabled && shuffledList.isNotEmpty()) {
-            return if (currentShuffleIndex > 0) {
-                PrevTrackResult(shuffledList[currentShuffleIndex - 1], currentShuffleIndex - 1)
+            val effectiveShuffleIdx = if (
+                currentShuffleIndex in shuffledList.indices &&
+                currentTrackFile != null &&
+                shuffledList[currentShuffleIndex].absolutePath == currentTrackFile.absolutePath
+            ) {
+                currentShuffleIndex
+            } else {
+                indexOfTrack(shuffledList, currentTrackFile)
+            }
+            return if (effectiveShuffleIdx > 0) {
+                PrevTrackResult(shuffledList[effectiveShuffleIdx - 1], effectiveShuffleIdx - 1)
             } else if (repeatMode == RepeatMode.ALL && shuffledList.isNotEmpty()) {
                 PrevTrackResult(shuffledList[shuffledList.lastIndex], shuffledList.lastIndex)
             } else {
-                PrevTrackResult(currentTrackFile, currentShuffleIndex)
+                PrevTrackResult(currentTrackFile, effectiveShuffleIdx.coerceAtLeast(0))
             }
         }
 
         // 3. Normal sequential fallback
-        val currentIndex = activeList.indexOfFirst {
-            it.absolutePath == currentTrackFile?.absolutePath || it.canonicalPath == currentTrackFile?.canonicalPath
-        }
+        val currentIndex = indexOfTrack(activeList, currentTrackFile)
         val prevFile = if (currentIndex > 0) {
             activeList[currentIndex - 1]
         } else if (repeatMode == RepeatMode.ALL && activeList.isNotEmpty()) {
