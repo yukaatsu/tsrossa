@@ -1,15 +1,15 @@
 package com.yuka.musicplayer.ui.dialogs
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Surface
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,6 +22,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.audio.AudioEngine
@@ -86,12 +87,10 @@ fun VolumeModalSheet(
             }
         }
 
+        val onSurface = m3OnSurface()
+        val onSurfaceVariant = m3OnSurfaceVariant()
         val trackBgColor = m3SubtleFill(alpha = 0.12f)
         val trackFillColor = accent.copy(alpha = 0.36f)
-
-        val isHwMode = isHardwareVolumeActive || (isHardwareVolumeSupported && isHardwareVolumeEnabled)
-        val modeBadgeText = if (isHwMode) "HYBRID HARDWARE UAC" else "UNIVERSAL 64-BIT DSP"
-        val badgeColor = if (isHwMode) Color(0xFFFFD700) else accent
 
         Column(
             modifier = Modifier
@@ -112,63 +111,16 @@ fun VolumeModalSheet(
                     GlyphVolume(color = accent, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = badgeColor.copy(alpha = 0.12f),
-                            border = BorderStroke(
-                                width = 1.dp,
-                                color = badgeColor.copy(alpha = if (isHardwareVolumeSupported) 0.45f else 0.25f)
-                            ),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .then(
-                                    if (isHardwareVolumeSupported && onToggleHardwareVolume != null) {
-                                        Modifier.clickable {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onToggleHardwareVolume(!isHardwareVolumeEnabled)
-                                        }
-                                    } else {
-                                        Modifier
-                                    }
-                                )
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(5.dp)
-                                        .clip(CircleShape)
-                                        .background(badgeColor)
-                                )
-                                Spacer(modifier = Modifier.width(5.dp))
-                                Text(
-                                    text = modeBadgeText,
-                                    color = badgeColor,
-                                    fontSize = 10.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = TerminalFont
-                                )
-                                if (isHardwareVolumeSupported && onToggleHardwareVolume != null) {
-                                    Spacer(modifier = Modifier.width(5.dp))
-                                    Text(
-                                        text = "⇄",
-                                        color = badgeColor.copy(alpha = 0.8f),
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(3.dp))
                         Text(
-                            text = if (isHardwareVolumeSupported && onToggleHardwareVolume != null) {
-                                "Tap badge to toggle • Swipe to adjust"
-                            } else {
-                                "Swipe horizontally to adjust volume"
-                            },
-                            color = m3OnSurfaceVariant(),
+                            text = "Master Output Gain",
+                            color = onSurface,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = ModernSansFont
+                        )
+                        Text(
+                            text = "Swipe horizontally to adjust volume",
+                            color = onSurfaceVariant,
                             fontSize = 11.sp,
                             fontFamily = ModernSansFont
                         )
@@ -185,14 +137,148 @@ fun VolumeModalSheet(
                     )
                     Text(
                         text = dbText,
-                        color = m3OnSurfaceVariant(),
+                        color = onSurfaceVariant,
                         fontSize = 10.5.sp,
                         fontFamily = TerminalFont
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Dedicated Toggle Button: UNIVERSAL 64-BIT DSP <-> HYBRID HARDWARE UAC
+            val isUacModeSelected = isHardwareVolumeEnabled
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(onSurface.copy(alpha = 0.06f))
+                    .border(
+                        width = 1.dp,
+                        color = onSurface.copy(alpha = 0.10f),
+                        shape = RoundedCornerShape(14.dp)
+                    )
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Option 1: UNIVERSAL 64-BIT DSP
+                val dspSelected = !isUacModeSelected
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (dspSelected) accent.copy(alpha = 0.18f)
+                            else Color.Transparent
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = if (dspSelected) accent.copy(alpha = 0.55f) else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                        .clickable(enabled = onToggleHardwareVolume != null) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (isUacModeSelected) {
+                                onToggleHardwareVolume?.invoke(false)
+                            } else {
+                                onToggleHardwareVolume?.invoke(true)
+                            }
+                        }
+                        .padding(vertical = 10.dp, horizontal = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "UNIVERSAL 64-BIT DSP",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = if (dspSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                            letterSpacing = 0.6.sp,
+                            fontSize = 10.sp
+                        ),
+                        color = if (dspSelected) accent else onSurface.copy(alpha = 0.55f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                // Option 2: HYBRID HARDWARE UAC
+                val uacSelected = isUacModeSelected
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (uacSelected) accent.copy(alpha = 0.18f)
+                            else Color.Transparent
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = if (uacSelected) accent.copy(alpha = 0.55f) else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                        .clickable(enabled = onToggleHardwareVolume != null) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (!isUacModeSelected) {
+                                onToggleHardwareVolume?.invoke(true)
+                            } else {
+                                onToggleHardwareVolume?.invoke(false)
+                            }
+                        }
+                        .padding(vertical = 10.dp, horizontal = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "HYBRID HARDWARE UAC",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = if (uacSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                            letterSpacing = 0.6.sp,
+                            fontSize = 10.sp
+                        ),
+                        color = if (uacSelected) accent else onSurface.copy(alpha = 0.55f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Status row beneath segmented toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val dotColor = when {
+                    isHardwareVolumeActive -> Color(0xFFFFD700)
+                    isHardwareVolumeSupported && isHardwareVolumeEnabled -> accent
+                    else -> onSurfaceVariant.copy(alpha = 0.5f)
+                }
+                val statusText = when {
+                    isHardwareVolumeActive -> "Hardware DAC Volume Control Active"
+                    isHardwareVolumeSupported && isHardwareVolumeEnabled -> "Hardware UAC Enabled (Standby)"
+                    isHardwareVolumeSupported -> "DAC Supports Hardware Volume (DSP Mode Active)"
+                    else -> "USB/Internal DAC: Universal 64-Bit DSP Gain"
+                }
+                Box(
+                    modifier = Modifier
+                        .size(5.dp)
+                        .clip(CircleShape)
+                        .background(dotColor)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = statusText,
+                    color = if (isHardwareVolumeActive) Color(0xFFFFD700) else onSurfaceVariant.copy(alpha = 0.75f),
+                    fontSize = 10.sp,
+                    fontFamily = TerminalFont,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
 
             // Pure Free-Swipe Volume Pill (Single awaitEachGesture + GPU Canvas = 0ms latency)
             Box(
