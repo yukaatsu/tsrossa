@@ -305,6 +305,7 @@ void decoder_thread_func() {
       }
     }
     if (needWait) {
+      g_audioState.isDecoding.store(false, std::memory_order_release);
       std::unique_lock<std::mutex> lock(g_audioState.decoderMutex);
       if (g_audioState.cancelDecoding.load()) break;
       g_audioState.decoderCv.wait_for(lock, std::chrono::milliseconds(50), [] {
@@ -322,14 +323,19 @@ void decoder_thread_func() {
     // Ring buffer backpressure: if ring buffer is filled ahead of read pointer up to capacity
     if (capacity > 0 && current >= readIdx &&
         (current - readIdx) + CHUNK_FRAMES + RING_BUFFER_SAFETY_FRAMES > capacity) {
+      g_audioState.isDecoding.store(false, std::memory_order_release);
       std::unique_lock<std::mutex> lock(g_audioState.decoderMutex);
-      g_audioState.decoderCv.wait_for(lock, std::chrono::milliseconds(5));
+      g_audioState.decoderCv.wait_for(lock, std::chrono::milliseconds(20));
       continue;
     }
 
-    uint64_t framesToDecode = CHUNK_FRAMES;
-    if (current + framesToDecode > total) {
-      framesToDecode = total - current;
+    g_audioState.isDecoding.store(true, std::memory_order_release);
+
+    uint64_t remaining = (total > current) ? (total - current) : 0;
+    uint64_t framesToDecode = std::min<uint64_t>(CHUNK_FRAMES, remaining);
+    if (framesToDecode == 0) {
+      g_audioState.isDecoding.store(false, std::memory_order_release);
+      continue;
     }
 
     uint64_t writeSlot = (capacity > 0) ? (current % capacity) : current;
@@ -339,6 +345,7 @@ void decoder_thread_func() {
     }
 
     if (g_audioState.pcmBuffer.empty()) {
+      g_audioState.isDecoding.store(false, std::memory_order_release);
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
       continue;
     }
@@ -356,21 +363,27 @@ void decoder_thread_func() {
       // Decode finished or reached EOF prematurely
       LOGI("[TsrossaDecode] Decoder reached EOF at frame %llu / %llu",
            (unsigned long long)current, (unsigned long long)total);
-      g_audioState.decodedFrames.store(total, std::memory_order_release);
+      std::lock_guard<std::mutex> lock(g_audioState.decoderMutex);
+      g_audioState.totalFrames.store(current, std::memory_order_release);
+      g_audioState.decodedFrames.store(current, std::memory_order_release);
+      g_audioState.isDecoding.store(false, std::memory_order_release);
       continue;
     }
 
-    current += read;
-    g_audioState.decodedFrames.store(current, std::memory_order_release);
+    uint64_t newDecoded = current + read;
+    g_audioState.decodedFrames.store(newDecoded, std::memory_order_release);
+    if (newDecoded >= total) {
+      g_audioState.isDecoding.store(false, std::memory_order_release);
+    }
 
     // Pace decode slightly if comfortably ahead (> 3 seconds)
     uint32_t sr = g_audioState.sampleRate.load(std::memory_order_relaxed);
-    if (sr > 0 && current > readIdx + (uint64_t)sr * 3) {
+    if (sr > 0 && newDecoded > readIdx + (uint64_t)sr * 3) {
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
   }
 
-  g_audioState.isDecoding.store(false);
+  g_audioState.isDecoding.store(false, std::memory_order_release);
   LOGI("[TsrossaDecode] Exiting background decode thread.");
 }
 
@@ -920,9 +933,10 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
         g_audioState.activeDecoder = std::move(g_audioState.nextActiveDecoder);
         g_audioState.needGaplessDecoderHandoff.store(false, std::memory_order_release);
       }
+      bool needMoreHandover = (handoverDecoded < handoverTotal);
+      g_audioState.isDecoding.store(needMoreHandover, std::memory_order_release);
       if (g_audioState.decodeThread == nullptr) {
         g_audioState.cancelDecoding.store(false);
-        g_audioState.isDecoding.store(true);
         g_audioState.decodeThread = new std::thread(decoder_thread_func);
       } else {
         g_audioState.decoderCv.notify_one();
@@ -981,6 +995,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
     newChannels = dec->channels;
     newSourceBitDepth = dec->bitsPerSample;
     totalFrames = dec->totalPCMFrameCount;
+    stop_and_join_decode_thread();
     {
       std::lock_guard<std::mutex> dlock(g_audioState.decoderMutex);
       g_audioState.activeDecoder = std::move(dec);
@@ -1123,8 +1138,6 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       }
     }
 
-    stop_and_join_decode_thread();
-
     // Allocate sliding-window ring buffer in RAM
     clean_garbage_internal();
 
@@ -1154,9 +1167,12 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
     stagingBuffer.clear();
     stagingBuffer.shrink_to_fit();
 
-    g_audioState.decodedFrames.store(initialRead);
-    g_audioState.totalFrames.store(totalFrames); // Full track frame count preserved!
-    g_audioState.pcmIndex.store(0);
+    if (initialRead < initialFrames) {
+      totalFrames = initialRead;
+    }
+    g_audioState.decodedFrames.store(initialRead, std::memory_order_release);
+    g_audioState.totalFrames.store(totalFrames, std::memory_order_release); // Full track frame count preserved!
+    g_audioState.pcmIndex.store(0, std::memory_order_release);
   } else {
     // Reused prebuffer: clear any old garbage
     clean_garbage_internal();
@@ -1427,9 +1443,11 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   }
 
   // === STEP 4: ENSURE BACKGROUND DECODE THREAD IS RUNNING ===
+  bool needMoreDecode = (g_audioState.decodedFrames.load(std::memory_order_relaxed) <
+                         g_audioState.totalFrames.load(std::memory_order_relaxed));
+  g_audioState.cancelDecoding.store(false);
+  g_audioState.isDecoding.store(needMoreDecode, std::memory_order_release);
   if (g_audioState.decodeThread == nullptr) {
-    g_audioState.cancelDecoding.store(false);
-    g_audioState.isDecoding.store(true);
     g_audioState.decodeThread = new std::thread(decoder_thread_func);
   } else {
     g_audioState.decoderCv.notify_one();
@@ -1486,12 +1504,23 @@ void stop_audio_internal() {
 bool prepare_next_track_internal(const std::string &path) {
   uint32_t myGen = ++g_audioState.prepareNextGen;
 
-  // Wait until primary track finishes its background decode so they don't contend for CPU / I/O
-  while (g_audioState.isDecoding.load()) {
+  // Wait briefly until initial primary track buffering settles (max ~1 second)
+  int waitTicks = 0;
+  while (g_audioState.isDecoding.load(std::memory_order_acquire) && waitTicks < 20) {
+    if (!g_audioState.isPlaying.load() || g_audioState.cancelDecoding.load()) {
+      return false;
+    }
     if (g_audioState.prepareNextGen.load() != myGen) {
       return false;
     }
+    uint64_t decoded = g_audioState.decodedFrames.load(std::memory_order_relaxed);
+    uint64_t readIdx = g_audioState.pcmIndex.load(std::memory_order_relaxed);
+    uint32_t sr = g_audioState.sampleRate.load(std::memory_order_relaxed);
+    if (sr > 0 && decoded > readIdx && (decoded - readIdx) >= static_cast<uint64_t>(sr) * 5) {
+      break; // Ring buffer already has >= 5 seconds of audio ahead; safe to pre-buffer next track
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    waitTicks++;
   }
 
   auto nextDecoder = std::make_unique<AudioDecoder>();
