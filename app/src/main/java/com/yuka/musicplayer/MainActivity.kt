@@ -916,28 +916,37 @@ fun KewApp(audioEngine: AudioEngine) {
     val usbManager = remember { context.getSystemService(android.content.Context.USB_SERVICE) as android.hardware.usb.UsbManager }
     // Audio focus is managed robustly by AudioForegroundService to survive gesture transitions
 
-    val scannedSupportedFileMap = remember(scannedLibraryItems) {
-        scannedLibraryItems.filter { it.isSupported }.associateBy({ it.file.absolutePath }, { it.file })
-    }
-
     val scannedItemsMap = remember(scannedLibraryItems) {
         scannedLibraryItems.associateBy { it.file.absolutePath }
     }
 
     fun getActiveTrackList(source: PlaybackSource = com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource): List<File> {
-        return if (source == PlaybackSource.LIBRARY) {
-            if (playbackLibraryFiles.isNotEmpty()) {
-                playbackLibraryFiles
-            } else {
-                val playable = com.yuka.musicplayer.util.MusicScannerHelper.filterPlayableFiles(scannedLibraryItems)
-                playbackLibraryFiles = playable
-                playable
+        val liveFileMap = scannedLibraryItems.map { it.file }.associateBy { it.absolutePath }
+        return when (source) {
+            PlaybackSource.LIBRARY -> {
+                if (playbackLibraryFiles.isNotEmpty()) {
+                    playbackLibraryFiles
+                } else {
+                    val playable = com.yuka.musicplayer.util.MusicScannerHelper.filterPlayableFiles(scannedLibraryItems)
+                    playbackLibraryFiles = playable
+                    playable
+                }
             }
-        } else {
-            val playingPlaylist = effectivePlaylists.firstOrNull { it.id == activePlayingPlaylistId } ?: selectedPlaylist
-            val tracks = playingPlaylist?.trackPaths ?: emptyList()
-            tracks.mapNotNull { path ->
-                scannedSupportedFileMap[path] ?: File(path).takeIf { it.exists() && com.yuka.musicplayer.util.MusicScannerHelper.isSupportedAudioFile(it) }
+            PlaybackSource.PLAYLIST -> {
+                val livePlaylists = allPlaylists + folderPlaylists
+                val activeId = activePlayingPlaylistId
+                    ?: com.yuka.musicplayer.audio.AudioPlayerManager.activePlayingPlaylistId
+                    ?: selectedPlaylistId.ifEmpty { null }
+                val playingPlaylist = if (activeId != null) {
+                    livePlaylists.firstOrNull { it.id == activeId }
+                } else {
+                    livePlaylists.firstOrNull()
+                }
+                com.yuka.musicplayer.player.queue.QueueHelper.resolvePlaylistTracks(
+                    playlistTrackPaths = playingPlaylist?.trackPaths,
+                    fallbackTrackPaths = com.yuka.musicplayer.audio.AudioPlayerManager.playlistPaths,
+                    supportedFileMap = liveFileMap
+                )
             }
         }
     }
@@ -958,13 +967,18 @@ fun KewApp(audioEngine: AudioEngine) {
     }
 
     fun getNextTrackFile(isAutoAdvance: Boolean, consumeQueue: Boolean): File? {
+        val currentSource = try {
+            PlaybackSource.valueOf(currentPlaybackSourceStr)
+        } catch (e: Exception) {
+            com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource
+        }
         val result = com.yuka.musicplayer.player.queue.QueueHelper.resolveNextTrack(
             isAutoAdvance = isAutoAdvance,
             consumeQueue = consumeQueue,
             priorityQueue = priorityQueue,
             currentTrack = currentTrack,
             repeatMode = repeatMode,
-            activeList = getActiveTrackList(com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource),
+            activeList = getActiveTrackList(currentSource),
             isShuffleEnabled = isShuffleEnabled,
             shuffledList = shuffledList,
             currentShuffleIndex = currentShuffleIndex
@@ -1010,18 +1024,31 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
 
-    fun playTrack(file: File, isAutoAdvance: Boolean, recordHistory: Boolean = true, source: PlaybackSource? = null, playlistId: String? = null) {
-        val targetSource = source ?: com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource
-        val sourceChanged = targetSource != com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource
-        val playlistChanged = targetSource == PlaybackSource.PLAYLIST && playlistId != null && playlistId != activePlayingPlaylistId
+    fun playTrack(
+        file: File,
+        isAutoAdvance: Boolean = false,
+        recordHistory: Boolean = true,
+        source: PlaybackSource? = null,
+        playlistId: String? = activePlayingPlaylistId ?: com.yuka.musicplayer.audio.AudioPlayerManager.activePlayingPlaylistId ?: selectedPlaylistId.ifEmpty { null },
+        targetSource: PlaybackSource? = null
+    ) {
+        val resolvedSource = targetSource ?: source ?: com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource
+        val resolvedPlaylistId = playlistId ?: (if (resolvedSource == PlaybackSource.PLAYLIST) (activePlayingPlaylistId ?: com.yuka.musicplayer.audio.AudioPlayerManager.activePlayingPlaylistId ?: selectedPlaylistId.ifEmpty { null }) else null)
+        val sourceChanged = resolvedSource != com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource
+        val playlistChanged = resolvedSource == PlaybackSource.PLAYLIST && resolvedPlaylistId != null && resolvedPlaylistId != activePlayingPlaylistId
         
-        com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource = targetSource
-        currentPlaybackSourceStr = targetSource.name
+        com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource = resolvedSource
+        currentPlaybackSourceStr = resolvedSource.name
         
-        if (targetSource == PlaybackSource.PLAYLIST) {
-            if (playlistId != null) {
-                activePlayingPlaylistId = playlistId
-                com.yuka.musicplayer.audio.AudioPlayerManager.activePlayingPlaylistId = playlistId
+        if (resolvedSource == PlaybackSource.PLAYLIST) {
+            if (resolvedPlaylistId != null) {
+                activePlayingPlaylistId = resolvedPlaylistId
+                com.yuka.musicplayer.audio.AudioPlayerManager.activePlayingPlaylistId = resolvedPlaylistId
+                val livePlaylists = allPlaylists + folderPlaylists
+                val playlistObj = livePlaylists.firstOrNull { it.id == resolvedPlaylistId }
+                if (playlistObj != null) {
+                    com.yuka.musicplayer.audio.AudioPlayerManager.playlistPaths = playlistObj.trackPaths
+                }
             }
         } else {
             activePlayingPlaylistId = null
@@ -1034,7 +1061,7 @@ fun KewApp(audioEngine: AudioEngine) {
             audioEngine.clearNextTrack()
         }
 
-        if (targetSource == PlaybackSource.LIBRARY && (playbackLibraryFiles.isEmpty() || playbackLibraryFiles.none { it.absolutePath == file.absolutePath })) {
+        if (resolvedSource == PlaybackSource.LIBRARY && (playbackLibraryFiles.isEmpty() || playbackLibraryFiles.none { it.absolutePath == file.absolutePath })) {
             playbackLibraryFiles = com.yuka.musicplayer.util.MusicScannerHelper.filterPlayableFiles(scannedLibraryItems)
         }
 
@@ -1045,9 +1072,18 @@ fun KewApp(audioEngine: AudioEngine) {
             }
         }
 
-        val currentActiveList = getActiveTrackList(targetSource)
+        val currentActiveList = getActiveTrackList(resolvedSource)
         if (isShuffleEnabled) {
-            ensureShuffleDeck(currentActiveList, file)
+            val trackIdx = com.yuka.musicplayer.player.queue.QueueHelper.indexOfTrack(shuffledList, file)
+            val deckPaths = shuffledList.map { it.absolutePath }.toSet()
+            val activePaths = currentActiveList.map { it.absolutePath }.toSet()
+            if (shuffledList.isNotEmpty() && trackIdx != -1 && deckPaths == activePaths) {
+                currentShuffleIndex = trackIdx
+            } else {
+                val remaining = currentActiveList.filter { it.absolutePath != file.absolutePath }.shuffled()
+                shuffledList = listOf(file) + remaining
+                currentShuffleIndex = 0
+            }
         }
 
         if (!isAutoAdvance) {
@@ -1167,7 +1203,20 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
     
-    playTrackRef = { f, auto, rec -> playTrack(f, auto, rec, source = com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource) }
+    playTrackRef = { file, auto, rec ->
+        val currentSource = try {
+            PlaybackSource.valueOf(currentPlaybackSourceStr)
+        } catch (e: Exception) {
+            com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource
+        }
+        playTrack(
+            file = file,
+            isAutoAdvance = auto,
+            recordHistory = rec,
+            targetSource = currentSource,
+            playlistId = activePlayingPlaylistId ?: com.yuka.musicplayer.audio.AudioPlayerManager.activePlayingPlaylistId ?: selectedPlaylistId.ifEmpty { null }
+        )
+    }
 
     fun playPrev() {
         val currentPos = if (audioEngine.isPlaying()) audioEngine.getPosition() else playbackPosition
@@ -1319,9 +1368,10 @@ fun KewApp(audioEngine: AudioEngine) {
                 }
 
                 if (isShuffleEnabled && shuffledList.isNotEmpty()) {
-                    val idx = shuffledList.indexOfFirst { matchesPath(it) }
-                    if (idx != -1) {
-                        currentShuffleIndex = idx
+                    val idx = com.yuka.musicplayer.player.queue.QueueHelper.indexOfTrack(shuffledList, nextFile)
+                    val effectiveIdx = if (idx != -1) idx else shuffledList.indexOfFirst { matchesPath(it) }
+                    if (effectiveIdx != -1) {
+                        currentShuffleIndex = effectiveIdx
                     }
                 }
                 
@@ -1897,34 +1947,64 @@ fun KewApp(audioEngine: AudioEngine) {
             priorityQueueSize = priorityQueue.size,
             onOpenQueue = { showQueuePanel = true },
             onPlayPlaylistFile = { file, playlistId ->
-                currentPlaybackSourceStr = PlaybackSource.PLAYLIST.name
-                playTrack(file, false, source = PlaybackSource.PLAYLIST, playlistId = playlistId)
+                val livePlaylists = allPlaylists + folderPlaylists
+                val targetPlaylist = livePlaylists.firstOrNull { it.id == playlistId }
+                if (targetPlaylist != null) {
+                    com.yuka.musicplayer.audio.AudioPlayerManager.playlistPaths = targetPlaylist.trackPaths
+                }
+                playTrack(
+                    file,
+                    isAutoAdvance = false,
+                    targetSource = PlaybackSource.PLAYLIST,
+                    playlistId = playlistId
+                )
             },
             onPlaylistFileRemoved = { path, playlistId ->
                 modalActionHandler.onRemoveFromPlaylist(playlistId, path)
             },
             onPlayPlaylistSequential = { playlist ->
-                val files = playlist.trackPaths.map { File(it) }.filter { it.exists() }
-                if (files.isNotEmpty()) {
+                val liveMap = scannedLibraryItems.map { it.file }.associateBy { it.absolutePath }
+                val tracks = com.yuka.musicplayer.player.queue.QueueHelper.resolvePlaylistTracks(
+                    playlistTrackPaths = playlist.trackPaths,
+                    fallbackTrackPaths = emptyList(),
+                    supportedFileMap = liveMap
+                )
+                val firstTrack = tracks.firstOrNull()
+                if (firstTrack != null) {
                     isShuffleEnabled = false
-                    currentPlaybackSourceStr = PlaybackSource.PLAYLIST.name
-                    activePlayingPlaylistId = playlist.id
-                    com.yuka.musicplayer.audio.AudioPlayerManager.activePlayingPlaylistId = playlist.id
-                    playTrack(files.first(), false, source = PlaybackSource.PLAYLIST, playlistId = playlist.id)
+                    shuffledList = emptyList()
+                    currentShuffleIndex = -1
+                    com.yuka.musicplayer.audio.AudioPlayerManager.playlistPaths = playlist.trackPaths
+                    playTrack(
+                        firstTrack,
+                        isAutoAdvance = false,
+                        targetSource = PlaybackSource.PLAYLIST,
+                        playlistId = playlist.id
+                    )
                     Toast.makeText(context, "Playing playlist '${playlist.name}'", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Playlist '${playlist.name}' is empty", Toast.LENGTH_SHORT).show()
                 }
             },
             onPlayPlaylistShuffled = { playlist ->
-                val files = playlist.trackPaths.map { File(it) }.filter { it.exists() }
-                if (files.isNotEmpty()) {
+                val liveMap = scannedLibraryItems.map { it.file }.associateBy { it.absolutePath }
+                val tracks = com.yuka.musicplayer.player.queue.QueueHelper.resolvePlaylistTracks(
+                    playlistTrackPaths = playlist.trackPaths,
+                    fallbackTrackPaths = emptyList(),
+                    supportedFileMap = liveMap
+                )
+                if (tracks.isNotEmpty()) {
                     isShuffleEnabled = true
-                    currentPlaybackSourceStr = PlaybackSource.PLAYLIST.name
-                    activePlayingPlaylistId = playlist.id
-                    com.yuka.musicplayer.audio.AudioPlayerManager.activePlayingPlaylistId = playlist.id
-                    val randomTrack = files.random()
-                    playTrack(randomTrack, false, source = PlaybackSource.PLAYLIST, playlistId = playlist.id)
+                    shuffledList = emptyList()
+                    currentShuffleIndex = -1
+                    com.yuka.musicplayer.audio.AudioPlayerManager.playlistPaths = playlist.trackPaths
+                    val randomTrack = tracks.random()
+                    playTrack(
+                        randomTrack,
+                        isAutoAdvance = false,
+                        targetSource = PlaybackSource.PLAYLIST,
+                        playlistId = playlist.id
+                    )
                     Toast.makeText(context, "Shuffle playlist '${playlist.name}'", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Playlist '${playlist.name}' is empty", Toast.LENGTH_SHORT).show()
