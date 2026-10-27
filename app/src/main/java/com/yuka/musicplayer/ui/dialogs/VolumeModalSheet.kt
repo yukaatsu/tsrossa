@@ -21,6 +21,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -177,6 +181,10 @@ fun VolumeModalSheet(
                             color = if (dspSelected) accent.copy(alpha = 0.55f) else Color.Transparent,
                             shape = RoundedCornerShape(10.dp)
                         )
+                        .semantics {
+                            role = Role.RadioButton
+                            this.selected = dspSelected
+                        }
                         .clickable(enabled = onToggleHardwareVolume != null) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             if (isUacModeSelected) {
@@ -216,6 +224,10 @@ fun VolumeModalSheet(
                             color = if (uacSelected) accent.copy(alpha = 0.55f) else Color.Transparent,
                             shape = RoundedCornerShape(10.dp)
                         )
+                        .semantics {
+                            role = Role.RadioButton
+                            this.selected = uacSelected
+                        }
                         .clickable(enabled = onToggleHardwareVolume != null) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             if (!isUacModeSelected) {

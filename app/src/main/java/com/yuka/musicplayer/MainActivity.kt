@@ -1102,7 +1102,7 @@ fun KewApp(audioEngine: AudioEngine) {
             coverArt = null,
             dominantColor = cachedDominant ?: currentTrack?.dominantColor ?: Color(0xFF00FF00)
         )
-        com.yuka.musicplayer.utils.AppLogger.i("PLAYBACK", "playTrack: ${file.name} (source=$targetSource, auto=$isAutoAdvance)")
+        com.yuka.musicplayer.utils.AppLogger.i("PLAYBACK", "playTrack: ${file.name} (source=$resolvedSource, auto=$isAutoAdvance)")
         isPlaying = true
         com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying = true
         currentTrack = initialTrack
