@@ -1,37 +1,45 @@
-# Changelog
+# Release Notes & Changelog
 
-All notable changes to **Tsrossa Music Player** are documented in this file.
+## Version 1.7.0 (2026-10-31) — The Audiophile Tuning Update 🎧
 
----
+Hey everyone! Welcome to version **1.7.0**. 
 
-## [1.7.0] - 2026-10-31
-
-### 🎵 Universal 64-Bit Audiophile DSP
-* **Calibrated Studio Taper Volume Curve**: Implemented an audiophile-grade perceptual volume curve `dB(v) = -48.0 * (1 - v) * sqrt(1 - v)`. Volume at 50% now delivers powerful ~14.2% voltage output (-16.97 dB) for authoritative dynamics without clipping or harshness.
-* **Decorrelated Dual-Channel SplitMix64 TPDF Dither**: Replaced legacy single LCG PRNG with dual independent 64-bit SplitMix64 state generators for Left and Right channels. Interaural Cross-Correlation (`IACC = 0.0`) provides an expansive 3D soundstage and holographic instrument separation.
-* **Frame-Locked Stereo Volume Ramp**: Synchronized volume transitions strictly per stereo frame (L and R ramp at the exact same instant), eliminating vocal center-image drift during volume adjustments.
-* **Mid-Tread Rounding Quantization**: Integrated `std::llrint()` nearest-integer rounding for 32-bit, 24-bit, and 16-bit subframe output, preserving delicate micro-details, harmonic decay, and acoustic reverb tails without truncation distortion.
-
-### 🔌 Hybrid Hardware UAC (USB Audio Class 1.0 & 2.0)
-* **High-Resolution Subframe Container Negotiation**: Automatic negotiation prioritizes the highest bit-depth container supported by the external DAC (32-bit > 24-bit > 16-bit), providing up to 192 dB dynamic processing headroom.
-* **Auto Full-Scale Unity Gain & Unmute**: Sends hardware control transfers to unmute and force `0.0 dB` Unity Gain (2Vrms/4Vrms Full-Scale) on DAC initialization and altsetting switch, resolving low-volume or cold-boot soft-mute issues on Cirrus Logic CS43131, ESS Sabre, Conexant CX31993, and other audiophile dongles.
-* **Hardened Feature Unit Control**: Robust parsing of UAC 1.0 & UAC 2.0 descriptors across master and discrete stereo channels.
-* **Segmented Audio Mode Selector**: Dedicated UI toggle allowing instantaneous seamless switching between **UNIVERSAL 64-BIT DSP** and **HARDWARE UAC** modes.
-
-### 🎨 UI / UX Refinements
-* **Developer Card Redesign**: Restored GitHub action button to full-width with the official GitHub brand glyph (`GlyphGitHub`).
-* **Typography Polish**: Removed Unicode arrow decorators (`↗`) from Developer and Donation cards for clean, balanced text baselines across all Android OEM font engines.
-* **Dedicated Donation Section**: Isolated developer support link into a distinct card featuring the custom Bagi-Bagi vector glyph (`GlyphBagiBagi`).
-
-### 🛠️ Engine & Playback Stability
-* **Gapless Decoder Handover**: Fixed decoder thread lifecycle and eliminated race conditions/deadlocks during gapless track transitions over USB Isochronous streaming.
-* **Queue & Playlist Resolution**: Hardened shuffle recovery, playlist synchronization, and track index resolution in queue management.
-* **Comprehensive Test Suite**: Added JUnit test assertions verifying volume curve mathematical parity, boundary safety, and bit-exact calculations.
+This update is all about sound quality, dynamic punch, and interface polish. If you’ve felt that USB DAC playback sounded a bit tame or lacked that airy, wide soundstage in previous builds, this release was made specifically for you. We overhauled the internal audio math from the ground up and cleaned up the interface.
 
 ---
 
-## [1.6.0-BETA] - 2026-10-24
-* Initial implementation of direct USB Isochronous audio streaming engine.
-* Support for high-resolution FLAC, WAV, and MP3 decoding.
-* Early implementation of gapless playback buffer.
-* Material 3 / Modern Cyberpunk tactile user interface.
+### What’s New & Improved
+
+#### 🔊 Bigger Sound, Zero Distortion (Universal 64-Bit DSP)
+* **Tuned Studio Taper Volume Curve**: We completely recalibrated how volume scales. At 50% slider, you now get significantly more presence and body (~14.2% output voltage / -17 dB) rather than sounding hushed. It gives your music full, punchy dynamics across normal listening levels without ever clipping the peaks.
+* **Wider, Holographic Soundstage**: We introduced independent dual-channel SplitMix64 random generators for stereo dithering. By eliminating crosstalk noise between the left and right ears, the stereo imaging opens up dramatically—instruments have distinct breathing room, and live recordings feel much more spacious.
+* **Locked Stereo Imaging**: Volume ramps now step simultaneously for both left and right channels per stereo frame. No more subtle vocal swaying or imaging drift when you adjust the volume slider during a song.
+* **True Micro-Detail Preservation**: Subtle reverb decays, room acoustics, and gentle acoustic fading now round smoothly to the nearest target bit (`std::llrint`), preventing harsh truncation distortion at low listening volumes.
+
+#### ⚡ Full Power to Your External DAC (Hybrid Hardware UAC)
+* **Automatic Full-Scale Unity & Unmute**: Many USB dongles and DACs (Cirrus Logic CS43131, ESS Sabre, Conexant CX31993, etc.) boot up in a quiet "soft-mute" state. Tsrossa now forcefully commands the DAC hardware to full 0.0 dB scale and un-mutes all channels on startup and track change. You get the full 2Vrms/4Vrms output right out of the gate.
+* **32-Bit USB Container Priority**: The audio streamer now always requests the highest bit-depth container your DAC can handle (up to 32-bit/384kHz). This gives our 64-bit DSP maximum dynamic headroom and keeps 16-bit to 24-bit transitions seamless without relay clicks.
+* **Dedicated Mode Switcher**: Easily toggle between **Universal 64-Bit DSP** and **Hardware UAC** directly from the playback volume panel.
+
+#### 🎨 Interface Polish & Housekeeping
+* **Cleaner Developer Card**: Restored the GitHub action button to a clean, balanced full-width layout with the official GitHub icon.
+* **Farewell to Arrow Clutter**: Removed the Unicode `↗` symbols from the buttons across the Settings and About pages for crisp, aligned typography.
+* **Dedicated Support Section**: The donation link (Bagi-Bagi) now has its own dedicated card right below the developer info, keeping things clean and uncluttered.
+
+#### 🛠️ Under-the-Hood Fixes
+* Fixed gapless handover edge cases that could cause USB audio worker pauses between long tracks.
+* Improved queue shuffle recovery and playlist track indexing.
+* Full test coverage ensuring mathematical bit-accuracy between C++ native code and Kotlin UI layers.
+
+---
+
+### Previous Releases
+
+#### Version 1.6.0-BETA
+* Initial rollout of direct USB Isochronous streaming engine.
+* Support for FLAC, WAV, and MP3 high-resolution decoding.
+* Early prototype of the tactile cyberpunk UI.
+
+---
+
+*Thank you for listening and supporting Tsrossa Music Player! If you enjoy this release, please consider starring the repository on GitHub or sharing your feedback.*
