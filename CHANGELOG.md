@@ -1,6 +1,6 @@
 # Changelog
 
-### Version 1.7.0
+### Version 1.7.0-BETA
 * Added Universal 64-Bit Audiophile DSP with calibrated studio taper curve for more powerful, dynamic volume output.
 * Implemented decorrelated dual-channel SplitMix64 TPDF dither for a wider soundstage and holographic instrument separation.
 * Implemented frame-locked stereo volume ramp to prevent vocal center-image drift during volume changes.
