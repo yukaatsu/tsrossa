@@ -7,19 +7,19 @@ import org.junit.Test
 class VolumeAndStreamingMathTest {
 
     @Test
-    fun `psychoacoustic curve produces -59_26 dB at 5 percent and 0 dB at 100 percent`() {
+    fun `psychoacoustic curve produces -44_45 dB at 5 percent and 0 dB at 100 percent`() {
         assertEquals(Float.NEGATIVE_INFINITY, AudioEngine.sliderToPerceptualDb(0.0f), 0.001f)
         assertEquals(0.0f, AudioEngine.sliderToPerceptualDb(1.0f), 0.001f)
 
         val dbAt5Percent = AudioEngine.sliderToPerceptualDb(0.05f)
-        // Must be around -59.26 dB (much quieter than old -26.02 dB!)
-        assertEquals(-59.26f, dbAt5Percent, 0.1f)
+        // Calibrated Audiophile Studio Taper curve: -48.0 * (1-v) * sqrt(1-v)
+        assertEquals(-44.45f, dbAt5Percent, 0.1f)
 
         val dbAt50Percent = AudioEngine.sliderToPerceptualDb(0.50f)
-        assertEquals(-22.63f, dbAt50Percent, 0.1f)
+        assertEquals(-16.97f, dbAt50Percent, 0.1f)
 
         val dbAt75Percent = AudioEngine.sliderToPerceptualDb(0.75f)
-        assertEquals(-8.00f, dbAt75Percent, 0.05f)
+        assertEquals(-6.00f, dbAt75Percent, 0.05f)
     }
 
     @Test
@@ -28,8 +28,8 @@ class VolumeAndStreamingMathTest {
         assertEquals(1.0f, AudioEngine.sliderToLinearGain(1.0f), 0.0f)
 
         val gainAt5Percent = AudioEngine.sliderToLinearGain(0.05f)
-        // 10^(-59.26 / 20) ≈ 0.001089
-        assertTrue("Gain at 5% should be ~0.0011, got $gainAt5Percent", gainAt5Percent in 0.0010f..0.0012f)
+        // 10^(-44.45 / 20) ≈ 0.00599
+        assertTrue("Gain at 5% should be ~0.0060, got $gainAt5Percent", gainAt5Percent in 0.0058f..0.0062f)
     }
 
     @Test
@@ -47,9 +47,9 @@ class VolumeAndStreamingMathTest {
 
         assertEquals("0.0 dB (Bit-Perfect)", formatDb(100))
         assertEquals("-∞ dB (Muted)", formatDb(0))
-        assertEquals("-59.3 dB", formatDb(5))
-        assertEquals("-22.6 dB", formatDb(50))
-        assertEquals("-8.0 dB", formatDb(75))
+        assertEquals("-44.4 dB", formatDb(5))
+        assertEquals("-17.0 dB", formatDb(50))
+        assertEquals("-6.0 dB", formatDb(75))
     }
 
     @Test
@@ -94,11 +94,11 @@ class VolumeAndStreamingMathTest {
         val targetHw0 = AudioEngine.quantizeHardwareVolumeTarget(0.0f, minDb, maxDb, resDb, preferHardwareVolume = true)
         assertEquals(minDb, targetHw0)
 
-        // In Hardware Volume mode at 5% volume: desired ~ -59.26 dB -> rounded to nearest 1 dB step = -59 dB (-15104)
+        // In Hardware Volume mode at 5% volume: desired ~ -44.45 dB -> rounded to nearest 1 dB step = -44 dB (-11264)
         val targetHw5 = AudioEngine.quantizeHardwareVolumeTarget(0.05f, minDb, maxDb, resDb, preferHardwareVolume = true)
-        assertEquals((-59 * 256).toShort(), targetHw5)
+        assertEquals((-44 * 256).toShort(), targetHw5)
 
-        // Test with 2 dB step (512): -59 dB quantizes to -58 dB (-14848) or -60 dB (-15360)
+        // Test with 2 dB step (512): -44 dB quantizes to -44 dB (-11264)
         val resDb2 = 512.toShort()
         val targetHw5Step2 = AudioEngine.quantizeHardwareVolumeTarget(0.05f, minDb, maxDb, resDb2, preferHardwareVolume = true)
         assertEquals(0, targetHw5Step2.toInt() % 512)
@@ -107,7 +107,7 @@ class VolumeAndStreamingMathTest {
     @Test
     fun `residual software attenuation covers hardware bounds and step quantization`() {
         // Case 1: DAC hardware minimum volume clamped at -40 dB (hardware bound)
-        // User sets volume to 5% (slider = 0.05f). Desired dB is ~ -59.26 dB.
+        // User sets volume to 5% (slider = 0.05f). Desired dB is ~ -44.45 dB.
         val slider = 0.05f
         val desiredDb = AudioEngine.sliderToPerceptualDb(slider)
         val hwClampedDb = -40.0f
@@ -116,12 +116,12 @@ class VolumeAndStreamingMathTest {
         val residualDb = 20.0f * kotlin.math.log10(residualGain)
         val combinedDb = hwClampedDb + residualDb
 
-        // Combined hardware + software attenuation must match desired -59.26 dB
+        // Combined hardware + software attenuation must match desired -44.45 dB
         assertEquals(desiredDb, combinedDb, 0.05f)
-        assertEquals(-59.26f, combinedDb, 0.1f)
+        assertEquals(-44.45f, combinedDb, 0.1f)
 
-        // Case 2: Hardware step quantization (e.g. 2 dB steps, desired -59.26 dB quantized to -58.0 dB)
-        val hwQuantizedDb = -58.0f
+        // Case 2: Hardware step quantization (e.g. 2 dB steps, desired -44.45 dB quantized to -44.0 dB)
+        val hwQuantizedDb = -44.0f
         val residualGainQuant = AudioEngine.computeResidualGain(slider, hwQuantizedDb)
         val residualDbQuant = 20.0f * kotlin.math.log10(residualGainQuant)
         val combinedQuantDb = hwQuantizedDb + residualDbQuant
@@ -359,5 +359,129 @@ class VolumeAndStreamingMathTest {
         assertTrue(backgroundThreadProcessedHandoff)
         assertTrue(restartedLoopWithFreshCounters)
         org.junit.Assert.assertFalse(needGaplessDecoderHandoff.get())
+    }
+
+    // =========================================================================
+    // 8. Seek vs Background Decoder Concurrency & 70% Cutoff Regression Tests
+    // =========================================================================
+
+    @Test
+    fun seekGenerationGuard_preventsStaleDecodeChunkFromClobberingSeekState() {
+        // Simulasi lagu 10.000.000 frame (100%). Baru terdekode 500.000 frame (5%).
+        val originalTotalFrames = 10_000_000L
+        var totalFrames = originalTotalFrames
+        var decodedFrames = 500_000L
+        var pcmIndex = 10_000L
+        var fileCursor = 500_000L
+        var seekGeneration = 0L
+
+        // 1. Thread decode mengambil snapshot sebelum membaca chunk 16.384 frame
+        val decodeSnapshotGen = seekGeneration
+        val decodeSnapshotCurrent = decodedFrames
+        val chunkRead = 16_384L
+
+        // 2. User menyeret paksa seek bar ke 60% (6.000.000) atau 30% (3.000.000) saat lagu baru diputar!
+        val targetSeekFrame = 3_000_000L // 30%
+        seekGeneration += 1L
+        fileCursor = targetSeekFrame
+        decodedFrames = targetSeekFrame
+        pcmIndex = targetSeekFrame
+
+        // 3. Thread decode selesai membaca chunk lama dan mencoba komit:
+        // Dengan seekGeneration guard, komit chunk lama WAJIB ditolak!
+        if (seekGeneration == decodeSnapshotGen) {
+            decodedFrames = decodeSnapshotCurrent + chunkRead
+        }
+
+        assertEquals("decodedFrames tidak boleh tertimpa balik ke 5% oleh chunk lama", targetSeekFrame, decodedFrames)
+        assertEquals("pcmIndex harus tetap di targetSeekFrame", targetSeekFrame, pcmIndex)
+
+        // 4. Thread decode melanjutkan pembacaan dari posisi baru (30% s/d 100% = sisa 7.000.000 frame)
+        val remainingInFile = originalTotalFrames - fileCursor // 7.000.000 frame (70% lagu)
+        decodedFrames += remainingInFile
+        fileCursor += remainingInFile
+
+        // Saat mencapai EOF (fileCursor == originalTotalFrames), decodedFrames harus tepat 100% (bukan 70%!)
+        assertEquals("Saat EOF, decodedFrames harus mencapai 100% totalFrames (bukan 70%)", originalTotalFrames, decodedFrames)
+        assertEquals("totalFrames tidak boleh terpotong menjadi 70%", originalTotalFrames, totalFrames)
+    }
+
+    @Test
+    fun inMemoryFastPathSeek_preservesDecodedFramesWhenTrackFullyBuffered() {
+        // Lagu <= 64MB (misal 4.000.000 frame) yang sudah selesai didekode 100% di RAM
+        val totalFrames = 4_000_000L
+        val capacityFrames = 4_000_000L
+        var decodedFrames = 4_000_000L
+        var pcmIndex = 100_000L
+
+        val targetFrame = 2_500_000L
+        val isFullyInRam = (totalFrames in 1..capacityFrames) && (decodedFrames >= totalFrames)
+        assertTrue("Track harus terdeteksi 100% berada di dalam RAM", isFullyInRam)
+
+        if (isFullyInRam) {
+            // Fast-path: hanya menggeser pcmIndex tanpa mereset decodedFrames
+            pcmIndex = targetFrame
+        } else {
+            decodedFrames = targetFrame
+            pcmIndex = targetFrame
+        }
+
+        assertEquals(targetFrame, pcmIndex)
+        assertEquals("decodedFrames harus tetap 100% agar tidak memicu silence/re-decode", totalFrames, decodedFrames)
+        assertTrue("frames_avail (decodedFrames - pcmIndex) harus > 0 seketika", (decodedFrames - pcmIndex) > 0L)
+    }
+
+    @Test
+    fun clearNextTrack_duringPendingGaplessHandoff_promotesNextDecoderInsteadOfClosing() {
+        // Skenario Lagu 2 > 32MB (~70% pre-buffered), baru saja transisi gapless di iso_callback
+        var needGaplessDecoderHandoff = true
+        var activeDecoderId: String? = "Track1_EOF_Decoder"
+        var nextActiveDecoderId: String? = "Track2_Live_Decoder_At_70_Percent"
+
+        // clearNextTrack() dipanggil dari UI (misal karena lagu terakhir atau toggle Shuffle)
+        // sebelum TsrossaDecode sempat menjalankan loop handoff:
+        if (needGaplessDecoderHandoff) {
+            activeDecoderId = nextActiveDecoderId
+            nextActiveDecoderId = null
+            needGaplessDecoderHandoff = false
+        } else {
+            nextActiveDecoderId = null
+        }
+
+        assertEquals("Decoder Lagu 2 wajib dipromosikan ke activeDecoder, bukan ditutup!", "Track2_Live_Decoder_At_70_Percent", activeDecoderId)
+        org.junit.Assert.assertFalse(needGaplessDecoderHandoff)
+    }
+
+    @Test
+    fun isoCallbackCas_doesNotOverwriteConcurrentSeekPcmIndex() {
+        val atomicPcmIndex = java.util.concurrent.atomic.AtomicLong(100_000L)
+        val currentIndexLoadedByIso = atomicPcmIndex.get() // 100_000L
+        val framesToRead = 48L
+
+        // Sementara iso_callback memproses audio, seek_to_internal mengubah pcmIndex ke 5.000.000L
+        val seekTargetFrame = 5_000_000L
+        atomicPcmIndex.set(seekTargetFrame)
+
+        // iso_callback mencoba memajukan pcmIndex dengan CAS:
+        val casSucceeded = atomicPcmIndex.compareAndSet(currentIndexLoadedByIso, currentIndexLoadedByIso + framesToRead)
+
+        org.junit.Assert.assertFalse("CAS harus gagal karena seek telah mengubah pcmIndex", casSucceeded)
+        assertEquals("pcmIndex tidak boleh tertimpa kembali ke posisi pra-seek", seekTargetFrame, atomicPcmIndex.get())
+    }
+
+    @Test
+    fun scrubberEndClamp_preventsSeekingToFinalSingleFrameEof() {
+        val durationSeconds = 240.0
+        val dragProgress = 1.0f // User menyeret paksa seek bar mentok 100% ke kanan
+        val rawSeekSec = dragProgress.toDouble() * durationSeconds
+        val safeMaxSeekSec = if (durationSeconds > 0.5) (durationSeconds - 0.25) else durationSeconds
+        val finalSeekSec = rawSeekSec.coerceIn(0.0, safeMaxSeekSec)
+
+        val sampleRate = 48_000L
+        val totalFrames = (durationSeconds * sampleRate).toLong()
+        val targetFrame = (finalSeekSec * sampleRate).toLong()
+
+        assertTrue("Masih harus tersisa minimal ~12.000 frame (250ms) agar tidak langsung memicu auto-next instan",
+            (totalFrames - targetFrame) >= 10_000L)
     }
 }

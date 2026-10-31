@@ -765,7 +765,7 @@ fun KewApp(audioEngine: AudioEngine) {
 
     fun getDefaultVolumeForMode(isDac: Boolean, isHwVol: Boolean): Float = when {
         isDac && isHwVol -> 1.00f   // 32-bit Hardware Chip = 100%
-        isDac && !isHwVol -> 0.20f  // 64-bit Bit-Perfect DSP = 20%
+        isDac && !isHwVol -> 0.50f  // 64-bit Bit-Perfect DSP = 50% (audiophile comfortable reference)
         else -> 0.05f               // Else = 5%
     }
 
@@ -1090,15 +1090,16 @@ fun KewApp(audioEngine: AudioEngine) {
             isNowPlayingExpanded = true
         }
         
-        // Display skeleton so Now Playing screen isn't empty while metadata loads
+        // Display skeleton with pre-cached duration/metadata so seek bar is immediately responsive on initial play
         val cachedDominant = com.yuka.musicplayer.util.AlbumArtThumbnailCache.getCachedDominantColor(file.absolutePath, file.lastModified())
+        val cachedItem = scannedItemsMap[file.absolutePath]
         val initialTrack = TrackInfo(
             file = file,
-            title = file.nameWithoutExtension,
-            artist = "Loading...",
-            album = "",
-            year = "",
-            durationSeconds = 0.0,
+            title = cachedItem?.title?.takeIf { it.isNotBlank() } ?: file.nameWithoutExtension,
+            artist = cachedItem?.artist?.takeIf { it.isNotBlank() } ?: "Loading...",
+            album = cachedItem?.album ?: "",
+            year = if (cachedItem != null && cachedItem.year > 0) cachedItem.year.toString() else "",
+            durationSeconds = if (cachedItem != null && cachedItem.durationMs > 0L) cachedItem.durationMs / 1000.0 else 0.0,
             coverArt = null,
             dominantColor = cachedDominant ?: currentTrack?.dominantColor ?: Color(0xFF00FF00)
         )
@@ -1382,13 +1383,14 @@ fun KewApp(audioEngine: AudioEngine) {
 
                 // INSTANT SKELETON UPDATE: Prevent UI delay during gapless transition & fix next button repeating
                 val cachedDominant = com.yuka.musicplayer.util.AlbumArtThumbnailCache.getCachedDominantColor(nextFile.absolutePath, nextFile.lastModified())
+                val cachedItem = scannedItemsMap[nextFile.absolutePath]
                 val initialTrack = TrackInfo(
                     file = nextFile,
-                    title = nextFile.nameWithoutExtension,
-                    artist = "Loading...",
-                    album = "",
-                    year = "",
-                    durationSeconds = 0.0,
+                    title = cachedItem?.title?.takeIf { it.isNotBlank() } ?: nextFile.nameWithoutExtension,
+                    artist = cachedItem?.artist?.takeIf { it.isNotBlank() } ?: "Loading...",
+                    album = cachedItem?.album ?: "",
+                    year = if (cachedItem != null && cachedItem.year > 0) cachedItem.year.toString() else "",
+                    durationSeconds = if (cachedItem != null && cachedItem.durationMs > 0L) cachedItem.durationMs / 1000.0 else 0.0,
                     coverArt = null,
                     dominantColor = cachedDominant ?: currentTrack?.dominantColor ?: Color(0xFF00FF00)
                 )

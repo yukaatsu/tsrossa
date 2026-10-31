@@ -1,3 +1,0 @@
-repository='https://github.com/libusb/libusb.git'
-module=''
-tag='origin'

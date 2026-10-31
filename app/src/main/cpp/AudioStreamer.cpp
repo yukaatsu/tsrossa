@@ -1,6 +1,7 @@
 #include "AudioStreamer.h"
 #include "AudioEngineState.h"
 #include "AudioDecoder.h"
+#include "UsbDacController.h"
 
 #include <algorithm>
 #include <chrono>
@@ -276,7 +277,7 @@ void decoder_thread_func() {
 
   constexpr uint64_t CHUNK_FRAMES = 16384ULL;
 
-  while (!g_audioState.cancelDecoding.load()) {
+  while (!g_audioState.cancelDecoding.load(std::memory_order_relaxed)) {
     // 1. Handle gapless decoder handover outside real-time USB callback
     if (g_audioState.needGaplessDecoderHandoff.load(std::memory_order_acquire)) {
       std::lock_guard<std::mutex> lock(g_audioState.decoderMutex);
@@ -290,17 +291,26 @@ void decoder_thread_func() {
       continue; // MUST restart loop with fresh Track 2 activeDecoder and fresh frame counters!
     }
 
-    uint64_t total = g_audioState.totalFrames.load(std::memory_order_acquire);
-    uint64_t current = g_audioState.decodedFrames.load(std::memory_order_acquire);
-    uint64_t capacity = g_audioState.pcmBufferCapacityFrames.load(std::memory_order_acquire);
-    uint32_t channels = g_audioState.channels.load(std::memory_order_acquire);
-    if (channels == 0) channels = 2;
-
-    // Check if waiting is needed (fully decoded or decoder not set)
+    uint64_t total = 0;
+    uint64_t current = 0;
+    uint64_t capacity = 0;
+    uint32_t channels = 2;
+    uint64_t mySeekGen = 0;
     bool needWait = false;
     {
       std::lock_guard<std::mutex> lock(g_audioState.decoderMutex);
-      if (current >= total || g_audioState.activeDecoder == nullptr) {
+      if (g_audioState.needGaplessDecoderHandoff.load(std::memory_order_acquire)) {
+        continue;
+      }
+      mySeekGen = g_audioState.seekGeneration.load(std::memory_order_acquire);
+      total = g_audioState.totalFrames.load(std::memory_order_acquire);
+      current = g_audioState.decodedFrames.load(std::memory_order_acquire);
+      capacity = g_audioState.pcmBufferCapacityFrames.load(std::memory_order_acquire);
+      channels = g_audioState.channels.load(std::memory_order_acquire);
+      if (channels == 0) channels = 2;
+
+      if (current >= total || g_audioState.activeDecoder == nullptr ||
+          g_audioState.isInitializingTrack.load(std::memory_order_acquire)) {
         needWait = true;
       }
     }
@@ -311,14 +321,15 @@ void decoder_thread_func() {
       g_audioState.decoderCv.wait_for(lock, std::chrono::milliseconds(50), [] {
         return g_audioState.cancelDecoding.load() ||
                g_audioState.needGaplessDecoderHandoff.load(std::memory_order_acquire) ||
-               (g_audioState.activeDecoder != nullptr &&
+               (!g_audioState.isInitializingTrack.load(std::memory_order_acquire) &&
+                g_audioState.activeDecoder != nullptr &&
                 g_audioState.decodedFrames.load(std::memory_order_acquire) <
                 g_audioState.totalFrames.load(std::memory_order_acquire));
       });
       continue;
     }
 
-    uint64_t readIdx = g_audioState.pcmIndex.load(std::memory_order_relaxed);
+    uint64_t readIdx = g_audioState.pcmIndex.load(std::memory_order_acquire);
 
     // Ring buffer backpressure: if ring buffer is filled ahead of read pointer up to capacity
     if (capacity > 0 && current >= readIdx &&
@@ -350,35 +361,51 @@ void decoder_thread_func() {
       continue;
     }
 
-    int32_t *writePtr = g_audioState.pcmBuffer.data() + (writeSlot * channels);
-    size_t read = 0;
+    uint64_t newDecoded = current;
+    bool seekChangedOrAborted = false;
     {
       std::lock_guard<std::mutex> lock(g_audioState.decoderMutex);
-      if (g_audioState.activeDecoder != nullptr) {
-        read = g_audioState.activeDecoder->read_pcm_frames_s32(framesToDecode, writePtr);
+      // Verify state has not been altered by a concurrent seek or track transition
+      if (g_audioState.seekGeneration.load(std::memory_order_acquire) != mySeekGen ||
+          g_audioState.needGaplessDecoderHandoff.load(std::memory_order_acquire) ||
+          g_audioState.isInitializingTrack.load(std::memory_order_acquire) ||
+          g_audioState.decodedFrames.load(std::memory_order_acquire) != current ||
+          g_audioState.activeDecoder == nullptr ||
+          g_audioState.pcmBuffer.empty()) {
+        seekChangedOrAborted = true;
+      } else {
+        int32_t *writePtr = g_audioState.pcmBuffer.data() + (writeSlot * channels);
+        size_t read = g_audioState.activeDecoder->read_pcm_frames_s32(framesToDecode, writePtr);
+        if (read == 0) {
+          LOGI("[TsrossaDecode] Decoder reached EOF at frame %llu / %llu",
+               (unsigned long long)current, (unsigned long long)total);
+          uint64_t curPcmIdx = g_audioState.pcmIndex.load(std::memory_order_acquire);
+          if (current >= curPcmIdx && current > 0) {
+            g_audioState.totalFrames.store(current, std::memory_order_release);
+            g_audioState.decodedFrames.store(current, std::memory_order_release);
+          } else {
+            g_audioState.decodedFrames.store(total, std::memory_order_release);
+          }
+          g_audioState.isDecoding.store(false, std::memory_order_release);
+          seekChangedOrAborted = true;
+        } else {
+          newDecoded = current + read;
+          g_audioState.decodedFrames.store(newDecoded, std::memory_order_release);
+          if (newDecoded >= total) {
+            g_audioState.isDecoding.store(false, std::memory_order_release);
+          }
+        }
       }
     }
 
-    if (read == 0) {
-      // Decode finished or reached EOF prematurely
-      LOGI("[TsrossaDecode] Decoder reached EOF at frame %llu / %llu",
-           (unsigned long long)current, (unsigned long long)total);
-      std::lock_guard<std::mutex> lock(g_audioState.decoderMutex);
-      g_audioState.totalFrames.store(current, std::memory_order_release);
-      g_audioState.decodedFrames.store(current, std::memory_order_release);
-      g_audioState.isDecoding.store(false, std::memory_order_release);
+    if (seekChangedOrAborted) {
       continue;
-    }
-
-    uint64_t newDecoded = current + read;
-    g_audioState.decodedFrames.store(newDecoded, std::memory_order_release);
-    if (newDecoded >= total) {
-      g_audioState.isDecoding.store(false, std::memory_order_release);
     }
 
     // Pace decode slightly if comfortably ahead (> 3 seconds)
     uint32_t sr = g_audioState.sampleRate.load(std::memory_order_relaxed);
-    if (sr > 0 && newDecoded > readIdx + (uint64_t)sr * 3) {
+    uint64_t latestReadIdx = g_audioState.pcmIndex.load(std::memory_order_relaxed);
+    if (sr > 0 && newDecoded > latestReadIdx + (uint64_t)sr * 3) {
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
   }
@@ -641,8 +668,9 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
         }
 
         float delta = 0.0f;
-        if (std::abs(target_vol - g_audioState.currentVolume) > 0.001f) {
-          delta = (target_vol - g_audioState.currentVolume) / (float)std::max((size_t)1024, num_samples);
+        if (std::abs(target_vol - g_audioState.currentVolume) > 0.0001f && frames_to_read > 0) {
+          size_t ramp_frames = std::max((size_t)512, frames_to_read);
+          delta = (target_vol - g_audioState.currentVolume) / (float)ramp_frames;
         } else {
           g_audioState.currentVolume = target_vol;
         }
@@ -651,7 +679,7 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
         uint8_t *dst_bytes = (uint8_t *)(buffer + data_offset + bytes_filled);
 
         // BIT-PERFECT BYPASS
-        if (g_audioState.currentVolume >= 0.999f && target_vol >= 0.999f && delta == 0.0f) {
+        if (g_audioState.currentVolume >= 0.9999f && target_vol >= 0.9999f && delta == 0.0f) {
           g_audioState.bitPerfectDirectPassActive.store(true);
           if (sf_size == 4) {
             // 32-bit subslot container (UAC standard Type I PCM):
@@ -660,69 +688,94 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
             memcpy(dst_bytes, src, num_samples * sizeof(int32_t));
           } else if (sf_size == 2) {
             for (size_t s = 0; s < num_samples; s++) {
-              int32_t val16 = src[s] >> 16;
-              dst_bytes[s * 2] = (uint8_t)(val16 & 0xFF);
-              dst_bytes[s * 2 + 1] = (uint8_t)((val16 >> 8) & 0xFF);
+              int64_t val = (static_cast<int64_t>(src[s]) + 0x8000LL) >> 16;
+              if (val > 32767LL) val = 32767LL;
+              if (val < -32768LL) val = -32768LL;
+              int32_t val16 = static_cast<int32_t>(val);
+              dst_bytes[s * 2] = static_cast<uint8_t>(val16 & 0xFF);
+              dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
             }
           } else if (sf_size == 3) {
             for (size_t s = 0; s < num_samples; s++) {
-              int32_t val24 = src[s] >> 8;
-              dst_bytes[s * 3] = (uint8_t)(val24 & 0xFF);
-              dst_bytes[s * 3 + 1] = (uint8_t)((val24 >> 8) & 0xFF);
-              dst_bytes[s * 3 + 2] = (uint8_t)((val24 >> 16) & 0xFF);
+              int64_t val = (static_cast<int64_t>(src[s]) + 0x80LL) >> 8;
+              if (val > 8388607LL) val = 8388607LL;
+              if (val < -8388608LL) val = -8388608LL;
+              int32_t val24 = static_cast<int32_t>(val);
+              dst_bytes[s * 3] = static_cast<uint8_t>(val24 & 0xFF);
+              dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
+              dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
             }
           }
         } else {
           g_audioState.bitPerfectDirectPassActive.store(false);
-          int effective_bits = (sf_size == 4) ? 24 : (sf_size * 8);
-          float half_lsb = (float)(1 << (32 - effective_bits));
+          double frame_vol = static_cast<double>(g_audioState.currentVolume);
 
-          // Volume scaling with accurate TPDF dither
+          // Frame-locked volume scaling with decorrelated dual-channel TPDF dither and mid-tread rounding
           for (size_t s = 0; s < num_samples; s++) {
-            if (delta != 0.0f) {
-              g_audioState.currentVolume += delta;
-              if ((delta > 0 && g_audioState.currentVolume > target_vol) ||
-                  (delta < 0 && g_audioState.currentVolume < target_vol)) {
-                g_audioState.currentVolume = target_vol;
-                delta = 0.0f;
+            uint32_t ch = static_cast<uint32_t>(s % channels);
+            if (ch == 0) {
+              if (delta != 0.0f) {
+                g_audioState.currentVolume += delta;
+                if ((delta > 0.0f && g_audioState.currentVolume > target_vol) ||
+                    (delta < 0.0f && g_audioState.currentVolume < target_vol)) {
+                  g_audioState.currentVolume = target_vol;
+                  delta = 0.0f;
+                }
               }
+              frame_vol = static_cast<double>(g_audioState.currentVolume);
+              if (frame_vol > 1.0) frame_vol = 1.0;
+              if (frame_vol < 0.0) frame_vol = 0.0;
             }
 
-            double cur_vol = static_cast<double>(g_audioState.currentVolume);
-            if (cur_vol > 1.0) cur_vol = 1.0;
-            if (cur_vol < 0.0) cur_vol = 0.0;
+            double scaled32 = static_cast<double>(src[s]) * frame_vol;
+            bool apply_dither = (frame_vol < 0.9999 && frame_vol > 0.00001);
 
-            double scaled = static_cast<double>(src[s]) * cur_vol;
-            // Apply TPDF dither strictly when volume is attenuated below full-scale
-            if (cur_vol < 0.999 && cur_vol > 0.0001) {
-              double randA = static_cast<double>(fast_uniform_rand()) * static_cast<double>(half_lsb);
-              double randB = static_cast<double>(fast_uniform_rand()) * static_cast<double>(half_lsb);
-              scaled += (randA - randB);
-            }
-
-            if (scaled > 2147483647.0) scaled = 2147483647.0;
-            if (scaled < -2147483648.0) scaled = -2147483648.0;
-
-            int32_t val32 = static_cast<int32_t>(scaled);
-            if (sf_size == 2) {
-              int32_t val16 = val32 >> 16;
-              dst_bytes[s * 2] = val16 & 0xFF;
-              dst_bytes[s * 2 + 1] = (val16 >> 8) & 0xFF;
+            if (sf_size == 4) {
+              // 32-bit container: 1 LSB = 1.0 on int32 scale
+              if (apply_dither) {
+                scaled32 += fast_tpdf_dither(ch);
+              }
+              int64_t q32 = std::llrint(scaled32);
+              if (q32 > 2147483647LL) q32 = 2147483647LL;
+              if (q32 < -2147483648LL) q32 = -2147483648LL;
+              int32_t val32 = static_cast<int32_t>(q32);
+              dst_bytes[s * 4]     = static_cast<uint8_t>(val32 & 0xFF);
+              dst_bytes[s * 4 + 1] = static_cast<uint8_t>((val32 >> 8) & 0xFF);
+              dst_bytes[s * 4 + 2] = static_cast<uint8_t>((val32 >> 16) & 0xFF);
+              dst_bytes[s * 4 + 3] = static_cast<uint8_t>((val32 >> 24) & 0xFF);
             } else if (sf_size == 3) {
-              int32_t val24 = val32 >> 8;
-              dst_bytes[s * 3] = val24 & 0xFF;
-              dst_bytes[s * 3 + 1] = (val24 >> 8) & 0xFF;
-              dst_bytes[s * 3 + 2] = (val24 >> 16) & 0xFF;
-            } else if (sf_size == 4) {
-              dst_bytes[s * 4] = val32 & 0xFF;
-              dst_bytes[s * 4 + 1] = (val32 >> 8) & 0xFF;
-              dst_bytes[s * 4 + 2] = (val32 >> 16) & 0xFF;
-              dst_bytes[s * 4 + 3] = (val32 >> 24) & 0xFF;
+              // 24-bit container: scale to true 24-bit domain (divide by 256.0) and round with std::llrint
+              double scaled24 = scaled32 * (1.0 / 256.0);
+              if (apply_dither) {
+                scaled24 += fast_tpdf_dither(ch);
+              }
+              int64_t q24 = std::llrint(scaled24);
+              if (q24 > 8388607LL) q24 = 8388607LL;
+              if (q24 < -8388608LL) q24 = -8388608LL;
+              int32_t val24 = static_cast<int32_t>(q24);
+              dst_bytes[s * 3]     = static_cast<uint8_t>(val24 & 0xFF);
+              dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
+              dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
+            } else if (sf_size == 2) {
+              // 16-bit container: scale to true 16-bit domain (divide by 65536.0) and round with std::llrint
+              double scaled16 = scaled32 * (1.0 / 65536.0);
+              if (apply_dither) {
+                scaled16 += fast_tpdf_dither(ch);
+              }
+              int64_t q16 = std::llrint(scaled16);
+              if (q16 > 32767LL) q16 = 32767LL;
+              if (q16 < -32768LL) q16 = -32768LL;
+              int32_t val16 = static_cast<int32_t>(q16);
+              dst_bytes[s * 2]     = static_cast<uint8_t>(val16 & 0xFF);
+              dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
             }
           }
         }
 
-        g_audioState.pcmIndex.store(currentIndex + frames_to_read);
+        uint64_t expectedPcmIdx = static_cast<uint64_t>(currentIndex);
+        g_audioState.pcmIndex.compare_exchange_strong(
+            expectedPcmIdx, expectedPcmIdx + frames_to_read,
+            std::memory_order_release, std::memory_order_relaxed);
         bytes_filled += frames_to_read * channels * sf_size;
       }
 
@@ -778,15 +831,19 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
 
           uint64_t nextTotal = g_audioState.nextTotalFrames.load();
           uint64_t nextDecoded = g_audioState.nextDecodedFrames.load();
-          g_audioState.totalFrames.store(nextTotal);
-          g_audioState.decodedFrames.store(nextDecoded);
+
+          // Signal decoder thread FIRST before exposing nextTotal/nextDecoded so TsrossaDecode
+          // never attempts to decode Track 2's remaining frames using Track 1's EOF activeDecoder!
+          g_audioState.seekGeneration.fetch_add(1, std::memory_order_acq_rel);
+          g_audioState.needGaplessDecoderHandoff.store(true, std::memory_order_release);
+
+          g_audioState.totalFrames.store(nextTotal, std::memory_order_release);
+          g_audioState.decodedFrames.store(nextDecoded, std::memory_order_release);
           g_audioState.pendingSeekSeconds.store(-1.0);
-          g_audioState.pcmIndex.store(0);
+          g_audioState.pcmIndex.store(0, std::memory_order_release);
           g_audioState.currentFilePath = g_audioState.nextFilePath;
           g_audioState.nextFilePath = "";
 
-          // Signal decoder thread to perform decoder swap & cleanup outside real-time USB callback
-          g_audioState.needGaplessDecoderHandoff.store(true, std::memory_order_release);
           g_audioState.decoderCv.notify_one();
 
           {
@@ -850,11 +907,53 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
   }
 }
 
+struct InitializingTrackGuard {
+  InitializingTrackGuard() {
+    g_audioState.isInitializingTrack.store(true, std::memory_order_release);
+  }
+  ~InitializingTrackGuard() {
+    g_audioState.isInitializingTrack.store(false, std::memory_order_release);
+  }
+};
+
+static void apply_pending_seek_before_start(uint32_t sr, uint64_t totalFrames, uint64_t capacityFrames) {
+  double pendingSeek = g_audioState.pendingSeekSeconds.exchange(-1.0);
+  if (pendingSeek < 0.0 || sr == 0 || totalFrames == 0) {
+    return;
+  }
+  uint64_t seekFrame = static_cast<uint64_t>(pendingSeek * static_cast<double>(sr));
+  uint64_t safetyTail = std::min<uint64_t>(sr / 4, (totalFrames > 1) ? (totalFrames - 1) : 0);
+  uint64_t maxSafeFrame = (totalFrames > safetyTail && safetyTail > 0)
+                              ? (totalFrames - safetyTail)
+                              : (totalFrames - 1);
+  if (seekFrame > maxSafeFrame) {
+    seekFrame = maxSafeFrame;
+  }
+
+  std::lock_guard<std::mutex> dlock(g_audioState.decoderMutex);
+  g_audioState.seekGeneration.fetch_add(1, std::memory_order_acq_rel);
+  uint64_t curDecoded = g_audioState.decodedFrames.load(std::memory_order_acquire);
+
+  // Fast-path: if target frame is already decoded inside contiguous linear start of buffer
+  if (seekFrame < curDecoded && seekFrame < capacityFrames &&
+      (totalFrames <= capacityFrames || curDecoded <= capacityFrames)) {
+    g_audioState.pcmIndex.store(seekFrame, std::memory_order_release);
+  } else {
+    if (g_audioState.activeDecoder != nullptr) {
+      g_audioState.activeDecoder->seek(seekFrame);
+    }
+    g_audioState.decodedFrames.store(seekFrame, std::memory_order_release);
+    g_audioState.pcmIndex.store(seekFrame, std::memory_order_release);
+  }
+}
+
 int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env) {
   if (g_audioState.deviceWedged.load()) {
     LOGE("Refusing to start playAudio because device is wedged from previous timeout. Reconnect required.");
     return -4;
   }
+  InitializingTrackGuard initGuard;
+  g_audioState.seekGeneration.fetch_add(1, std::memory_order_acq_rel);
   g_audioState.sampleRateUnverified.store(false);
   g_audioState.isFinished = false;
   g_audioState.pendingSeekSeconds.store(-1.0);
@@ -920,12 +1019,6 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       g_audioState.decodedFrames.store(handoverDecoded);
       g_audioState.totalFrames.store(handoverTotal);
       g_audioState.pcmIndex.store(0);
-      double pendingSeek = g_audioState.pendingSeekSeconds.exchange(-1.0);
-      if (pendingSeek >= 0.0 && g_audioState.sampleRate.load() > 0) {
-        size_t seekFrame = static_cast<size_t>(pendingSeek * (double)g_audioState.sampleRate.load());
-        if (seekFrame >= handoverTotal) seekFrame = (handoverTotal > 0) ? (handoverTotal - 1) : 0;
-        g_audioState.pcmIndex.store(seekFrame);
-      }
       g_audioState.currentFilePath = savedPath;
       g_audioState.nextFilePath = "";
       {
@@ -933,7 +1026,9 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
         g_audioState.activeDecoder = std::move(g_audioState.nextActiveDecoder);
         g_audioState.needGaplessDecoderHandoff.store(false, std::memory_order_release);
       }
-      bool needMoreHandover = (handoverDecoded < handoverTotal);
+      apply_pending_seek_before_start(g_audioState.sampleRate.load(), handoverTotal, g_audioState.pcmBufferCapacityFrames.load());
+      uint64_t finalDecoded = g_audioState.decodedFrames.load(std::memory_order_acquire);
+      bool needMoreHandover = (finalDecoded < handoverTotal);
       g_audioState.isDecoding.store(needMoreHandover, std::memory_order_release);
       if (g_audioState.decodeThread == nullptr) {
         g_audioState.cancelDecoding.store(false);
@@ -1178,13 +1273,6 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
     clean_garbage_internal();
   }
 
-  double pendingSeek = g_audioState.pendingSeekSeconds.exchange(-1.0);
-  if (pendingSeek >= 0.0 && newSampleRate > 0) {
-    size_t seekFrame = static_cast<size_t>(pendingSeek * (double)newSampleRate);
-    if (seekFrame >= totalFrames) seekFrame = (totalFrames > 0) ? (totalFrames - 1) : 0;
-    g_audioState.pcmIndex.store(seekFrame);
-  }
-
   // Purge any stale finished events from previous track
   {
     std::lock_guard<std::mutex> lock(g_controlMutex);
@@ -1203,13 +1291,42 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   int target_sf = newSourceBitDepth / 8;
   if (target_sf == 0) target_sf = 2;
 
+  // Find optimal DAC container altsetting:
+  // Always negotiate the highest subframe container supported by DAC (32-bit > 24-bit > 16-bit)
+  // to give 64-bit DSP maximum dynamic range and prevent micro-detail truncation
+  bool has_selected_alt = false;
+  AltSettingInfo selected_alt{};
+  if (!g_audioState.validAlts.empty()) {
+    int best_score = -1;
+    for (const auto &a : g_audioState.validAlts) {
+      int score = 0;
+      if (a.subframe_size >= target_sf) {
+        if (a.subframe_size == 4) score = 600;
+        else if (a.subframe_size == 3) score = 550;
+        else if (a.subframe_size == 2) score = 400;
+        else score = 300;
+      } else {
+        if (a.subframe_size == 3) score = 250;
+        else if (a.subframe_size == 2) score = 200;
+        else score = 50;
+      }
+      if (score > best_score) {
+        best_score = score;
+        selected_alt = a;
+        has_selected_alt = true;
+      }
+    }
+  }
+
   uint32_t oldSampleRate = g_audioState.sampleRate.load();
   int oldSubframeSize = g_audioState.subframeSize.load();
+  int oldAltSetting = g_audioState.currentAltSetting.load();
   bool rate_changed = (oldSampleRate != newSampleRate);
+  bool alt_changed = has_selected_alt && (selected_alt.subframe_size != oldSubframeSize || selected_alt.altsetting != oldAltSetting);
   bool altsetting_changed = false;
   bool stream_was_stopped = (g_audioState.isoThread == nullptr || g_audioState.activeIsoTransfers.load() == 0);
 
-  bool needs_reconfig = (target_sf != oldSubframeSize) ||
+  bool needs_reconfig = alt_changed ||
                         rate_changed ||
                         stream_was_stopped ||
                         g_audioState.isWarmingUp.load();
@@ -1228,31 +1345,6 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
 
   // === STEP 2: HARDWARE USB INTERFACE & CLOCK NEGOTIATION (STRICT ALSA UAC2 ORDER) ===
   if (g_audioState.usbHandle != nullptr && needs_reconfig) {
-    bool has_selected_alt = false;
-    AltSettingInfo selected_alt{};
-    if (!g_audioState.validAlts.empty()) {
-      for (const auto &a : g_audioState.validAlts) {
-        if (a.subframe_size == target_sf) {
-          selected_alt = a;
-          has_selected_alt = true;
-          break;
-        }
-      }
-      if (!has_selected_alt) {
-        for (const auto &a : g_audioState.validAlts) {
-          if (a.subframe_size >= target_sf) {
-            selected_alt = a;
-            has_selected_alt = true;
-            break;
-          }
-        }
-      }
-      if (!has_selected_alt) {
-        selected_alt = g_audioState.validAlts[0];
-        has_selected_alt = true;
-      }
-    }
-
     if (has_selected_alt) {
       int iface_num = selected_alt.interface_num;
       if (iface_num < 0) iface_num = g_audioState.usbAudioInterface;
@@ -1398,6 +1490,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       g_audioState.currentAltSetting.store(selected_alt.altsetting);
       g_audioState.iso_fixed_rem = 0;
       altsetting_changed = true;
+      set_volume(g_audioState.rawLinearVolume);
     }
   }
 
@@ -1405,6 +1498,8 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   g_audioState.isSwapping.store(false);
   g_audioState.swappingZeroUrbCount.store(0);
   g_audioState.isSwappingAck.store(false);
+
+  apply_pending_seek_before_start(newSampleRate, totalFrames, g_audioState.pcmBufferCapacityFrames.load());
 
   if (needs_reconfig) {
     double silence_duration = (rate_changed || altsetting_changed) ? 0.20 : (stream_was_stopped ? 0.08 : 0.015);
@@ -1565,11 +1660,6 @@ bool prepare_next_track_internal(const std::string &path) {
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
 
-  if (framesRead >= totalFrames) {
-    nextDecoder->close();
-    nextDecoder.reset();
-  }
-
   if (g_audioState.prepareNextGen.load() != myGen) {
     LOGW("prepareNextTrack: Aborted swap BEFORE COMMIT PHASE by newer request!");
     if (nextDecoder != nullptr) nextDecoder->close();
@@ -1625,7 +1715,6 @@ bool clear_next_track_internal() {
   g_audioState.prepareNextGen++;
   ApiMutexLock lock(__func__);
   g_audioState.hasNextTrack.store(false);
-  g_audioState.needGaplessDecoderHandoff.store(false);
   g_audioState.nextFilePath = "";
   if (!g_audioState.pcmBufferNext.empty()) {
     g_audioState.pcmBufferNext.clear();
@@ -1638,7 +1727,12 @@ bool clear_next_track_internal() {
   g_audioState.nextPcmBufferCapacityFrames.store(0);
   {
     std::lock_guard<std::mutex> dlock(g_audioState.decoderMutex);
-    if (g_audioState.nextActiveDecoder != nullptr) {
+    if (g_audioState.needGaplessDecoderHandoff.exchange(false, std::memory_order_acq_rel)) {
+      if (g_audioState.activeDecoder != nullptr) {
+        g_audioState.activeDecoder->close();
+      }
+      g_audioState.activeDecoder = std::move(g_audioState.nextActiveDecoder);
+    } else if (g_audioState.nextActiveDecoder != nullptr) {
       g_audioState.nextActiveDecoder->close();
       g_audioState.nextActiveDecoder.reset();
     }
@@ -1660,30 +1754,52 @@ void clean_garbage_internal() {
 
 bool seek_to_internal(double targetSeconds) {
   if (targetSeconds < 0.0) targetSeconds = 0.0;
-  uint32_t sr = g_audioState.sampleRate.load();
-  size_t total = g_audioState.totalFrames.load();
+  uint32_t sr = g_audioState.sampleRate.load(std::memory_order_acquire);
+  uint64_t total = g_audioState.totalFrames.load(std::memory_order_acquire);
 
-  if (sr == 0 || total == 0) {
-    g_audioState.pendingSeekSeconds.store(targetSeconds);
+  if (g_audioState.isInitializingTrack.load(std::memory_order_acquire) || sr == 0 || total == 0) {
+    g_audioState.pendingSeekSeconds.store(targetSeconds, std::memory_order_release);
     return true;
   }
 
-  size_t targetFrame = static_cast<size_t>(targetSeconds * (double)sr);
-  if (targetFrame >= total) {
-    targetFrame = (total > 0) ? (total - 1) : 0;
+  uint64_t targetFrame = static_cast<uint64_t>(targetSeconds * static_cast<double>(sr));
+  uint64_t safetyTail = std::min<uint64_t>(sr / 4, (total > 1) ? (total - 1) : 0);
+  uint64_t maxSafeFrame = (total > safetyTail && safetyTail > 0) ? (total - safetyTail) : (total - 1);
+  if (targetFrame > maxSafeFrame) {
+    targetFrame = maxSafeFrame;
   }
 
   {
     std::lock_guard<std::mutex> lock(g_audioState.decoderMutex);
-    if (g_audioState.activeDecoder != nullptr) {
+    // If a gapless decoder handoff is pending, complete it immediately under the lock
+    if (g_audioState.needGaplessDecoderHandoff.exchange(false, std::memory_order_acq_rel)) {
+      if (g_audioState.activeDecoder != nullptr) {
+        g_audioState.activeDecoder->close();
+      }
+      g_audioState.activeDecoder = std::move(g_audioState.nextActiveDecoder);
+    }
+
+    g_audioState.seekGeneration.fetch_add(1, std::memory_order_acq_rel);
+
+    uint64_t capacity = g_audioState.pcmBufferCapacityFrames.load(std::memory_order_acquire);
+    uint64_t decoded = g_audioState.decodedFrames.load(std::memory_order_acquire);
+
+    // Fast-Path 1: Entire track fits in RAM and is already 100% decoded
+    if (capacity > 0 && total <= capacity && decoded >= total) {
+      g_audioState.pcmIndex.store(targetFrame, std::memory_order_release);
+    } else if (g_audioState.activeDecoder != nullptr) {
+      // Streaming / Partial buffer seek: seek decoder and synchronize counters atomically under lock
       g_audioState.activeDecoder->seek(targetFrame);
+      g_audioState.decodedFrames.store(targetFrame, std::memory_order_release);
+      g_audioState.pcmIndex.store(targetFrame, std::memory_order_release);
+      g_audioState.isDecoding.store(true, std::memory_order_release);
+    } else if (targetFrame < decoded && capacity > 0 && decoded <= capacity) {
+      // Fallback if activeDecoder is null but targetFrame is within decoded linear buffer
+      g_audioState.pcmIndex.store(targetFrame, std::memory_order_release);
     }
   }
 
-  g_audioState.decodedFrames.store(targetFrame, std::memory_order_release);
-  g_audioState.pcmIndex.store(targetFrame, std::memory_order_release);
   g_audioState.decoderCv.notify_one();
-
   return true;
 }
 

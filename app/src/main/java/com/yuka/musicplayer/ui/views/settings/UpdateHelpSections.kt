@@ -19,6 +19,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.BuildConfig
 import com.yuka.musicplayer.R
+import com.yuka.musicplayer.ui.components.GlyphBagiBagi
+import com.yuka.musicplayer.ui.components.GlyphGitHub
 import com.yuka.musicplayer.ui.components.TactileBox
 import com.yuka.musicplayer.ui.theme.LocalAccentColor
 import com.yuka.musicplayer.ui.theme.ModernSansFont
@@ -197,7 +199,7 @@ fun DeveloperInfoSection(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Full-width GitHub Repository Button (App Logs button removed per spec)
+            // Full-width GitHub Repository Button with official GitHub icon (no arrow symbol, no duplicate donation button)
             TactileBox(
                 onClick = {
                     try {
@@ -217,15 +219,17 @@ fun DeveloperInfoSection(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
                     .background(accent.copy(alpha = 0.16f))
-                    .padding(vertical = 10.dp)
+                    .padding(vertical = 10.dp, horizontal = 14.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    GlyphGitHub(color = accent, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "GitHub Repository ↗",
+                        text = "GitHub Repository",
                         color = accent,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold,
@@ -286,8 +290,10 @@ fun DonationSupportSection() {
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    GlyphBagiBagi(color = accent, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Bagi-Bagi (bagibagi.co) ↗",
+                        text = "Bagi-Bagi (bagibagi.co)",
                         color = accent,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold,

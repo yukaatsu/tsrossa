@@ -29,13 +29,12 @@ class AudioEngine {
 
         /**
          * Converts a normalized UI slider value [0.0f..1.0f] into a perceptual attenuation in dB.
-         * Uses the unified psychoacoustic curve: dB(v) = -64.0 * (1 - v) * sqrt(1 - v)
+         * Uses the calibrated Audiophile Studio Taper curve: dB(v) = -48.0 * (1 - v) * sqrt(1 - v)
          * - 100% (1.00) ->   0.00 dB (Bit-Perfect Unity)
-         * -  75% (0.75) ->  -8.00 dB
-         * -  50% (0.50) -> -22.63 dB
-         * -  10% (0.10) -> -54.64 dB
-         * -   5% (0.05) -> -59.26 dB (Safe & quiet on sensitive IEMs + 2Vrms Dongle DACs)
-         * -   1% (0.01) -> -63.04 dB
+         * -  75% (0.75) ->  -6.00 dB
+         * -  50% (0.50) -> -16.97 dB (Powerful punch & full dynamics)
+         * -  10% (0.10) -> -40.98 dB
+         * -   5% (0.05) -> -44.45 dB (Safe quiet floor)
          * -   0% (0.00) -> -Infinity (Mute)
          */
         @JvmStatic
@@ -43,7 +42,15 @@ class AudioEngine {
             if (slider <= 0.0f) return Float.NEGATIVE_INFINITY
             if (slider >= 1.0f) return 0.0f
             val complement = 1.0f - slider
-            return -64.0f * complement * kotlin.math.sqrt(complement)
+            return -48.0f * complement * kotlin.math.sqrt(complement)
+        }
+
+        @JvmStatic
+        fun computePerceptualDb(slider: Double): Double {
+            if (slider <= 0.0001) return -120.0
+            if (slider >= 0.9999) return 0.0
+            val inv = 1.0 - slider
+            return -48.0 * inv * Math.sqrt(inv)
         }
 
         @JvmStatic

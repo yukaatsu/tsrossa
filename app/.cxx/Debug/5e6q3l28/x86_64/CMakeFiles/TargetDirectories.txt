@@ -1,3 +1,0 @@
-/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86_64/CMakeFiles/kewmobile.dir
-/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86_64/CMakeFiles/edit_cache.dir
-/Users/yuka/Projects/tsrossa-ujicoba/app/.cxx/Debug/5e6q3l28/x86_64/CMakeFiles/rebuild_cache.dir

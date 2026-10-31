@@ -97,6 +97,7 @@ fun PrecisionScrubber(
     modifier: Modifier = Modifier
 ) {
     val currentOnSeekTo by rememberUpdatedState(onSeekTo)
+    val currentDurationSeconds by rememberUpdatedState(durationSeconds)
     var isDragging by remember { mutableStateOf(false) }
     var dragProgress by remember { mutableFloatStateOf(0f) }
 
@@ -240,10 +241,10 @@ fun PrecisionScrubber(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(28.dp)
-                    .pointerInput(durationSeconds, trackStart, trackWidth) {
-                        if (durationSeconds <= 0.0) return@pointerInput
+                    .pointerInput(trackStart, trackWidth) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            if (currentDurationSeconds <= 0.0) return@awaitEachGesture
                             down.consume()
                             isDragging = true
                             dragProgress = ((down.position.x - trackStart) / trackWidth).coerceIn(0f, 1f)
@@ -259,7 +260,14 @@ fun PrecisionScrubber(
                                 dragProgress = ((change.position.x - trackStart) / trackWidth).coerceIn(0f, 1f)
                             }
 
-                            val finalSeekSec = dragProgress.toDouble() * durationSeconds
+                            val dur = currentDurationSeconds
+                            if (dur <= 0.0) {
+                                isDragging = false
+                                return@awaitEachGesture
+                            }
+                            val rawSeekSec = dragProgress.toDouble() * dur
+                            val safeMaxSeekSec = if (dur > 0.5) (dur - 0.25) else dur
+                            val finalSeekSec = rawSeekSec.coerceIn(0.0, safeMaxSeekSec)
                             // Engage anti snap-back guard: keep thumb at seek target until JNI catches up
                             pendingSeekTargetSec = finalSeekSec
                             pendingSeekTimeoutNanos = System.nanoTime() + 800_000_000L // 800ms safety timeout

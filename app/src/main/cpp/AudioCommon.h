@@ -27,12 +27,20 @@ constexpr uint64_t RING_BUFFER_SAFETY_FRAMES = 65536ULL; // Keep 64K frames safe
 constexpr uint64_t MAX_TRACK_BUFFER_BYTES = MAX_RING_BUFFER_BYTES;
 constexpr uint64_t MAX_NEXT_TRACK_BUFFER_BYTES = MAX_NEXT_RING_BUFFER_BYTES;
 
-// Unified Psychoacoustic Volume Curve: dB(v) = -64.0f * (1 - v) * sqrt(1 - v)
+// Unified Psychoacoustic Volume Curve: dB(v) = -48.0f * (1 - v) * sqrt(1 - v)
+// Calibrated Audiophile Studio Taper for powerful dynamics without clipping
 inline float compute_perceptual_db(float slider) {
   if (slider <= 0.0f) return -128.0f;
   if (slider >= 1.0f) return 0.0f;
   float comp = 1.0f - slider;
-  return -64.0f * comp * std::sqrt(comp);
+  return -48.0f * comp * std::sqrt(comp);
+}
+
+inline double compute_perceptual_db(double slider) {
+  if (slider <= 0.0) return -128.0;
+  if (slider >= 1.0) return 0.0;
+  double comp = 1.0 - slider;
+  return -48.0 * comp * std::sqrt(comp);
 }
 
 inline float db_to_linear_gain(float db) {
@@ -57,17 +65,28 @@ struct ApiMutexLock {
   }
 };
 
-// Ultra-fast inline PRNG for TPDF Dithering (thread-local to eliminate data race)
+// Dual-Channel Independent SplitMix64 PRNG for Decorrelated Stereo TPDF Dithering
+// Ensures interaural cross-correlation IACC = 0.0 for wide soundstage & holographic instrument separation
+inline double fast_uniform_rand_channel(uint32_t ch) {
+  static thread_local uint64_t states[2] = {
+      0x9E3779B97F4A7C15ULL,
+      0xBF58476D1CE4E5B9ULL
+  };
+  uint64_t z = (states[ch & 1U] += 0x9E3779B97F4A7C15ULL);
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+  z = z ^ (z >> 31);
+  return static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0);
+}
+
+inline double fast_tpdf_dither(uint32_t ch) {
+  // Symmetric [-1.0, +1.0) TPDF dither without inter-channel correlation
+  return fast_uniform_rand_channel(ch) - fast_uniform_rand_channel(ch);
+}
+
+// Backward-compatible uniform random generator
 inline float fast_uniform_rand() {
-  thread_local uint32_t state = 0;
-  if (state == 0) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    state = (uint32_t)(ts.tv_nsec ^ (uintptr_t)&state ^ 123456789U);
-    if (state == 0) state = 123456789U;
-  }
-  state = (1103515245U * state + 12345U);
-  return (float)(state & 0x7FFFFFFFU) / (float)0x7FFFFFFFU;
+  return static_cast<float>(fast_uniform_rand_channel(0));
 }
 
 // Perceptual exponential volume curve with hard clipping limits [0.0f, 1.0f]

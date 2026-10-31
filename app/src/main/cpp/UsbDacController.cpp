@@ -137,6 +137,12 @@ void control_thread_func() {
         uint8_t ac_iface = (uint8_t)(g_audioState.acInterfaceNum.load() & 0xFF);
         uint16_t wIndex = (uint16_t)((g_audioState.featureUnitId.load() << 8) | ac_iface);
 
+        // Ensure Feature Unit is explicitly unmuted across Master (0), Left (1), and Right (2)
+        uint8_t unmute_val = 0;
+        libusb_control_transfer(g_audioState.usbHandle, 0x21, 0x01, (0x01 << 8) | 0x00, wIndex, &unmute_val, 1, 100);
+        libusb_control_transfer(g_audioState.usbHandle, 0x21, 0x01, (0x01 << 8) | 0x01, wIndex, &unmute_val, 1, 100);
+        libusb_control_transfer(g_audioState.usbHandle, 0x21, 0x01, (0x01 << 8) | 0x02, wIndex, &unmute_val, 1, 100);
+
         if (g_audioState.volumeMasterSupported.load() || g_audioState.volumeChannel.load() == 0) {
           r_master = libusb_control_transfer(
               g_audioState.usbHandle, 0x21, 0x01, (0x02 << 8) | 0x00,
@@ -181,6 +187,21 @@ void control_thread_func() {
           g_audioState.appliedHardwareDb.store(0.0f);
           g_audioState.isHardwareVolumeActive.store(false);
         }
+      } else if (g_audioState.usbHandle != nullptr && g_audioState.featureUnitId.load() > 0) {
+        // Fallback: Even if hardware volume query failed or was shallow,
+        // force Unmute and 0 dB Full Scale on DAC Feature Unit so the internal analog amplifier is not throttled
+        uint8_t ac_iface = (uint8_t)(g_audioState.acInterfaceNum.load() & 0xFF);
+        uint16_t wIndex = (uint16_t)((g_audioState.featureUnitId.load() << 8) | ac_iface);
+        uint8_t unmute_val = 0;
+        libusb_control_transfer(g_audioState.usbHandle, 0x21, 0x01, (0x01 << 8) | 0x00, wIndex, &unmute_val, 1, 100);
+        libusb_control_transfer(g_audioState.usbHandle, 0x21, 0x01, (0x01 << 8) | 0x01, wIndex, &unmute_val, 1, 100);
+        libusb_control_transfer(g_audioState.usbHandle, 0x21, 0x01, (0x01 << 8) | 0x02, wIndex, &unmute_val, 1, 100);
+        uint8_t zero_db[2] = {0, 0};
+        libusb_control_transfer(g_audioState.usbHandle, 0x21, 0x01, (0x02 << 8) | 0x00, wIndex, zero_db, 2, 100);
+        libusb_control_transfer(g_audioState.usbHandle, 0x21, 0x01, (0x02 << 8) | 0x01, wIndex, zero_db, 2, 100);
+        libusb_control_transfer(g_audioState.usbHandle, 0x21, 0x01, (0x02 << 8) | 0x02, wIndex, zero_db, 2, 100);
+        g_audioState.appliedHardwareDb.store(0.0f);
+        g_audioState.isHardwareVolumeActive.store(false);
       } else {
         g_audioState.appliedHardwareDb.store(0.0f);
         g_audioState.isHardwareVolumeActive.store(false);
@@ -696,7 +717,7 @@ bool init_usb_dac_internal(int fd) {
                 uint8_t masterControls = (masterPos < pos + len) ? alt->extra[masterPos] : 0;
                 int ch1Pos = masterPos + 4;
                 uint8_t ch1Controls = (ch1Pos < pos + len) ? alt->extra[ch1Pos] : 0;
-                int numChannels = (len > 6) ? ((len - 6) / 4 - 1) : 0;
+                int numChannels = (len >= 9) ? ((len - 5) / 4 - 1) : 0;
 
                 masterVol = (masterControls & 0x0C) != 0;
                 ch1Vol = (numChannels >= 1) && ((ch1Controls & 0x0C) != 0);
@@ -894,10 +915,22 @@ bool init_usb_dac_internal(int fd) {
       source_bytes = 2; // Default 16-bit
 
     AltSettingInfo best_alt = g_audioState.validAlts[0];
+    int best_score = -1;
     for (const auto &a : g_audioState.validAlts) {
-      if (a.subframe_size == source_bytes) {
+      int score = 0;
+      if (a.subframe_size >= source_bytes) {
+        if (a.subframe_size == 4) score = 600;
+        else if (a.subframe_size == 3) score = 550;
+        else if (a.subframe_size == 2) score = 400;
+        else score = 300;
+      } else {
+        if (a.subframe_size == 3) score = 250;
+        else if (a.subframe_size == 2) score = 200;
+        else score = 50;
+      }
+      if (score > best_score) {
+        best_score = score;
         best_alt = a;
-        break;
       }
     }
 

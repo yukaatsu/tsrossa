@@ -1,0 +1,18 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/app/build
+.cxx
+/app/.cxx
+captures
+.externalNativeBuild
+.cxx/
+*.apk
+*.aab
+
+# Graphify Local Brain & Artifacts
+graphify-out/
+.superpowers/

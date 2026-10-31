@@ -123,6 +123,8 @@ struct AudioEngineState {
   std::atomic<float> rawLinearVolume{1.0f};
   
   std::atomic<uint32_t> prepareNextGen{0};
+  std::atomic<uint64_t> seekGeneration{0};
+  std::atomic<bool> isInitializingTrack{false};
   
   std::atomic<double> pendingSeekSeconds{-1.0};
   std::atomic<bool> isDecoding{false};
