@@ -32,6 +32,9 @@ import Foundation
 struct MainTestRunner {
     static func main() {
         runUpdateVersionTests()
+        runAudioTagReaderTests()
+        runColorAndThemeTests()
+        runSortAndFuzzySearchTests()
         if TestSuite.failedCount > 0 {
             print("\nRESULT: \(TestSuite.failedCount) FAILED, \(TestSuite.passedCount) PASSED")
             Foundation.exit(1)
@@ -49,6 +52,11 @@ done < <(find "$DIR/tests/swift" -name "*.swift" -print0 | sort -z)
 
 swiftc -O \
     "$DIR/macos/Sources/UpdateManager.swift" \
+    "$DIR/macos/Sources/AudioTagReader.swift" \
+    "$DIR/macos/Sources/ColorContrastHelper.swift" \
+    "$DIR/macos/Sources/FuzzySearchHelper.swift" \
+    "$DIR/macos/Sources/AlbumArtCache.swift" \
+    "$DIR/macos/Sources/TrackMetadata.swift" \
     "${SWIFT_SOURCES[@]}" \
     "$TEST_BUILD_DIR/main_test.swift" \
     -framework Cocoa \

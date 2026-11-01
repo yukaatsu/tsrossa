@@ -123,6 +123,23 @@ public class AppViewModel: ObservableObject {
     @Published public var isShuffle: Bool = false
     @Published public var isRepeat: Bool = false
     @Published public var sortMode: String = "DATE (NEWEST)"
+    @Published public var sortField: SortField = .title {
+        didSet {
+            UserDefaults.standard.set(sortField.rawValue, forKey: "tsrossa.sortField")
+            applySorting()
+        }
+    }
+    @Published public var sortOrder: SortOrder = .ascending {
+        didSet {
+            UserDefaults.standard.set(sortOrder.rawValue, forKey: "tsrossa.sortOrder")
+            applySorting()
+        }
+    }
+    @Published public var makeFolderAsPlaylist: Bool = false {
+        didSet {
+            UserDefaults.standard.set(makeFolderAsPlaylist, forKey: "tsrossa.makeFolderAsPlaylist")
+        }
+    }
     
     // Material 3 Dynamic Theming & Artwork State
     @Published public var currentArtwork: NSImage? = nil
@@ -132,6 +149,7 @@ public class AppViewModel: ObservableObject {
     @Published public var isExclusiveHogMode: Bool = true {
         didSet {
             let enabled = isExclusiveHogMode
+            UserDefaults.standard.set(enabled, forKey: "tsrossa.isExclusiveHogMode")
             AudioEngine.shared.engineQueue.async {
                 tsrossa_set_hog_mode_enabled(enabled)
             }
@@ -140,6 +158,7 @@ public class AppViewModel: ObservableObject {
     @Published public var isAutoClockSwitch: Bool = true {
         didSet {
             let enabled = isAutoClockSwitch
+            UserDefaults.standard.set(enabled, forKey: "tsrossa.isAutoClockSwitch")
             AudioEngine.shared.engineQueue.async {
                 tsrossa_set_auto_clock_enabled(enabled)
             }
@@ -148,18 +167,39 @@ public class AppViewModel: ObservableObject {
     @Published public var isRamPlayback: Bool = true {
         didSet {
             let enabled = isRamPlayback
+            UserDefaults.standard.set(enabled, forKey: "tsrossa.isRamPlayback")
             AudioEngine.shared.engineQueue.async {
                 tsrossa_set_ram_lock_enabled(enabled)
             }
         }
     }
-    @Published public var keepScreenAwake: Bool = true
-    @Published public var bufferProfile: String = "192ms Jitter Safe"
+    @Published public var keepScreenAwake: Bool = true {
+        didSet {
+            UserDefaults.standard.set(keepScreenAwake, forKey: "tsrossa.keepScreenAwake")
+        }
+    }
+    @Published public var bufferProfile: String = "192ms Jitter Safe" {
+        didSet {
+            UserDefaults.standard.set(bufferProfile, forKey: "tsrossa.bufferProfile")
+        }
+    }
     
     // Appearance & Customization Settings
-    @Published public var themeMode: String = "DARK" // DARK, OLED, LIGHT
-    @Published public var bgCanvasMode: String = "DYNAMIC" // DYNAMIC, AURA, BLACK
-    @Published public var accentColorMode: String = "DYNAMIC" // DYNAMIC, ROSE, MATCHA, GOLD, CYAN
+    @Published public var themeMode: String = "DARK" { // DARK, OLED, LIGHT
+        didSet {
+            UserDefaults.standard.set(themeMode, forKey: "tsrossa.themeMode")
+        }
+    }
+    @Published public var bgCanvasMode: String = "DYNAMIC" { // DYNAMIC, AURA, BLACK
+        didSet {
+            UserDefaults.standard.set(bgCanvasMode, forKey: "tsrossa.bgCanvasMode")
+        }
+    }
+    @Published public var accentColorMode: String = "DYNAMIC" { // DYNAMIC, ROSE, MATCHA, GOLD, CYAN
+        didSet {
+            UserDefaults.standard.set(accentColorMode, forKey: "tsrossa.accentColorMode")
+        }
+    }
     
     private var keyMonitor: Any?
     private let playlistsStorageKey = "tsrossa.userPlaylists.v1"
@@ -168,9 +208,59 @@ public class AppViewModel: ObservableObject {
         if UserDefaults.standard.object(forKey: "tsrossa.isAutoplayRadio") != nil {
             isAutoplayRadio = UserDefaults.standard.bool(forKey: "tsrossa.isAutoplayRadio")
         }
+        if let sf = UserDefaults.standard.string(forKey: "tsrossa.sortField"), let f = SortField(rawValue: sf) {
+            sortField = f
+        }
+        if let so = UserDefaults.standard.string(forKey: "tsrossa.sortOrder"), let o = SortOrder(rawValue: so) {
+            sortOrder = o
+        }
+        if UserDefaults.standard.object(forKey: "tsrossa.makeFolderAsPlaylist") != nil {
+            makeFolderAsPlaylist = UserDefaults.standard.bool(forKey: "tsrossa.makeFolderAsPlaylist")
+        }
+        if UserDefaults.standard.object(forKey: "tsrossa.keepScreenAwake") != nil {
+            keepScreenAwake = UserDefaults.standard.bool(forKey: "tsrossa.keepScreenAwake")
+        }
+        if let bp = UserDefaults.standard.string(forKey: "tsrossa.bufferProfile") {
+            bufferProfile = bp
+        }
+        if let tm = UserDefaults.standard.string(forKey: "tsrossa.themeMode") {
+            themeMode = tm
+        }
+        if let cm = UserDefaults.standard.string(forKey: "tsrossa.bgCanvasMode") {
+            bgCanvasMode = cm
+        }
+        if let am = UserDefaults.standard.string(forKey: "tsrossa.accentColorMode") {
+            accentColorMode = am
+        }
+        if UserDefaults.standard.object(forKey: "tsrossa.isExclusiveHogMode") != nil {
+            isExclusiveHogMode = UserDefaults.standard.bool(forKey: "tsrossa.isExclusiveHogMode")
+        }
+        if UserDefaults.standard.object(forKey: "tsrossa.isAutoClockSwitch") != nil {
+            isAutoClockSwitch = UserDefaults.standard.bool(forKey: "tsrossa.isAutoClockSwitch")
+        }
+        if UserDefaults.standard.object(forKey: "tsrossa.isRamPlayback") != nil {
+            isRamPlayback = UserDefaults.standard.bool(forKey: "tsrossa.isRamPlayback")
+        }
         loadSavedPlaylists()
         loadSavedLikedTracks()
         setupKeyboardMonitor()
+    }
+
+    public func applySorting() {
+        self.tracks = TrackSorter.sort(self.tracks, by: sortField, order: sortOrder)
+    }
+
+    public func saveDacVolume(deviceId: UInt32, volume: Double) {
+        let key = "tsrossa.vol_dac_\(deviceId)_\(isExclusiveHogMode ? "excl" : "shared")"
+        UserDefaults.standard.set(volume, forKey: key)
+    }
+
+    public func loadDacVolume(deviceId: UInt32) -> Double {
+        let key = "tsrossa.vol_dac_\(deviceId)_\(isExclusiveHogMode ? "excl" : "shared")"
+        if UserDefaults.standard.object(forKey: key) != nil {
+            return UserDefaults.standard.double(forKey: key)
+        }
+        return isExclusiveHogMode ? 0.35 : 0.75
     }
     
     deinit {
@@ -221,14 +311,10 @@ public class AppViewModel: ObservableObject {
             result = result.filter { $0.sampleRate == selectedSampleRateFilter }
         }
         
-        // 5. Typeahead Search filter
+        // 5. Typeahead Search filter with fuzzy multi-token and subsequence matching
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
-            result = result.filter {
-                $0.title.localizedCaseInsensitiveContains(query) ||
-                $0.artist.localizedCaseInsensitiveContains(query) ||
-                $0.album.localizedCaseInsensitiveContains(query)
-            }
+            result = FuzzySearchHelper.filterAndRank(tracks: result, query: query)
         }
         
         return result
@@ -670,31 +756,35 @@ public class AppViewModel: ObservableObject {
             let initialTracks = MetadataScanner.fastScanDirectory(url: url)
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                self.tracks = initialTracks
-                if selectFirstIfIdle, let first = initialTracks.first, AudioEngine.shared.currentTrack == nil {
+                self.tracks = TrackSorter.sort(initialTracks, by: self.sortField, order: self.sortOrder)
+                if selectFirstIfIdle, let first = self.tracks.first, AudioEngine.shared.currentTrack == nil {
                     AudioEngine.shared.currentTrack = first
                     self.updateThemeForTrack(track: first)
                 }
                 // Enrich durations and FLAC/ID3 tags in the background without blocking UI
                 MetadataScanner.enrichMetadataInBackground(tracks: initialTracks) { [weak self] enriched in
                     guard let self = self else { return }
-                    self.tracks = enriched
+                    self.tracks = TrackSorter.sort(enriched, by: self.sortField, order: self.sortOrder)
                 }
             }
         }
     }
     
     public func toggleSort() {
-        if sortMode == "DATE (NEWEST)" {
-            sortMode = "A-Z TITLE"
-            tracks.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        } else if sortMode == "A-Z TITLE" {
-            sortMode = "ARTIST"
-            tracks.sort { $0.artist.localizedCaseInsensitiveCompare($1.artist) == .orderedAscending }
+        if sortField == .title && sortOrder == .ascending {
+            sortField = .artist
+            sortOrder = .ascending
+        } else if sortField == .artist && sortOrder == .ascending {
+            sortField = .album
+            sortOrder = .ascending
+        } else if sortField == .album && sortOrder == .ascending {
+            sortField = .dateAdded
+            sortOrder = .descending
         } else {
-            sortMode = "DATE (NEWEST)"
-            tracks.reverse()
+            sortField = .title
+            sortOrder = .ascending
         }
+        applySorting()
     }
     
     public func formatTime(_ seconds: Double) -> String {

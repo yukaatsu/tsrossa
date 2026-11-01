@@ -10,30 +10,6 @@ public struct OutputDevice: Identifiable, Hashable {
     public let sampleRate: Double
 }
 
-public struct TrackMetadata: Identifiable, Hashable {
-    public let id: String
-    public let title: String
-    public let artist: String
-    public let album: String
-    public let path: String
-    public let sampleRate: UInt32
-    public let bitDepth: UInt32
-    public let channels: UInt32
-    public let durationSeconds: Double
-    
-    public init(path: String, title: String, artist: String, album: String, sampleRate: UInt32, bitDepth: UInt32, channels: UInt32, durationSeconds: Double) {
-        self.id = path
-        self.path = path
-        self.title = title
-        self.artist = artist
-        self.album = album
-        self.sampleRate = sampleRate
-        self.bitDepth = bitDepth
-        self.channels = channels
-        self.durationSeconds = durationSeconds
-    }
-}
-
 public class AudioEngine: ObservableObject {
     public static let shared = AudioEngine()
     
