@@ -57,6 +57,7 @@ swiftc -O \
     "$DIR/macos/Sources/FuzzySearchHelper.swift" \
     "$DIR/macos/Sources/AlbumArtCache.swift" \
     "$DIR/macos/Sources/TrackMetadata.swift" \
+    "$DIR/macos/Sources/QueueHelper.swift" \
     "${SWIFT_SOURCES[@]}" \
     "$TEST_BUILD_DIR/main_test.swift" \
     -framework Cocoa \

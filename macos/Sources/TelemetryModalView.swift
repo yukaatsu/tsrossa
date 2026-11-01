@@ -4,9 +4,27 @@ import AppKit
 public struct TelemetryModalView: View {
     @ObservedObject var engine = AudioEngine.shared
     @ObservedObject var vm = AppViewModel.shared
-    
+    @ObservedObject var logger = AppLogger.shared
+
     public init() {}
-    
+
+    private var snap: HardwareTelemetrySnapshot {
+        engine.telemetrySnapshot
+    }
+
+    private var filteredLogs: [LogEntry] {
+        logger.entries.filter { entry in
+            if let cat = vm.telemetrySelectedCategory, entry.category != cat {
+                return false
+            }
+            if !vm.telemetrySearchQuery.isEmpty {
+                return entry.message.localizedCaseInsensitiveContains(vm.telemetrySearchQuery) ||
+                       entry.category.rawValue.localizedCaseInsensitiveContains(vm.telemetrySearchQuery)
+            }
+            return true
+        }
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             // Drag Handle Indicator
@@ -14,206 +32,264 @@ public struct TelemetryModalView: View {
                 .fill(Color.white.opacity(0.2))
                 .frame(width: 38, height: 4)
                 .padding(.top, 12)
-                .padding(.bottom, 16)
-            
+                .padding(.bottom, 14)
+
             // Header
             HStack(alignment: .top) {
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     Circle()
-                        .fill(TsrossaColors.errorRed)
+                        .fill(snap.hogModeStatus == "EXCLUSIVE_HOG" ? Color.green : Color.orange)
                         .frame(width: 10, height: 10)
-                    
+
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("System Logs & Diagnostics")
-                            .font(.system(size: 18, weight: .bold))
+                        Text("CoreAudio Hardware & Telemetry Audit")
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundColor(TsrossaColors.textPrimary)
-                        Text("Bit-perfect CoreAudio & hardware audit")
-                            .font(.system(size: 12))
+                        Text(snap.hogModeStatus == "EXCLUSIVE_HOG" ? "Exclusive Hog Mode Locked (Bit-Perfect)" : "CoreAudio Shared HAL Mixer")
+                            .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(TsrossaColors.textSecondary)
                     }
                 }
-                
+
                 Spacer()
-                
+
                 Button(action: { vm.showTelemetry = false }) {
                     ZStack {
                         Circle()
                             .fill(Color.white.opacity(0.12))
-                            .frame(width: 32, height: 32)
+                            .frame(width: 28, height: 28)
                         Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.system(size: 12, weight: .bold))
                             .foregroundColor(TsrossaColors.textPrimary)
                     }
                 }
                 .buttonStyle(PlainButtonStyle())
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 20)
-            
-            // Action Buttons: Copy Report & Share Report
-            HStack(spacing: 14) {
-                Button(action: {
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.setString(engine.telemetryJson, forType: .string)
-                    vm.copiedTelemetry = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        vm.copiedTelemetry = false
-                    }
-                }) {
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
+
+            // Quick Diagnostic Metric Tiles (Real C++ CoreAudio HAL Metrics)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                metricTile(
+                    title: "SIGNAL PATH",
+                    value: snap.streamIsInteger ? "32-Bit Int Direct" : "64-Bit DSP -> Float",
+                    detail: snap.streamIsInteger ? "Bit-Perfect memcpy" : (snap.ditherEnabled ? "TPDF Dither ON" : "No Dither"),
+                    isPositive: snap.streamIsInteger
+                )
+                metricTile(
+                    title: "HARDWARE RATE",
+                    value: snap.actualHardwareSampleRate > 0 ? "\(Int(snap.actualHardwareSampleRate)) Hz" : "Standby",
+                    detail: snap.sampleRate > 0 ? "Stream: \(snap.sampleRate) Hz" : "No active stream",
+                    isPositive: snap.actualHardwareSampleRate > 0 && UInt32(snap.actualHardwareSampleRate) == snap.sampleRate
+                )
+                metricTile(
+                    title: "RAM BUFFER",
+                    value: String(format: "%.1f%%", snap.ringBufferFillPercent),
+                    detail: snap.isMemoryLocked ? "mlock() Active" : "Dynamic Virtual RAM",
+                    isPositive: snap.isMemoryLocked
+                )
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
+
+            // Action Buttons: Copy, Export, Clear
+            HStack(spacing: 10) {
+                Button(action: copyTelemetryReport) {
                     HStack(spacing: 6) {
                         Image(systemName: vm.copiedTelemetry ? "checkmark" : "doc.on.doc")
-                        Text(vm.copiedTelemetry ? "Report Copied!" : "Copy Report")
+                        Text(vm.copiedTelemetry ? "Report Copied" : "Copy Report")
                     }
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(TsrossaColors.textPrimary)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+                    .frame(height: 36)
                     .background(Color.white.opacity(0.12))
-                    .cornerRadius(22)
+                    .cornerRadius(18)
                 }
                 .buttonStyle(PlainButtonStyle())
-                
-                Button(action: {
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.setString(engine.telemetryJson, forType: .string)
-                    vm.copiedTelemetry = true
-                }) {
+
+                Button(action: exportLogFile) {
                     HStack(spacing: 6) {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("Share Report")
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Export .log")
                     }
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(TsrossaColors.textPrimary)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+                    .frame(height: 36)
                     .background(Color.white.opacity(0.12))
-                    .cornerRadius(22)
+                    .cornerRadius(18)
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                Button(action: { logger.clear() }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "trash")
+                        Text("Clear")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(TsrossaColors.textSecondary)
+                    .frame(width: 80, height: 36)
+                    .background(Color.white.opacity(0.08))
+                    .cornerRadius(18)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 20)
-            
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
+
+            // Category Filter Pills & Search
+            HStack(spacing: 8) {
+                categoryPill(title: "ALL", category: nil)
+                ForEach(LogCategory.allCases, id: \.self) { cat in
+                    categoryPill(title: cat.rawValue, category: cat)
+                }
+                Spacer()
+                HStack(spacing: 4) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color.white.opacity(0.4))
+                    TextField("Filter logs...", text: $vm.telemetrySearchQuery)
+                        .textFieldStyle(PlainTextFieldStyle())
+                        .font(.system(size: 11))
+                        .foregroundColor(.white)
+                        .frame(width: 100)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.white.opacity(0.08))
+                .cornerRadius(8)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 10)
+
             Divider()
                 .background(Color.white.opacity(0.08))
-            
-            // Diagnostics Scrollable Content
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    // SECTION 1: DEVICE & HARDWARE
-                    VStack(alignment: .leading, spacing: 8) {
-                        sectionHeader(title: "DEVICE & HARDWARE")
-                        
-                        diagRow(label: "DAC Model", value: activeDeviceName)
-                        diagRow(label: "Transport Status", value: engine.devices.first(where: { $0.id == engine.selectedDeviceId })?.isUsb == true ? "USB DAC CONNECTED" : "COREAUDIO DIRECT")
-                        
-                        Button(action: { engine.refreshDevices() }) {
-                            Text("[ INITIALIZE / RECONNECT DAC ]")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundColor(Color(red: 1.0, green: 0.45, blue: 0.55))
-                                .padding(.top, 4)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                    }
-                    
-                    // SECTION 2: SIGNAL PATH
-                    VStack(alignment: .leading, spacing: 8) {
-                        sectionHeader(title: "SIGNAL PATH")
-                        
-                        diagRow(label: "Stream State", value: engine.isPlaying && !engine.isPaused ? "ACTIVE STREAMING" : "STANDBY")
-                        diagRow(label: "Exclusive Lock", value: "HOG MODE ACTIVE")
-                        diagRow(label: "I/O Error Count", value: "0")
-                    }
-                    
-                    // SECTION 3: ENGINE CONFIGURATION
-                    VStack(alignment: .leading, spacing: 8) {
-                        sectionHeader(title: "ENGINE CONFIGURATION")
-                        
-                        diagRow(label: "RAM Playback", value: "ACTIVE (Zero Jitter / mlock)")
-                        diagRow(label: "Gapless Engine", value: "ACTIVE (Direct Handover)")
-                        diagRow(label: "DSP Pipeline", value: "BYPASSED (Bit-Perfect 0 dBFS)")
-                    }
-                    
-                    // SECTION 4: KERNEL & DRIVER AUDIT
-                    VStack(alignment: .leading, spacing: 6) {
-                        sectionHeader(title: "COREAUDIO HARDWARE & DRIVER AUDIT")
-                        
-                        Text("FRAMEWORK LOG:")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundColor(Color(red: 1.0, green: 0.45, blue: 0.55))
-                            .padding(.top, 2)
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            logLine("CoreAudioSink initialized and output units registered.")
-                            logLine("Found \(engine.devices.count) audio output endpoints.")
-                            if let cur = engine.currentTrack {
-                                logLine("Track opened: \(cur.title) (\(cur.sampleRate) Hz, \(cur.bitDepth)-bit).")
-                                logLine("Hardware nominal rate negotiated: \(cur.sampleRate) Hz.")
-                                logLine("POSIX mlock() memory pinned to physical RAM.")
+
+            // Diagnostic Log View (Immutable Timestamps from AppLogger)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        if filteredLogs.isEmpty {
+                            Text("No diagnostic events recorded.")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(Color.white.opacity(0.4))
+                                .padding(16)
+                        } else {
+                            ForEach(filteredLogs) { entry in
+                                logRow(entry)
+                                    .id(entry.id)
                             }
-                            logLine("kAudioDevicePropertyHogMode engaged (Bit-Perfect Exclusive).")
                         }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.black.opacity(0.45))
-                        .cornerRadius(10)
                     }
+                    .padding(14)
                 }
-                .padding(24)
+                .background(Color.black.opacity(0.35))
             }
         }
-        .frame(width: 580, height: 620)
+        .frame(width: 620, height: 560)
         .background(TsrossaColors.deepNavy)
-        .cornerRadius(28)
+        .cornerRadius(24)
         .overlay(
-            RoundedRectangle(cornerRadius: 28)
+            RoundedRectangle(cornerRadius: 24)
                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.7), radius: 30, x: 0, y: 15)
     }
-    
-    private var activeDeviceName: String {
-        if let dev = engine.devices.first(where: { $0.id == engine.selectedDeviceId }) {
-            return dev.name
-        }
-        return "Internal Audio"
-    }
-    
-    private func sectionHeader(title: String) -> some View {
-        HStack(spacing: 8) {
-            Text("— \(title) —")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundColor(Color(red: 1.0, green: 0.45, blue: 0.55))
-            
-            Rectangle()
-                .fill(Color(red: 1.0, green: 0.45, blue: 0.55).opacity(0.2))
-                .frame(height: 1)
-        }
-    }
-    
-    private func diagRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 12, design: .monospaced))
+
+    private func metricTile(title: String, value: String, detail: String, isPositive: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundColor(TsrossaColors.textSecondary)
-            Spacer()
             Text(value)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundColor(TsrossaColors.textPrimary)
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundColor(isPositive ? Color.green : TsrossaColors.textPrimary)
+                .lineLimit(1)
+            Text(detail)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(Color.white.opacity(0.55))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.white.opacity(0.06))
+        .cornerRadius(12)
+    }
+
+    private func categoryPill(title: String, category: LogCategory?) -> some View {
+        Button(action: { vm.telemetrySelectedCategory = category }) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundColor(vm.telemetrySelectedCategory == category ? Color.white : Color.white.opacity(0.5))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(vm.telemetrySelectedCategory == category ? Color.white.opacity(0.2) : Color.clear)
+                .cornerRadius(6)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
+    private func logRow(_ entry: LogEntry) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("[\(entry.formattedTimestamp)]")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(Color.white.opacity(0.4))
+
+            Text("[\(entry.category.rawValue)]")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundColor(categoryColor(entry.category))
+
+            Text(entry.message)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(levelColor(entry.level))
+                .textSelection(.enabled)
         }
     }
-    
-    private func logLine(_ text: String) -> some View {
-        Text("[\(currentTimestamp())] \(text)")
-            .font(.system(size: 10, design: .monospaced))
-            .foregroundColor(Color(white: 0.85))
+
+    private func categoryColor(_ cat: LogCategory) -> Color {
+        switch cat {
+        case .audio: return Color.cyan
+        case .dsp: return Color.purple
+        case .hardware: return Color.orange
+        case .library: return Color.green
+        case .system: return Color.gray
+        }
     }
-    
-    private func currentTimestamp() -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss.SSS"
-        return formatter.string(from: Date())
+
+    private func levelColor(_ lvl: LogLevel) -> Color {
+        switch lvl {
+        case .info: return Color(white: 0.85)
+        case .notice: return Color.cyan
+        case .warning: return Color.yellow
+        case .error: return Color.red
+        }
+    }
+
+    private func copyTelemetryReport() {
+        let header = "Telemetry State: \(engine.telemetryJson)"
+        let text = logger.exportText(telemetryHeader: header)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        vm.copiedTelemetry = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.vm.copiedTelemetry = false
+        }
+    }
+
+    private func exportLogFile() {
+        let header = "Telemetry State: \(engine.telemetryJson)"
+        let text = logger.exportText(telemetryHeader: header)
+
+        let panel = NSSavePanel()
+        panel.title = "Export Diagnostic Log"
+        panel.nameFieldStringValue = "tsrossa_diagnostics_\(Int(Date().timeIntervalSince1970)).log"
+        panel.canCreateDirectories = true
+
+        if panel.runModal() == .OK, let url = panel.url {
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+            AppLogger.shared.log(.system, .info, "Diagnostic log exported to \(url.lastPathComponent)")
+        }
     }
 }

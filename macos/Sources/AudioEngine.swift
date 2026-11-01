@@ -1,6 +1,8 @@
 import Foundation
 import Combine
 import CoreAudio
+import MediaPlayer
+import IOKit.pwr_mgt
 
 public struct OutputDevice: Identifiable, Hashable {
     public let id: UInt32
@@ -8,6 +10,29 @@ public struct OutputDevice: Identifiable, Hashable {
     public let isUsb: Bool
     public let isDefault: Bool
     public let sampleRate: Double
+}
+
+public struct HardwareTelemetrySnapshot: Codable {
+    public var activeDeviceId: UInt32 = 0
+    public var sampleRate: UInt32 = 0
+    public var actualHardwareSampleRate: Double = 0.0
+    public var bitsPerSample: UInt32 = 0
+    public var channels: UInt32 = 0
+    public var streamIsInteger: Bool = false
+    public var hogModeStatus: String = "SHARED_DISABLED"
+    public var hoggerPid: Int32 = -1
+    public var bufferProfileIndex: Int = 2
+    public var ditherEnabled: Bool = true
+    public var isMemoryLocked: Bool = false
+    public var ringBufferFillPercent: Double = 0.0
+    public var gaplessNextReady: Bool = false
+    public var isPlaying: Bool = false
+    public var isPaused: Bool = false
+    public var currentSeconds: Double = 0.0
+    public var totalSeconds: Double = 0.0
+    public var filePath: String = ""
+
+    public init() {}
 }
 
 public class AudioEngine: ObservableObject {
@@ -34,6 +59,9 @@ public class AudioEngine: ObservableObject {
     private var hotplugTimer: Timer?
     private var isAdvancingTrack: Bool = false
     private var lastSeekTimestamp: TimeInterval = 0
+    private var hasPreparedGaplessNext: Bool = false
+    private var powerAssertionID: IOPMAssertionID = 0
+    private var hasPowerAssertion: Bool = false
     
     // Hardware hot-plug tracking state (accessed on engineQueue)
     private var lastKnownDeviceIds: Set<UInt32> = []
@@ -43,6 +71,14 @@ public class AudioEngine: ObservableObject {
     // Debounce state to prevent double-clicking a track row from loading the FLAC file twice
     private var lastPlayRequestPath: String = ""
     private var lastPlayRequestTime: TimeInterval = 0
+
+    public var telemetrySnapshot: HardwareTelemetrySnapshot {
+        guard let data = telemetryJson.data(using: .utf8),
+              let snap = try? JSONDecoder().decode(HardwareTelemetrySnapshot.self, from: data) else {
+            return HardwareTelemetrySnapshot()
+        }
+        return snap
+    }
     
     private init() {
         engineQueue.async { [weak self] in
@@ -51,12 +87,14 @@ public class AudioEngine: ObservableObject {
             self.refreshDevicesOnEngineQueue(checkHotplug: false)
             self.setupCoreAudioHotplugListeners()
         }
+        setupRemoteCommands()
         startHotplugMonitorTimer()
     }
     
     deinit {
         stopProgressTimer()
         hotplugTimer?.invalidate()
+        updatePowerAssertion(keepAwake: false)
         tsrossa_shutdown()
     }
     
@@ -226,6 +264,7 @@ public class AudioEngine: ObservableObject {
         }
         lastPlayRequestPath = track.path
         lastPlayRequestTime = now
+        hasPreparedGaplessNext = false
         stopProgressTimer()
         
         // Update UI track identity and artwork immediately without waiting for FLAC decode
@@ -238,7 +277,10 @@ public class AudioEngine: ObservableObject {
         engineQueue.async { [weak self] in
             guard let self = self else { return }
             let ok = tsrossa_play(trackPath)
-            guard ok else { return }
+            guard ok else {
+                AppLogger.shared.log(.audio, .error, "Failed to decode/open audio file: \(trackPath)")
+                return
+            }
             
             let realRate = tsrossa_get_track_sample_rate()
             let realBits = tsrossa_get_track_bit_depth()
@@ -268,25 +310,45 @@ public class AudioEngine: ObservableObject {
                 if let idx = AppViewModel.shared.tracks.firstIndex(where: { $0.path == track.path }) {
                     AppViewModel.shared.tracks[idx] = updatedTrack
                 }
+                AppLogger.shared.log(.audio, .info, "Playing: \(track.title) (\(realRate) Hz, \(realBits)-bit)")
+                self.updateNowPlayingInfo()
+                self.updatePowerAssertion(keepAwake: AppViewModel.shared.keepScreenAwake)
                 self.startProgressTimer()
             }
         }
     }
     
+    public func pause() {
+        guard isPlaying && !isPaused else { return }
+        isPaused = true
+        engineQueue.async {
+            tsrossa_pause()
+        }
+        AppLogger.shared.log(.audio, .info, "Playback paused at \(String(format: "%.1f", currentTime))s")
+        updateNowPlayingInfo()
+        updatePowerAssertion(keepAwake: AppViewModel.shared.keepScreenAwake)
+        updateTelemetry()
+    }
+
+    public func resume() {
+        guard isPlaying && isPaused else { return }
+        isPaused = false
+        engineQueue.async {
+            tsrossa_resume()
+        }
+        AppLogger.shared.log(.audio, .info, "Playback resumed")
+        updateNowPlayingInfo()
+        updatePowerAssertion(keepAwake: AppViewModel.shared.keepScreenAwake)
+        updateTelemetry()
+    }
+
     public func togglePlayPause() {
         if isPlaying {
             if isPaused {
-                isPaused = false
-                engineQueue.async {
-                    tsrossa_resume()
-                }
+                resume()
             } else {
-                isPaused = true
-                engineQueue.async {
-                    tsrossa_pause()
-                }
+                pause()
             }
-            updateTelemetry()
         } else if let track = currentTrack {
             play(track: track)
         }
@@ -297,6 +359,9 @@ public class AudioEngine: ObservableObject {
         isPaused = false
         currentTime = 0.0
         stopProgressTimer()
+        AppLogger.shared.log(.audio, .info, "Playback stopped")
+        updateNowPlayingInfo()
+        updatePowerAssertion(keepAwake: false)
         engineQueue.async { [weak self] in
             tsrossa_stop()
             let json = String(cString: tsrossa_get_telemetry_json())
@@ -311,6 +376,7 @@ public class AudioEngine: ObservableObject {
         let clamped = min(max(0.0, seconds), safeMax)
         lastSeekTimestamp = ProcessInfo.processInfo.systemUptime
         self.currentTime = clamped
+        updateNowPlayingInfo()
         engineQueue.async {
             _ = tsrossa_seek(clamped)
         }
@@ -358,6 +424,104 @@ public class AudioEngine: ObservableObject {
         }
     }
     
+    private func setupRemoteCommands() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+        commandCenter.playCommand.isEnabled = true
+        commandCenter.playCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            if self.isPaused {
+                self.resume()
+                return .success
+            }
+            return .commandFailed
+        }
+
+        commandCenter.pauseCommand.isEnabled = true
+        commandCenter.pauseCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            if self.isPlaying && !self.isPaused {
+                self.pause()
+                return .success
+            }
+            return .commandFailed
+        }
+
+        commandCenter.togglePlayPauseCommand.isEnabled = true
+        commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.togglePlayPause()
+            return .success
+        }
+
+        commandCenter.nextTrackCommand.isEnabled = true
+        commandCenter.nextTrackCommand.addTarget { _ in
+            DispatchQueue.main.async {
+                AppViewModel.shared.playNextTrack(userInitiated: true)
+            }
+            return .success
+        }
+
+        commandCenter.previousTrackCommand.isEnabled = true
+        commandCenter.previousTrackCommand.addTarget { _ in
+            DispatchQueue.main.async {
+                AppViewModel.shared.playPreviousTrack()
+            }
+            return .success
+        }
+
+        commandCenter.changePlaybackPositionCommand.isEnabled = true
+        commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let self = self, let posEvent = event as? MPChangePlaybackPositionCommandEvent else {
+                return .commandFailed
+            }
+            self.seek(to: posEvent.positionTime)
+            return .success
+        }
+    }
+
+    public func updateNowPlayingInfo() {
+        var info: [String: Any] = [:]
+        if let track = currentTrack {
+            info[MPMediaItemPropertyTitle] = track.title
+            info[MPMediaItemPropertyArtist] = track.artist
+            info[MPMediaItemPropertyAlbumTitle] = track.album
+            info[MPMediaItemPropertyPlaybackDuration] = totalDuration > 0 ? totalDuration : track.durationSeconds
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
+            info[MPNowPlayingInfoPropertyPlaybackRate] = (isPlaying && !isPaused) ? 1.0 : 0.0
+
+            if let img = track.artwork {
+                info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
+            }
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        MPNowPlayingInfoCenter.default().playbackState = (isPlaying && !isPaused) ? .playing : (isPaused ? .paused : .stopped)
+    }
+
+    public func updatePowerAssertion(keepAwake: Bool) {
+        if isPlaying && !isPaused && keepAwake {
+            if !hasPowerAssertion {
+                let reason = "TSRossa Active Hi-Res Audio Playback" as CFString
+                let success = IOPMAssertionCreateWithName(
+                    kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
+                    IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                    reason,
+                    &powerAssertionID
+                )
+                hasPowerAssertion = (success == kIOReturnSuccess)
+                if hasPowerAssertion {
+                    AppLogger.shared.log(.system, .info, "IOPMAssertion display sleep prevention engaged")
+                }
+            }
+        } else {
+            if hasPowerAssertion {
+                IOPMAssertionRelease(powerAssertionID)
+                powerAssertionID = 0
+                hasPowerAssertion = false
+                AppLogger.shared.log(.system, .info, "IOPMAssertion released")
+            }
+        }
+    }
+    
     private func startProgressTimer() {
         stopProgressTimer()
         self.progressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -370,24 +534,27 @@ public class AudioEngine: ObservableObject {
                 }
                 AppViewModel.shared.updateLyricIndex(currentTime: t)
 
+                // Pre-buffer next track for gapless handover 5 seconds before EOF
+                if self.totalDuration > 10.0 && (self.totalDuration - t) < 5.0 && !self.hasPreparedGaplessNext {
+                    self.hasPreparedGaplessNext = true
+                    if let next = AppViewModel.shared.peekNextTrack() {
+                        self.prepareNextTrack(path: next.path)
+                    }
+                }
+
                 if tsrossa_consume_gapless_transition() {
                     self.handleSeamlessGaplessAdvance()
                 } else if tsrossa_is_track_finished() && self.totalDuration > 0 && elapsedSinceSeek > 0.4 {
                     self.isAdvancingTrack = true
-                    if AppViewModel.shared.isRepeat, let current = self.currentTrack {
-                        self.play(track: current)
-                    } else {
-                        AppViewModel.shared.playNextTrack()
-                    }
+                    AppViewModel.shared.playNextTrack(userInitiated: false)
                 }
             }
         }
     }
 
     private func handleSeamlessGaplessAdvance() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            AppViewModel.shared.playNextTrack()
+        DispatchQueue.main.async {
+            AppViewModel.shared.playNextTrack(userInitiated: false)
         }
     }
     

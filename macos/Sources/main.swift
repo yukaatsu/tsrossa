@@ -63,12 +63,37 @@ struct TsrossaMacApp: App {
                 .keyboardShortcut("s", modifiers: .command)
                 
                 Button("Toggle Repeat") {
-                    AppViewModel.shared.isRepeat.toggle()
+                    if AppViewModel.shared.repeatMode == .off {
+                        AppViewModel.shared.repeatMode = .all
+                    } else if AppViewModel.shared.repeatMode == .all {
+                        AppViewModel.shared.repeatMode = .one
+                    } else {
+                        AppViewModel.shared.repeatMode = .off
+                    }
                 }
                 .keyboardShortcut("t", modifiers: .command)
+
+                Divider()
+
+                Button("Audio Pipeline Diagnostics") {
+                    AppViewModel.shared.showTelemetry.toggle()
+                }
+                .keyboardShortcut("u", modifiers: .command)
             }
             
             CommandMenu("Workspace") {
+                Button("Previous Tab") {
+                    AppViewModel.shared.selectPreviousTab()
+                }
+                .keyboardShortcut("[", modifiers: .command)
+
+                Button("Next Tab") {
+                    AppViewModel.shared.selectNextTab()
+                }
+                .keyboardShortcut("]", modifiers: .command)
+
+                Divider()
+
                 Button("Now Playing") {
                     AppViewModel.shared.activeTab = .nowPlaying
                 }

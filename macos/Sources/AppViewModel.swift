@@ -17,12 +17,47 @@ public struct UserPlaylist: Identifiable, Codable, Hashable {
     public var filterKeyword: String
     /// Explicitly added track file paths
     public var trackPaths: [String]
+    public var isPinned: Bool
+    public var isAutoFolder: Bool
     
-    public init(id: String = UUID().uuidString, name: String, filterKeyword: String = "", trackPaths: [String] = []) {
+    public init(
+        id: String = UUID().uuidString,
+        name: String,
+        filterKeyword: String = "",
+        trackPaths: [String] = [],
+        isPinned: Bool = false,
+        isAutoFolder: Bool = false
+    ) {
         self.id = id
         self.name = name
         self.filterKeyword = filterKeyword
         self.trackPaths = trackPaths
+        self.isPinned = isPinned
+        self.isAutoFolder = isAutoFolder
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, filterKeyword, trackPaths, isPinned, isAutoFolder
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        filterKeyword = try container.decodeIfPresent(String.self, forKey: .filterKeyword) ?? ""
+        trackPaths = try container.decodeIfPresent([String].self, forKey: .trackPaths) ?? []
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        isAutoFolder = try container.decodeIfPresent(Bool.self, forKey: .isAutoFolder) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(filterKeyword, forKey: .filterKeyword)
+        try container.encode(trackPaths, forKey: .trackPaths)
+        try container.encode(isPinned, forKey: .isPinned)
+        try container.encode(isAutoFolder, forKey: .isAutoFolder)
     }
     
     public func matches(track: TrackMetadata) -> Bool {
@@ -59,6 +94,8 @@ public class AppViewModel: ObservableObject {
     @Published public var showTelemetry: Bool = false
     @Published public var currentFolder: String = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first?.path ?? (NSHomeDirectory() + "/Music")
     @Published public var copiedTelemetry: Bool = false
+    @Published public var telemetrySelectedCategory: LogCategory? = nil
+    @Published public var telemetrySearchQuery: String = ""
     
     // Playlists & New Playlist Modal State
     @Published public var playlists: [UserPlaylist] = []
@@ -120,8 +157,25 @@ public class AppViewModel: ObservableObject {
             }
         }
     }
-    @Published public var isShuffle: Bool = false
-    @Published public var isRepeat: Bool = false
+    @Published public var isShuffle: Bool = false {
+        didSet {
+            UserDefaults.standard.set(isShuffle, forKey: "tsrossa.isShuffle")
+            if isShuffle {
+                rebuildShuffleDeck()
+            }
+        }
+    }
+    @Published public var repeatMode: RepeatMode = .off {
+        didSet {
+            UserDefaults.standard.set(repeatMode.rawValue, forKey: "tsrossa.repeatMode")
+        }
+    }
+    public var isRepeat: Bool {
+        get { repeatMode != .off }
+        set { repeatMode = newValue ? .all : .off }
+    }
+    public var shuffleDeck: [Int] = []
+    public var playbackHistory: [AudioTrack] = []
     @Published public var sortMode: String = "DATE (NEWEST)"
     @Published public var sortField: SortField = .title {
         didSet {
@@ -138,6 +192,9 @@ public class AppViewModel: ObservableObject {
     @Published public var makeFolderAsPlaylist: Bool = false {
         didSet {
             UserDefaults.standard.set(makeFolderAsPlaylist, forKey: "tsrossa.makeFolderAsPlaylist")
+            if makeFolderAsPlaylist {
+                rebuildFolderPlaylists()
+            }
         }
     }
     
@@ -176,6 +233,7 @@ public class AppViewModel: ObservableObject {
     @Published public var keepScreenAwake: Bool = true {
         didSet {
             UserDefaults.standard.set(keepScreenAwake, forKey: "tsrossa.keepScreenAwake")
+            AudioEngine.shared.updatePowerAssertion(keepAwake: keepScreenAwake)
         }
     }
     @Published public var bufferProfile: String = "192ms Jitter Safe" {
@@ -207,6 +265,12 @@ public class AppViewModel: ObservableObject {
     public init() {
         if UserDefaults.standard.object(forKey: "tsrossa.isAutoplayRadio") != nil {
             isAutoplayRadio = UserDefaults.standard.bool(forKey: "tsrossa.isAutoplayRadio")
+        }
+        if UserDefaults.standard.object(forKey: "tsrossa.isShuffle") != nil {
+            isShuffle = UserDefaults.standard.bool(forKey: "tsrossa.isShuffle")
+        }
+        if let rm = UserDefaults.standard.string(forKey: "tsrossa.repeatMode"), let mode = RepeatMode(rawValue: rm) {
+            repeatMode = mode
         }
         if let sf = UserDefaults.standard.string(forKey: "tsrossa.sortField"), let f = SortField(rawValue: sf) {
             sortField = f
@@ -414,6 +478,62 @@ public class AppViewModel: ObservableObject {
         } else {
             playlists[idx].trackPaths.append(trackPath)
         }
+        savePlaylists()
+    }
+
+    public func renamePlaylist(id: String, newName: String) {
+        guard let idx = playlists.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            playlists[idx].name = trimmed
+            savePlaylists()
+        }
+    }
+
+    public func togglePinPlaylist(id: String) {
+        guard let idx = playlists.firstIndex(where: { $0.id == id }) else { return }
+        playlists[idx].isPinned.toggle()
+        sortPlaylists()
+        savePlaylists()
+    }
+
+    public func clearPlaylistTracks(id: String) {
+        guard let idx = playlists.firstIndex(where: { $0.id == id }) else { return }
+        playlists[idx].trackPaths.removeAll()
+        savePlaylists()
+    }
+
+    public func sortPlaylists() {
+        playlists.sort { a, b in
+            if a.isPinned != b.isPinned {
+                return a.isPinned && !b.isPinned
+            }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+    }
+
+    public func rebuildFolderPlaylists() {
+        guard makeFolderAsPlaylist else { return }
+        playlists.removeAll { $0.isAutoFolder }
+
+        var folderMap: [String: [String]] = [:]
+        for track in tracks {
+            let url = URL(fileURLWithPath: track.path)
+            let folderName = url.deletingLastPathComponent().lastPathComponent
+            if !folderName.isEmpty {
+                folderMap[folderName, default: []].append(track.path)
+            }
+        }
+
+        for (folder, paths) in folderMap.sorted(by: { $0.key < $1.key }) {
+            let pl = UserPlaylist(
+                name: "📁 " + folder,
+                trackPaths: paths,
+                isAutoFolder: true
+            )
+            playlists.append(pl)
+        }
+        sortPlaylists()
         savePlaylists()
     }
     
@@ -658,56 +778,83 @@ public class AppViewModel: ObservableObject {
         return Array(pool.prefix(10))
     }
     
-    public func playNextTrack() {
-        // 1. If user queued tracks manually (Play Next / Add to Queue), play the queue first!
-        if !upNextQueue.isEmpty {
-            let nextTrack = upNextQueue.removeFirst()
-            AudioEngine.shared.play(track: nextTrack)
-            return
+    public var queueState: PlaybackQueueState {
+        get {
+            let contextList = !filteredTracks.isEmpty ? filteredTracks : tracks
+            let currIdx = contextList.firstIndex(where: { $0.path == AudioEngine.shared.currentTrack?.path }) ?? 0
+            return PlaybackQueueState(
+                tracks: contextList,
+                currentIndex: currIdx,
+                repeatMode: repeatMode,
+                isShuffle: isShuffle,
+                shuffleDeck: shuffleDeck,
+                playbackHistory: playbackHistory,
+                priorityQueue: upNextQueue
+            )
         }
-        
-        // 2. Otherwise fall back to library / playlist context
+        set {
+            self.shuffleDeck = newValue.shuffleDeck
+            self.playbackHistory = newValue.playbackHistory
+            self.upNextQueue = newValue.priorityQueue
+        }
+    }
+
+    public func rebuildShuffleDeck() {
         let contextList = !filteredTracks.isEmpty ? filteredTracks : tracks
-        guard !contextList.isEmpty else { return }
-        
-        if let current = AudioEngine.shared.currentTrack, let idx = contextList.firstIndex(where: { $0.path == current.path }) {
-            if idx < contextList.count - 1 {
-                if isShuffle && contextList.count > 1 {
-                    var rand = Int.random(in: 0..<contextList.count)
-                    if rand == idx { rand = (idx + 1) % contextList.count }
-                    AudioEngine.shared.play(track: contextList[rand])
-                } else {
-                    AudioEngine.shared.play(track: contextList[idx + 1])
-                }
+        let currIdx = contextList.firstIndex(where: { $0.path == AudioEngine.shared.currentTrack?.path })
+        self.shuffleDeck = QueueHelper.buildShuffleDeck(count: contextList.count, excluding: currIdx)
+    }
+
+    public func peekNextTrack() -> AudioTrack? {
+        if !upNextQueue.isEmpty {
+            return upNextQueue.first
+        }
+        var state = self.queueState
+        return QueueHelper.resolveNextTrack(state: &state, userInitiated: false)
+    }
+
+    public func playNextTrack(userInitiated: Bool = true) {
+        var state = self.queueState
+        if let nextTrack = QueueHelper.resolveNextTrack(state: &state, userInitiated: userInitiated) {
+            self.queueState = state
+            AudioEngine.shared.play(track: nextTrack)
+        } else if isAutoplayRadio {
+            let recommendations = getAutoplayRecommendations()
+            if let radioTrack = recommendations.first {
+                AudioEngine.shared.play(track: radioTrack)
+                showToast("Autoplay Radio: Playing '\(radioTrack.title)' by \(radioTrack.artist)")
             } else {
-                // Reached the end of current playlist / context!
-                if isRepeat {
-                    AudioEngine.shared.play(track: contextList[0])
-                } else if isAutoplayRadio {
-                    let recommendations = getAutoplayRecommendations()
-                    if let radioTrack = recommendations.first {
-                        AudioEngine.shared.play(track: radioTrack)
-                        showToast("Autoplay Radio: Playing '\(radioTrack.title)' by \(radioTrack.artist)")
-                    } else {
-                        AudioEngine.shared.play(track: contextList[0])
-                    }
-                } else {
-                    AudioEngine.shared.play(track: contextList[0])
-                }
+                AudioEngine.shared.stop()
             }
-        } else if let first = contextList.first {
-            AudioEngine.shared.play(track: first)
+        } else {
+            AudioEngine.shared.stop()
         }
     }
     
     public func playPreviousTrack() {
-        let contextList = !filteredTracks.isEmpty ? filteredTracks : tracks
-        guard !contextList.isEmpty else { return }
-        if let current = AudioEngine.shared.currentTrack, let idx = contextList.firstIndex(where: { $0.path == current.path }) {
-            let prevIdx = (idx - 1 + contextList.count) % contextList.count
-            AudioEngine.shared.play(track: contextList[prevIdx])
-        } else if let first = contextList.first {
-            AudioEngine.shared.play(track: first)
+        var state = self.queueState
+        let (track, restartOnly) = QueueHelper.resolvePreviousTrack(state: &state, currentTime: AudioEngine.shared.currentTime)
+        if restartOnly {
+            AudioEngine.shared.seek(to: 0.0)
+        } else if let t = track {
+            self.queueState = state
+            AudioEngine.shared.play(track: t)
+        }
+    }
+
+    public func selectPreviousTab() {
+        let tabs = AppTab.allCases
+        if let idx = tabs.firstIndex(of: activeTab) {
+            let prev = (idx - 1 + tabs.count) % tabs.count
+            activeTab = tabs[prev]
+        }
+    }
+
+    public func selectNextTab() {
+        let tabs = AppTab.allCases
+        if let idx = tabs.firstIndex(of: activeTab) {
+            let next = (idx + 1) % tabs.count
+            activeTab = tabs[next]
         }
     }
     
@@ -765,6 +912,9 @@ public class AppViewModel: ObservableObject {
                 MetadataScanner.enrichMetadataInBackground(tracks: initialTracks) { [weak self] enriched in
                     guard let self = self else { return }
                     self.tracks = TrackSorter.sort(enriched, by: self.sortField, order: self.sortOrder)
+                    if self.makeFolderAsPlaylist {
+                        self.rebuildFolderPlaylists()
+                    }
                 }
             }
         }
@@ -794,7 +944,7 @@ public class AppViewModel: ObservableObject {
         return String(format: "%02d:%02d", mins, secs)
     }
     
-    // Desktop Keyboard Shortcut Monitor (supports Typeahead Search ↑/↓/Enter + Global Media Shortcuts)
+    // Desktop Keyboard Shortcut Monitor (Command & Option shortcuts; bare arrow keys reserved for list navigation)
     public func setupKeyboardMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
@@ -840,7 +990,7 @@ public class AppViewModel: ObservableObject {
                 return event
             }
             
-            if event.keyCode == 53 { // Global Escape
+            if event.keyCode == 53 { // Global Escape closes any modal or theater view
                 if self.isTheaterMode {
                     self.isTheaterMode = false
                     return nil
@@ -858,12 +1008,13 @@ public class AppViewModel: ObservableObject {
                     return nil
                 }
             }
-            
+
             let isCommand = event.modifierFlags.contains(.command)
+            let isOption = event.modifierFlags.contains(.option)
             
             if isCommand {
                 switch event.keyCode {
-                case 3: // Cmd + F -> Toggle Theater Mode (YouTube Music style)
+                case 3: // Cmd + F -> Toggle Theater Mode
                     self.isTheaterMode.toggle()
                     return nil
                 case 18: // Cmd + 1 -> Now Playing
@@ -878,6 +1029,15 @@ public class AppViewModel: ObservableObject {
                 case 21: // Cmd + 4 -> Settings
                     self.activeTab = .settings
                     return nil
+                case 32: // Cmd + U -> Audio Pipeline Diagnostics
+                    self.showTelemetry.toggle()
+                    return nil
+                case 33: // Cmd + [ -> Previous Tab
+                    self.selectPreviousTab()
+                    return nil
+                case 30: // Cmd + ] -> Next Tab
+                    self.selectNextTab()
+                    return nil
                 case 45: // Cmd + N -> New Playlist Modal
                     self.openCreatePlaylistModal()
                     return nil
@@ -891,7 +1051,13 @@ public class AppViewModel: ObservableObject {
                     self.isShuffle.toggle()
                     return nil
                 case 17: // Cmd + T -> Repeat
-                    self.isRepeat.toggle()
+                    if self.repeatMode == .off {
+                        self.repeatMode = .all
+                    } else if self.repeatMode == .all {
+                        self.repeatMode = .one
+                    } else {
+                        self.repeatMode = .off
+                    }
                     return nil
                 case 37: // Cmd + L -> Toggle Like on current track
                     if let cur = AudioEngine.shared.currentTrack {
@@ -905,10 +1071,21 @@ public class AppViewModel: ObservableObject {
                     self.volumeDown()
                     return nil
                 case 124: // Cmd + Right Arrow -> Next track
-                    self.playNextTrack()
+                    self.playNextTrack(userInitiated: true)
                     return nil
                 case 123: // Cmd + Left Arrow -> Prev track
                     self.playPreviousTrack()
+                    return nil
+                default:
+                    break
+                }
+            } else if isOption {
+                switch event.keyCode {
+                case 124: // Option + Right Arrow -> Seek forward 5 seconds
+                    AudioEngine.shared.seek(to: AudioEngine.shared.currentTime + 5.0)
+                    return nil
+                case 123: // Option + Left Arrow -> Seek backward 5 seconds
+                    AudioEngine.shared.seek(to: max(0.0, AudioEngine.shared.currentTime - 5.0))
                     return nil
                 default:
                     break
@@ -924,28 +1101,8 @@ public class AppViewModel: ObservableObject {
                         self.playSelectedSearchResult()
                         return nil
                     }
-                case 124: // Right Arrow -> Next track
-                    self.playNextTrack()
-                    return nil
-                case 123: // Left Arrow -> Prev track
-                    self.playPreviousTrack()
-                    return nil
-                case 126: // Up Arrow -> Volume Up
-                    self.volumeUp()
-                    return nil
-                case 125: // Down Arrow -> Volume Down
-                    self.volumeDown()
-                    return nil
-                case 53: // Escape
-                    if self.showNewPlaylistModal {
-                        self.showNewPlaylistModal = false
-                        return nil
-                    }
-                    if self.showTelemetry {
-                        self.showTelemetry = false
-                        return nil
-                    }
                 default:
+                    // Bare arrow keys (123, 124, 125, 126) fall through untouched to allow normal list navigation!
                     break
                 }
             }
