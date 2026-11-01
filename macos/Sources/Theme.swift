@@ -370,30 +370,31 @@ extension View {
 // ==============================================================================
 
 public enum TsrossaBrandLogo {
-    public static let launcherImage: NSImage? = {
-        if let bundlePath = Bundle.main.path(forResource: "ic_launcher", ofType: "png"),
+    public static func loadBundledImage(named name: String) -> NSImage? {
+        if let resourceURL = Bundle.main.resourceURL?.appendingPathComponent(name),
+           let img = NSImage(contentsOf: resourceURL) {
+            return img
+        }
+        if let bundlePath = Bundle.main.path(forResource: (name as NSString).deletingPathExtension, ofType: (name as NSString).pathExtension),
            let img = NSImage(contentsOfFile: bundlePath) {
             return img
         }
-        let repoPath = "/Users/alen/Music/tsrossa/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"
-        if FileManager.default.fileExists(atPath: repoPath),
-           let img = NSImage(contentsOfFile: repoPath) {
+        let devFallback = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("macos/Resources")
+            .appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: devFallback.path),
+           let img = NSImage(contentsOf: devFallback) {
             return img
         }
         return nil
+    }
+
+    public static let launcherImage: NSImage? = {
+        loadBundledImage(named: "ic_launcher.png") ?? loadBundledImage(named: "AppIcon.png")
     }()
     
     public static let foregroundImage: NSImage? = {
-        if let bundlePath = Bundle.main.path(forResource: "ic_launcher_foreground", ofType: "png"),
-           let img = NSImage(contentsOfFile: bundlePath) {
-            return img
-        }
-        let repoPath = "/Users/alen/Music/tsrossa/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png"
-        if FileManager.default.fileExists(atPath: repoPath),
-           let img = NSImage(contentsOfFile: repoPath) {
-            return img
-        }
-        return launcherImage
+        loadBundledImage(named: "ic_launcher_foreground.png") ?? launcherImage
     }()
     
     public static func applyMacDockIcon() {

@@ -1,300 +1,384 @@
 import Foundation
 import AppKit
-import Combine
+
+public struct GitHubAssetInfo: Equatable, Codable {
+    public let name: String
+    public let browserDownloadUrl: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case browserDownloadUrl = "browser_download_url"
+    }
+
+    public init(name: String, browserDownloadUrl: String) {
+        self.name = name
+        self.browserDownloadUrl = browserDownloadUrl
+    }
+}
+
+public enum VersionComparator {
+    /// Membandingkan versi SemVer termasuk suffix pre-release (alpha < beta < rc < stable)
+    /// serta perbandingan angka natural (beta10 > beta2), selaras dengan AppUpdateManager.kt di Android.
+    public static func isNewerVersion(latestTag: String, currentVersion: String) -> Bool {
+        let cleanLatest = stripPrefix(latestTag)
+        let cleanCurrent = stripPrefix(currentVersion)
+        if cleanLatest.isEmpty || cleanCurrent.isEmpty || cleanLatest == cleanCurrent {
+            return false
+        }
+
+        let (latestCore, latestSuffix) = splitCoreAndSuffix(cleanLatest)
+        let (currentCore, currentSuffix) = splitCoreAndSuffix(cleanCurrent)
+
+        let maxParts = max(latestCore.count, currentCore.count)
+        for i in 0..<maxParts {
+            let lVal = i < latestCore.count ? latestCore[i] : 0
+            let cVal = i < currentCore.count ? currentCore[i] : 0
+            if lVal != cVal {
+                return lVal > cVal
+            }
+        }
+
+        // Jika angka inti sama: rilis stabil (tanpa suffix) lebih baru daripada pre-release
+        if latestSuffix.isEmpty && !currentSuffix.isEmpty { return true }
+        if !latestSuffix.isEmpty && currentSuffix.isEmpty { return false }
+        if latestSuffix.isEmpty && currentSuffix.isEmpty { return false }
+
+        return comparePreReleaseSuffix(latestSuffix, currentSuffix) > 0
+    }
+
+    public static func selectMacOSAsset(from assets: [GitHubAssetInfo]) -> GitHubAssetInfo? {
+        let macKeywords = ["macos", "mac", "darwin", "osx"]
+        let bannedKeywords = ["android", "windows", "win64", "linux", "debug-symbols", ".apk"]
+
+        return assets.first { asset in
+            let lower = asset.name.lowercased()
+            let hasSupportedExt = lower.hasSuffix(".zip") || lower.hasSuffix(".dmg")
+            let hasMacKeyword = macKeywords.contains { lower.contains($0) }
+            let hasBannedKeyword = bannedKeywords.contains { lower.contains($0) }
+            return hasSupportedExt && hasMacKeyword && !hasBannedKeyword
+        }
+    }
+
+    private static func stripPrefix(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("v") || s.hasPrefix("V") {
+            s.removeFirst()
+        }
+        if let plusIdx = s.firstIndex(of: "+") {
+            s = String(s[..<plusIdx])
+        }
+        return s
+    }
+
+    private static func splitCoreAndSuffix(_ version: String) -> ([Int], String) {
+        let parts = version.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        let coreStr = String(parts[0])
+        let suffixStr = parts.count > 1 ? String(parts[1]).lowercased() : ""
+        let coreNums = coreStr.split(separator: ".").map { part -> Int in
+            let digits = part.prefix { $0.isNumber }
+            return Int(digits) ?? 0
+        }
+        return (coreNums, suffixStr)
+    }
+
+    private static func comparePreReleaseSuffix(_ a: String, _ b: String) -> Int {
+        if a == b { return 0 }
+        let rankA = preReleaseStageRank(a)
+        let rankB = preReleaseStageRank(b)
+        if rankA != rankB {
+            return rankA > rankB ? 1 : -1
+        }
+        return a.compare(b, options: [.numeric, .caseInsensitive]).rawValue
+    }
+
+    private static func preReleaseStageRank(_ suffix: String) -> Int {
+        if suffix.hasPrefix("rc") { return 3 }
+        if suffix.hasPrefix("beta") || suffix.hasPrefix("b") { return 2 }
+        if suffix.hasPrefix("alpha") || suffix.hasPrefix("a") { return 1 }
+        return 0
+    }
+}
 
 public class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
     public static let shared = UpdateManager()
-    
-    public let repoOwner = "RazerZS-oss"
-    public let repoName = "tsrossa"
-    
+
+    public static let githubOwner = "alens"
+    public static let githubRepo = "tsrossa"
+    public static let expectedBundleIdentifier = "com.yuka.tsrossa.macos"
+
+    public var repoOwner: String { Self.githubOwner }
+    public var repoName: String { Self.githubRepo }
+
     @Published public var isChecking: Bool = false
     @Published public var hasChecked: Bool = false
+    @Published public var isDownloading: Bool = false
+    @Published public var isExtracting: Bool = false
+    @Published public var downloadProgress: Double = 0.0
     @Published public var updateAvailable: Bool = false
     @Published public var latestVersion: String = ""
     @Published public var releaseTitle: String = ""
     @Published public var releaseNotes: String = ""
     @Published public var downloadUrl: URL? = nil
-    @Published public var isDownloading: Bool = false
-    @Published public var downloadProgress: Double = 0.0
+    @Published public var assetFileName: String = ""
     @Published public var statusMessage: String = ""
-    @Published public var isExtracting: Bool = false
-    
+    @Published public var errorMessage: String? = nil
+
     private var downloadSession: URLSession?
     private var downloadTask: URLSessionDownloadTask?
-    
+
     public var currentVersion: String {
-        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.6.0"
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "5.4"
         return ver.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    
+
     public override init() {
         super.init()
     }
-    
+
     public func checkForUpdates(userInitiated: Bool = true) {
         guard !isChecking && !isDownloading else { return }
-        
-        DispatchQueue.main.async {
-            self.isChecking = true
-            self.statusMessage = "Checking for updates..."
+        isChecking = true
+        errorMessage = nil
+        if userInitiated {
+            statusMessage = "Memeriksa pembaruan di GitHub..."
         }
-        
-        let urlString = "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest"
-        guard let url = URL(string: urlString) else {
-            DispatchQueue.main.async {
-                self.isChecking = false
-                self.statusMessage = "Invalid update URL."
-            }
+
+        let urlStr = "https://api.github.com/repos/\(Self.githubOwner)/\(Self.githubRepo)/releases/latest"
+        guard let url = URL(string: urlStr) else {
+            finishCheckWithError("URL repositori GitHub tidak valid.")
             return
         }
-        
+
         var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
-        request.setValue("tsrossa-macos-updater", forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 15.0
-        
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("TSRossa-macOS/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 15
+
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let self = self else { return }
-            
             DispatchQueue.main.async {
+                guard let self = self else { return }
                 self.isChecking = false
                 self.hasChecked = true
-                
+
                 if let error = error {
-                    self.statusMessage = "Check failed: \(error.localizedDescription)"
+                    if userInitiated { self.errorMessage = "Gagal terhubung: \(error.localizedDescription)" }
+                    self.statusMessage = userInitiated ? "Gagal: \(error.localizedDescription)" : ""
                     return
                 }
-                
-                guard let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    self.statusMessage = "Unable to parse release information."
+
+                guard let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200, let data = data else {
+                    if userInitiated { self.errorMessage = "Belum ada rilis publik macOS yang tersedia di GitHub." }
+                    self.statusMessage = userInitiated ? "Belum ada rilis baru." : ""
                     return
                 }
-                
-                // GitHub error or rate limit
-                if let message = json["message"] as? String, json["tag_name"] == nil {
-                    if message == "Not Found" {
-                        self.statusMessage = "No releases published yet on GitHub (v\(self.currentVersion) is active)."
-                    } else {
-                        self.statusMessage = "GitHub: \(message)"
-                    }
-                    return
-                }
-                
-                guard let tagName = json["tag_name"] as? String else {
-                    self.statusMessage = "No release tag found."
-                    return
-                }
-                
-                let rawTag = tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV \t\n\r"))
-                self.latestVersion = rawTag
-                self.releaseTitle = (json["name"] as? String) ?? "tsrossa v\(rawTag)"
-                self.releaseNotes = (json["body"] as? String) ?? ""
-                
-                // Locate macos zip asset
-                var foundAssetUrl: URL? = nil
-                if let assets = json["assets"] as? [[String: Any]] {
-                    for asset in assets {
-                        if let name = asset["name"] as? String,
-                           let downloadStr = asset["browser_download_url"] as? String {
-                            let lower = name.lowercased()
-                            if lower.hasSuffix(".zip") && (lower.contains("macos") || lower.contains("mac") || lower.contains("tsrossa")) {
-                                foundAssetUrl = URL(string: downloadStr)
-                                break
-                            }
-                        }
-                    }
-                    // Fallback to any zip asset
-                    if foundAssetUrl == nil {
-                        for asset in assets {
-                            if let name = asset["name"] as? String,
-                               let downloadStr = asset["browser_download_url"] as? String,
-                               name.lowercased().hasSuffix(".zip") {
-                                foundAssetUrl = URL(string: downloadStr)
-                                break
-                            }
-                        }
-                    }
-                }
-                self.downloadUrl = foundAssetUrl
-                
-                let isNewer = self.compareVersions(v1: rawTag, v2: self.currentVersion) > 0
-                self.updateAvailable = isNewer
-                
-                if isNewer {
-                    self.statusMessage = "New version v\(rawTag) is available!"
-                } else {
-                    self.statusMessage = "You're on the latest version (v\(self.currentVersion))."
-                }
+
+                self.parseReleaseData(data, manual: userInitiated)
             }
         }.resume()
     }
-    
-    private func compareVersions(v1: String, v2: String) -> Int {
-        let parts1 = v1.split(separator: ".").compactMap { Int($0) }
-        let parts2 = v2.split(separator: ".").compactMap { Int($0) }
-        
-        let maxCount = max(parts1.count, parts2.count)
-        for i in 0..<maxCount {
-            let p1 = i < parts1.count ? parts1[i] : 0
-            let p2 = i < parts2.count ? parts2[i] : 0
-            if p1 > p2 { return 1 }
-            if p1 < p2 { return -1 }
-        }
-        return 0
-    }
-    
-    public func startDownloadAndInstall() {
-        guard let url = downloadUrl else {
-            statusMessage = "No download package found in release."
+
+    private func parseReleaseData(_ data: Data, manual: Bool) {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tagName = json["tag_name"] as? String else {
+            if manual { errorMessage = "Respons JSON rilis tidak valid." }
             return
         }
-        guard !isDownloading else { return }
-        
-        DispatchQueue.main.async {
-            self.isDownloading = true
-            self.downloadProgress = 0.0
-            self.statusMessage = "Downloading update..."
+
+        let body = json["body"] as? String ?? "Perbaikan performa dan peningkatan stabilitas audio."
+        let title = json["name"] as? String ?? "TSRossa \(tagName)"
+        var parsedAssets: [GitHubAssetInfo] = []
+        if let rawAssets = json["assets"] as? [[String: Any]] {
+            for item in rawAssets {
+                if let name = item["name"] as? String,
+                   let dl = item["browser_download_url"] as? String {
+                    parsedAssets.append(GitHubAssetInfo(name: name, browserDownloadUrl: dl))
+                }
+            }
         }
-        
-        let config = URLSessionConfiguration.default
-        downloadSession = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        downloadTask = downloadSession?.downloadTask(with: url)
-        downloadTask?.resume()
-    }
-    
-    // MARK: - URLSessionDownloadDelegate
-    
-    public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        if totalBytesExpectedToWrite > 0 {
-            let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-            DispatchQueue.main.async {
-                self.downloadProgress = min(1.0, max(0.0, progress))
-                let percent = Int(progress * 100.0)
-                self.statusMessage = "Downloading: \(percent)%..."
+
+        self.releaseTitle = title
+        if VersionComparator.isNewerVersion(latestTag: tagName, currentVersion: currentVersion) {
+            guard let macAsset = VersionComparator.selectMacOSAsset(from: parsedAssets),
+                  let assetURL = URL(string: macAsset.browserDownloadUrl) else {
+                updateAvailable = false
+                if manual {
+                    statusMessage = "Rilis \(tagName) ditemukan, namun paket khusus macOS belum tersedia."
+                }
+                return
+            }
+
+            latestVersion = tagName
+            releaseNotes = body
+            downloadUrl = assetURL
+            assetFileName = macAsset.name
+            updateAvailable = true
+            statusMessage = "Pembaruan \(tagName) siap diunduh (\(macAsset.name))."
+        } else {
+            updateAvailable = false
+            if manual {
+                statusMessage = "Anda sudah menggunakan versi terbaru (v\(currentVersion))."
             }
         }
     }
-    
+
+    public func startDownloadAndInstall() {
+        downloadAndInstallUpdate()
+    }
+
+    public func downloadAndInstallUpdate() {
+        guard let url = downloadUrl, !isDownloading else { return }
+        isDownloading = true
+        isExtracting = false
+        downloadProgress = 0.0
+        errorMessage = nil
+        statusMessage = "Mengunduh \(assetFileName.isEmpty ? "pembaruan" : assetFileName)..."
+
+        let config = URLSessionConfiguration.default
+        downloadSession = URLSession(configuration: config, delegate: self, delegateQueue: OperationQueue.main)
+        downloadTask = downloadSession?.downloadTask(with: url)
+        downloadTask?.resume()
+    }
+
+    public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        if totalBytesExpectedToWrite > 0 {
+            DispatchQueue.main.async {
+                self.downloadProgress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+            }
+        }
+    }
+
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         DispatchQueue.main.async {
             self.isDownloading = false
             self.isExtracting = true
-            self.statusMessage = "Extracting & Installing update..."
-        }
-        
-        let fileManager = FileManager.default
-        let tempDir = URL(fileURLWithPath: "/tmp/tsrossa_update", isDirectory: true)
-        let zipTarget = tempDir.appendingPathComponent("update.zip")
-        let extractDir = tempDir.appendingPathComponent("extracted", isDirectory: true)
-        let restartScript = tempDir.appendingPathComponent("restart.sh")
-        
-        do {
-            try? fileManager.removeItem(at: tempDir)
-            try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
-            try fileManager.createDirectory(at: extractDir, withIntermediateDirectories: true, attributes: nil)
-            try fileManager.copyItem(at: location, to: zipTarget)
-            
-            // Extract using ditto for full macOS bundle & symlink fidelity
-            let ditto = Process()
-            ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-            ditto.arguments = ["-xk", zipTarget.path, extractDir.path]
-            try ditto.run()
-            ditto.waitUntilExit()
-            
-            // Locate extracted tsrossa.app
-            var extractedAppPath: String? = nil
-            if let enumerator = fileManager.enumerator(at: extractDir, includingPropertiesForKeys: [.isDirectoryKey]) {
-                for case let item as URL in enumerator {
-                    if item.pathExtension == "app" {
-                        extractedAppPath = item.path
-                        break
-                    }
-                }
-            }
-            
-            guard let newAppPath = extractedAppPath else {
-                DispatchQueue.main.async {
-                    self.isExtracting = false
-                    self.statusMessage = "Error: tsrossa.app not found in update archive."
-                }
-                return
-            }
-            
-            // Determine target application path
-            let currentAppUrl = Bundle.main.bundleURL
-            let targetPath: String
-            if currentAppUrl.pathExtension == "app" {
-                targetPath = currentAppUrl.path
-            } else {
-                targetPath = "/Applications/tsrossa.app"
-            }
-            
-            // Prepare restart helper script
-            let currentPid = ProcessInfo.processInfo.processIdentifier
-            let scriptContent = """
-            #!/bin/bash
-            set -e
-            TARGET="\(targetPath)"
-            NEW_APP="\(newAppPath)"
-            TARGET_PID="\(currentPid)"
-            
-            # Wait for running app to exit
-            while kill -0 "$TARGET_PID" 2>/dev/null; do
-                sleep 0.2
-            done
-            
-            # Replace app bundle
-            rm -rf "$TARGET"
-            cp -R "$NEW_APP" "$TARGET"
-            xattr -cr "$TARGET" 2>/dev/null || true
-            
-            # Reopen the updated app
-            open "$TARGET"
-            
-            # Cleanup temporary folder
-            rm -rf /tmp/tsrossa_update
-            """
-            
-            try scriptContent.write(to: restartScript, atomically: true, encoding: .utf8)
-            
-            let chmod = Process()
-            chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
-            chmod.arguments = ["+x", restartScript.path]
-            try chmod.run()
-            chmod.waitUntilExit()
-            
-            DispatchQueue.main.async {
-                self.statusMessage = "Update complete! Relaunching..."
-                
-                // Spawn script in background
-                let launcher = Process()
-                launcher.executableURL = URL(fileURLWithPath: "/bin/bash")
-                launcher.arguments = [restartScript.path]
-                try? launcher.run()
-                
-                // Exit current process so restart script can proceed
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    NSApplication.shared.terminate(nil)
-                }
-            }
-        } catch {
-            DispatchQueue.main.async {
-                self.isExtracting = false
-                self.statusMessage = "Installation failed: \(error.localizedDescription)"
-            }
+            self.statusMessage = "Memverifikasi paket pembaruan..."
+            self.verifyAndStageUpdate(from: location)
         }
     }
-    
+
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
             DispatchQueue.main.async {
                 self.isDownloading = false
                 self.isExtracting = false
-                self.statusMessage = "Download failed: \(error.localizedDescription)"
+                self.errorMessage = "Unduhan gagal: \(error.localizedDescription)"
+                self.statusMessage = "Gagal mengunduh."
             }
         }
+    }
+
+    private func verifyAndStageUpdate(from downloadedFile: URL) {
+        let fm = FileManager.default
+        guard let cachesRoot = fm.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            errorMessage = "Tidak dapat mengakses direktori Caches pengguna."
+            isExtracting = false
+            return
+        }
+
+        let stageDir = cachesRoot
+            .appendingPathComponent("com.yuka.tsrossa.macos.updater", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+        do {
+            try fm.createDirectory(at: stageDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let archivePath = stageDir.appendingPathComponent(assetFileName.isEmpty ? "update.zip" : assetFileName)
+            try fm.moveItem(at: downloadedFile, to: archivePath)
+
+            if archivePath.pathExtension.lowercased() == "dmg" {
+                isExtracting = false
+                statusMessage = "Membuka installer DMG..."
+                NSWorkspace.shared.open(archivePath)
+                return
+            }
+
+            statusMessage = "Mengekstrak dan memverifikasi tanda tangan digital..."
+            let dittoProc = Process()
+            dittoProc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            dittoProc.arguments = ["-x", "-k", archivePath.path, stageDir.path]
+            try dittoProc.run()
+            dittoProc.waitUntilExit()
+
+            guard dittoProc.terminationStatus == 0 else {
+                throw NSError(domain: "UpdateManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Gagal mengekstrak arsip ZIP."])
+            }
+
+            let contents = try fm.contentsOfDirectory(at: stageDir, includingPropertiesForKeys: nil)
+            guard let extractedApp = contents.first(where: { $0.pathExtension == "app" }) else {
+                throw NSError(domain: "UpdateManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "Tidak ada bundle .app di dalam arsip pembaruan."])
+            }
+
+            try Self.verifyExtractedAppBundle(at: extractedApp)
+            try replaceRunningAppAndRelaunch(with: extractedApp, stageDir: stageDir)
+        } catch {
+            try? fm.removeItem(at: stageDir)
+            isExtracting = false
+            errorMessage = error.localizedDescription
+            statusMessage = "Gagal: \(error.localizedDescription)"
+        }
+    }
+
+    public static func verifyExtractedAppBundle(at appURL: URL) throws {
+        guard let bundle = Bundle(url: appURL),
+              let bundleId = bundle.bundleIdentifier,
+              bundleId == expectedBundleIdentifier else {
+            throw NSError(
+                domain: "UpdateManager",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Bundle identifier pembaruan tidak cocok dengan \(expectedBundleIdentifier)."]
+            )
+        }
+
+        let codesignProc = Process()
+        codesignProc.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        codesignProc.arguments = ["--verify", "--deep", "--strict", appURL.path]
+        try codesignProc.run()
+        codesignProc.waitUntilExit()
+
+        guard codesignProc.terminationStatus == 0 else {
+            throw NSError(
+                domain: "UpdateManager",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Verifikasi tanda tangan digital (codesign) gagal untuk paket pembaruan."]
+            )
+        }
+    }
+
+    private func replaceRunningAppAndRelaunch(with newAppURL: URL, stageDir: URL) throws {
+        let currentAppURL = Bundle.main.bundleURL
+        guard currentAppURL.pathExtension == "app" else {
+            NSWorkspace.shared.activateFileViewerSelecting([newAppURL])
+            statusMessage = "Paket terverifikasi di \(newAppURL.path)"
+            isExtracting = false
+            return
+        }
+
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let scriptPath = stageDir.appendingPathComponent("apply_update.sh")
+        let scriptContent = """
+        #!/bin/bash
+        while kill -0 \(pid) 2>/dev/null; do
+            sleep 0.2
+        done
+        rm -rf "\(currentAppURL.path)"
+        mv "\(newAppURL.path)" "\(currentAppURL.path)"
+        xattr -cr "\(currentAppURL.path)" 2>/dev/null || true
+        open "\(currentAppURL.path)"
+        rm -rf "\(stageDir.path)"
+        """
+        try scriptContent.write(to: scriptPath, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptPath.path)
+
+        let runner = Process()
+        runner.executableURL = URL(fileURLWithPath: "/bin/bash")
+        runner.arguments = [scriptPath.path]
+        try runner.run()
+
+        NSApplication.shared.terminate(nil)
+    }
+
+    private func finishCheckWithError(_ msg: String) {
+        isChecking = false
+        errorMessage = msg
+        statusMessage = ""
     }
 }

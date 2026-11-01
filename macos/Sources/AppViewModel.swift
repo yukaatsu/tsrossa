@@ -57,7 +57,7 @@ public class AppViewModel: ObservableObject {
     }
     @Published public var searchSelectedIndex: Int = 0
     @Published public var showTelemetry: Bool = false
-    @Published public var currentFolder: String = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first?.path ?? "/Users/alen/Music"
+    @Published public var currentFolder: String = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first?.path ?? (NSHomeDirectory() + "/Music")
     @Published public var copiedTelemetry: Bool = false
     
     // Playlists & New Playlist Modal State

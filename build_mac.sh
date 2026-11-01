@@ -1,85 +1,134 @@
-#!/usr/bin/env bash
-set -e
+#!/bin/bash
+set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$DIR/.." && pwd)"
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 BUILD_DIR="$DIR/build"
+APP_NAME="tsrossa"
+APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
+CONTENTS_DIR="$APP_BUNDLE/Contents"
+MACOS_DIR="$CONTENTS_DIR/MacOS"
+FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
-echo "==> Building native CoreAudio & FLAC/WAV engine (Apple Silicon arm64)..."
-mkdir -p "$BUILD_DIR"
-clang++ -dynamiclib -std=c++17 -O2 \
-    -install_name @rpath/libtsrossa-mac.dylib \
-    -I "$ROOT_DIR/app/src/main/cpp" \
-    -I "$DIR/src/nativeMain/cpp" \
-    -framework CoreAudio -framework AudioToolbox -framework CoreFoundation \
+ARCH_FLAGS=""
+SWIFT_TARGET_FLAGS=()
+if [[ "${1:-}" == "--universal" ]]; then
+    echo "==> Mode Universal Binary (arm64 + x86_64) aktif"
+    ARCH_FLAGS="-arch arm64 -arch x86_64"
+    SWIFT_TARGET_FLAGS=(-target arm64-apple-macos13.0 -target x86_64-apple-macos13.0)
+else
+    HOST_ARCH="$(uname -m)"
+    ARCH_FLAGS="-arch $HOST_ARCH"
+    SWIFT_TARGET_FLAGS=(-target "${HOST_ARCH}-apple-macos13.0")
+fi
+
+echo "==> [1/5] Membersihkan direktori build..."
+rm -rf "$BUILD_DIR"
+mkdir -p "$MACOS_DIR" "$FRAMEWORKS_DIR" "$RESOURCES_DIR" "$BUILD_DIR/ModuleCache"
+
+echo "==> [2/5] Mengompilasi C/C++ Native Audio Engine..."
+clang -c -O3 -ffast-math -mmacosx-version-min=13.0 $ARCH_FLAGS \
+    -I"$DIR/src/nativeMain/cpp" \
     "$DIR/src/nativeMain/cpp/dr_impl.c" \
-    "$DIR/src/nativeMain/cpp/CoreAudioSink.cpp" \
-    "$DIR/src/nativeMain/cpp/TsrossaAudioBridge.cpp" \
-    -o "$BUILD_DIR/libtsrossa-mac.dylib"
+    -o "$BUILD_DIR/dr_impl.o"
 
-echo "==> Compiling tsrossa macOS application..."
-mkdir -p "$BUILD_DIR/ModuleCache"
-swiftc -parse-as-library \
+clang++ -c -std=c++17 -O3 -ffast-math -mmacosx-version-min=13.0 $ARCH_FLAGS \
+    -I"$DIR/src/nativeMain/cpp" \
+    "$DIR/src/nativeMain/cpp/CoreAudioSink.cpp" \
+    -o "$BUILD_DIR/CoreAudioSink.o"
+
+clang++ -c -std=c++17 -O3 -ffast-math -mmacosx-version-min=13.0 $ARCH_FLAGS \
+    -I"$DIR/src/nativeMain/cpp" \
+    "$DIR/src/nativeMain/cpp/TsrossaAudioBridge.cpp" \
+    -o "$BUILD_DIR/TsrossaAudioBridge.o"
+
+libtool -static -o "$BUILD_DIR/libtsrossa_audio.a" \
+    "$BUILD_DIR/dr_impl.o" \
+    "$BUILD_DIR/CoreAudioSink.o" \
+    "$BUILD_DIR/TsrossaAudioBridge.o"
+
+echo "==> [3/5] Mengompilasi Swift UI & Application Layer..."
+SWIFT_FILES=()
+while IFS= read -r -d '' file; do
+    SWIFT_FILES+=("$file")
+done < <(find "$DIR/macos" -name "*.swift" -print0 | sort -z)
+
+swiftc -parse-as-library -O "${SWIFT_TARGET_FLAGS[@]}" \
     -module-cache-path "$BUILD_DIR/ModuleCache" \
     -import-objc-header "$DIR/src/nativeMain/cpp/TsrossaAudioBridge.h" \
-    -L "$BUILD_DIR" -ltsrossa-mac \
-    -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
-    -Xlinker -rpath -Xlinker @loader_path \
-    "$DIR/macos/Sources"/*.swift \
-    -o "$BUILD_DIR/tsrossa"
+    "${SWIFT_FILES[@]}" \
+    "$BUILD_DIR/libtsrossa_audio.a" \
+    -lc++ -lsqlite3 \
+    -framework Cocoa \
+    -framework SwiftUI \
+    -framework CoreAudio \
+    -framework AudioToolbox \
+    -framework AudioUnit \
+    -framework Accelerate \
+    -framework UniformTypeIdentifiers \
+    -framework MediaPlayer \
+    -framework IOKit \
+    -o "$MACOS_DIR/$APP_NAME"
 
-echo "==> Bundling tsrossa.app..."
-rm -rf "$BUILD_DIR/tsrossa.app"
-mkdir -p "$BUILD_DIR/tsrossa.app/Contents/MacOS"
-mkdir -p "$BUILD_DIR/tsrossa.app/Contents/Frameworks"
-mkdir -p "$BUILD_DIR/tsrossa.app/Contents/Resources"
-
-cp "$BUILD_DIR/tsrossa" "$BUILD_DIR/tsrossa.app/Contents/MacOS/"
-cp "$BUILD_DIR/libtsrossa-mac.dylib" "$BUILD_DIR/tsrossa.app/Contents/Frameworks/"
-cp "$DIR/macos/Info.plist" "$BUILD_DIR/tsrossa.app/Contents/"
-
-# Copy authentic Android logo assets & compile native macOS AppIcon.icns
-ANDROID_ICON="$ROOT_DIR/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"
-ANDROID_ICON_ROUND="$ROOT_DIR/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png"
-ANDROID_ICON_FG="$ROOT_DIR/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png"
-
-if [ -f "$ANDROID_ICON" ]; then
-    cp "$ANDROID_ICON" "$BUILD_DIR/tsrossa.app/Contents/Resources/ic_launcher.png"
-    cp "$ANDROID_ICON_ROUND" "$BUILD_DIR/tsrossa.app/Contents/Resources/ic_launcher_round.png" 2>/dev/null || true
-    cp "$ANDROID_ICON_FG" "$BUILD_DIR/tsrossa.app/Contents/Resources/ic_launcher_foreground.png" 2>/dev/null || true
-
+echo "==> [4/5] Menyalin Resources & Membuat Info.plist..."
+if [ -f "$DIR/macos/Resources/ic_launcher.png" ]; then
+    cp "$DIR/macos/Resources/ic_launcher.png" "$RESOURCES_DIR/AppIcon.png"
+    cp "$DIR/macos/Resources/ic_launcher.png" "$RESOURCES_DIR/ic_launcher.png"
+    
+    # Generate AppIcon.icns
     ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
-    rm -rf "$ICONSET_DIR"
     mkdir -p "$ICONSET_DIR"
-    sips -z 16 16     "$ANDROID_ICON" --out "$ICONSET_DIR/icon_16x16.png" >/dev/null 2>&1
-    sips -z 32 32     "$ANDROID_ICON" --out "$ICONSET_DIR/icon_16x16@2x.png" >/dev/null 2>&1
-    sips -z 32 32     "$ANDROID_ICON" --out "$ICONSET_DIR/icon_32x32.png" >/dev/null 2>&1
-    sips -z 64 64     "$ANDROID_ICON" --out "$ICONSET_DIR/icon_32x32@2x.png" >/dev/null 2>&1
-    sips -z 128 128   "$ANDROID_ICON" --out "$ICONSET_DIR/icon_128x128.png" >/dev/null 2>&1
-    sips -z 256 256   "$ANDROID_ICON" --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null 2>&1
-    sips -z 256 256   "$ANDROID_ICON" --out "$ICONSET_DIR/icon_256x256.png" >/dev/null 2>&1
-    sips -z 512 512   "$ANDROID_ICON" --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null 2>&1
-    sips -z 512 512   "$ANDROID_ICON" --out "$ICONSET_DIR/icon_512x512.png" >/dev/null 2>&1
-    sips -z 1024 1024 "$ANDROID_ICON" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null 2>&1
-    iconutil -c icns "$ICONSET_DIR" -o "$BUILD_DIR/tsrossa.app/Contents/Resources/AppIcon.icns" || true
+    sips -z 16 16     "$DIR/macos/Resources/ic_launcher.png" --out "$ICONSET_DIR/icon_16x16.png" >/dev/null 2>&1 || true
+    sips -z 32 32     "$DIR/macos/Resources/ic_launcher.png" --out "$ICONSET_DIR/icon_16x16@2x.png" >/dev/null 2>&1 || true
+    sips -z 32 32     "$DIR/macos/Resources/ic_launcher.png" --out "$ICONSET_DIR/icon_32x32.png" >/dev/null 2>&1 || true
+    sips -z 64 64     "$DIR/macos/Resources/ic_launcher.png" --out "$ICONSET_DIR/icon_32x32@2x.png" >/dev/null 2>&1 || true
+    sips -z 128 128   "$DIR/macos/Resources/ic_launcher.png" --out "$ICONSET_DIR/icon_128x128.png" >/dev/null 2>&1 || true
+    sips -z 256 256   "$DIR/macos/Resources/ic_launcher.png" --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null 2>&1 || true
+    sips -z 256 256   "$DIR/macos/Resources/ic_launcher.png" --out "$ICONSET_DIR/icon_256x256.png" >/dev/null 2>&1 || true
+    sips -z 512 512   "$DIR/macos/Resources/ic_launcher.png" --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null 2>&1 || true
+    sips -z 512 512   "$DIR/macos/Resources/ic_launcher.png" --out "$ICONSET_DIR/icon_512x512.png" >/dev/null 2>&1 || true
+    sips -z 1024 1024 "$DIR/macos/Resources/ic_launcher.png" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null 2>&1 || true
+    iconutil -c icns "$ICONSET_DIR" -o "$RESOURCES_DIR/AppIcon.icns" 2>/dev/null || true
     rm -rf "$ICONSET_DIR"
 fi
-
-codesign --force --deep -s - "$BUILD_DIR/tsrossa.app"
-
-VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$DIR/macos/Info.plist" 2>/dev/null || echo "1.6.0")
-
-echo "==> Packaging tsrossa-${VERSION}-macos.zip..."
-(cd "$BUILD_DIR" && rm -f "tsrossa-${VERSION}-macos.zip" "tsrossa-macos.zip" && zip -r -y "tsrossa-${VERSION}-macos.zip" tsrossa.app && ln -s "tsrossa-${VERSION}-macos.zip" tsrossa-macos.zip)
-
-if [ "$1" == "--install" ] || [ "$INSTALL_APP" == "1" ]; then
-    echo "==> Installing to /Applications/tsrossa.app..."
-    rm -rf /Applications/tsrossa.app
-    cp -R "$BUILD_DIR/tsrossa.app" /Applications/tsrossa.app
-    xattr -cr /Applications/tsrossa.app 2>/dev/null || true
-    echo "    Installed successfully to /Applications/tsrossa.app"
+if [ -f "$DIR/macos/Resources/ic_launcher_foreground.png" ]; then
+    cp "$DIR/macos/Resources/ic_launcher_foreground.png" "$RESOURCES_DIR/ic_launcher_foreground.png"
 fi
 
-echo "==> Build complete! Output located at:"
-echo "    App: $BUILD_DIR/tsrossa.app"
-echo "    Zip: $BUILD_DIR/tsrossa-${VERSION}-macos.zip"
+if [ -f "$DIR/macos/Info.plist" ]; then
+    cp "$DIR/macos/Info.plist" "$CONTENTS_DIR/Info.plist"
+else
+    cat > "$CONTENTS_DIR/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>$APP_NAME</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.yuka.tsrossa.macos</string>
+    <key>CFBundleName</key>
+    <string>TSRossa</string>
+    <key>CFBundleDisplayName</key>
+    <string>TSRossa Audio Player</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>5.4</string>
+    <key>CFBundleVersion</key>
+    <string>62</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+EOF
+fi
+
+echo "==> [5/5] Ad-hoc Code Signing Bundle..."
+codesign --force --deep --sign - "$APP_BUNDLE"
+
+echo "==> Build selesai: $APP_BUNDLE"
