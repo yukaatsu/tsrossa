@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 #include <cerrno>
+#include <algorithm>
 
 #include "MacAudioCommon.h"
 
@@ -27,16 +28,17 @@ struct MacAudioDecoder {
   uint32_t channels = 0;
   uint32_t bitsPerSample = 0;
   uint64_t totalPCMFrameCount = 0;
+  std::string filePath;
+  std::string lastOpenError;
 
   MacAudioDecoder() {
     memset(&wav, 0, sizeof(wav));
   }
 
-  std::string lastOpenError;
-
   bool open(const char *path) {
     close();
     lastOpenError.clear();
+    filePath = path ? path : "";
 
     FILE *testFile = fopen(path, "rb");
     if (!testFile) {
@@ -59,7 +61,7 @@ struct MacAudioDecoder {
       totalPCMFrameCount = pFlac->totalPCMFrameCount;
       LOGI("MacAudioDecoder: Opened FLAC '%s' (%u Hz, %u ch, %u-bit, %llu frames)",
            path, sampleRate, channels, bitsPerSample, (unsigned long long)totalPCMFrameCount);
-      return true;
+      return (sampleRate > 0 && channels > 0 && totalPCMFrameCount > 0);
     }
 
     // 2. Try WAV
@@ -72,7 +74,7 @@ struct MacAudioDecoder {
       totalPCMFrameCount = wav.totalPCMFrameCount;
       LOGI("MacAudioDecoder: Opened WAV '%s' (%u Hz, %u ch, %u-bit, %llu frames)",
            path, sampleRate, channels, bitsPerSample, (unsigned long long)totalPCMFrameCount);
-      return true;
+      return (sampleRate > 0 && channels > 0 && totalPCMFrameCount > 0);
     }
 
     lastOpenError = "Unsupported or corrupt format (only FLAC/WAV supported)";
@@ -80,7 +82,12 @@ struct MacAudioDecoder {
     return false;
   }
 
+  bool openStream(const std::string& path) {
+    return open(path.c_str());
+  }
+
   size_t read_pcm_frames_s32(size_t framesToRead, int32_t *pBufferOut) {
+    if (framesToRead == 0 || pBufferOut == nullptr) return 0;
     if (format == TrackFormat::FLAC && pFlac != nullptr) {
       return (size_t)drflac_read_pcm_frames_s32(pFlac, framesToRead, pBufferOut);
     } else if (format == TrackFormat::WAV && isWavInit) {
@@ -89,13 +96,21 @@ struct MacAudioDecoder {
     return 0;
   }
 
+  uint64_t readFramesChunk(int32_t* dstInterleaved, uint64_t framesToRead) {
+    return static_cast<uint64_t>(read_pcm_frames_s32(static_cast<size_t>(framesToRead), dstInterleaved));
+  }
+
   bool seek_to_pcm_frame(uint64_t frameIndex) {
     if (format == TrackFormat::FLAC && pFlac != nullptr) {
-      return drflac_seek_to_pcm_frame(pFlac, frameIndex);
+      return drflac_seek_to_pcm_frame(pFlac, frameIndex) == DRFLAC_TRUE;
     } else if (format == TrackFormat::WAV && isWavInit) {
-      return drwav_seek_to_pcm_frame(&wav, frameIndex);
+      return drwav_seek_to_pcm_frame(&wav, frameIndex) == DRWAV_TRUE;
     }
     return false;
+  }
+
+  bool seekToFrame(uint64_t frameIndex) {
+    return seek_to_pcm_frame(frameIndex);
   }
 
   void close() {
@@ -111,7 +126,18 @@ struct MacAudioDecoder {
     channels = 0;
     bitsPerSample = 0;
     totalPCMFrameCount = 0;
+    filePath.clear();
   }
+
+  void closeStream() {
+    close();
+  }
+
+  uint32_t getSampleRate() const { return sampleRate; }
+  uint32_t getChannels() const { return channels; }
+  uint32_t getBitsPerSample() const { return bitsPerSample; }
+  uint64_t getTotalFrames() const { return totalPCMFrameCount; }
+  const std::string& getFilePath() const { return filePath; }
 
   ~MacAudioDecoder() {
     close();

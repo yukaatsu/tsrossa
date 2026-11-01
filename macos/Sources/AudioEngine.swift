@@ -43,16 +43,21 @@ public class AudioEngine: ObservableObject {
     
     @Published public var isPlaying: Bool = false
     @Published public var isPaused: Bool = false
+    @Published public var isSeeking: Bool = false
     @Published public var currentTime: Double = 0.0
     @Published public var totalDuration: Double = 0.0
     @Published public var currentTrack: TrackMetadata? = nil
     @Published public var devices: [OutputDevice] = []
     @Published public var selectedDeviceId: UInt32 = 0
     @Published public var telemetryJson: String = "{}"
+    @Published public var hardwareVolumeEnabled: Bool = true
+    @Published public var dacWarmupEnabled: Bool = true
+    @Published public var bufferProfileIndex: Int = 1
     
     private var progressTimer: Timer?
     private var hotplugTimer: Timer?
     private var isAdvancingTrack: Bool = false
+    private var lastSeekTimestamp: TimeInterval = 0
     
     // Hardware hot-plug tracking state (accessed on engineQueue)
     private var lastKnownDeviceIds: Set<UInt32> = []
@@ -326,9 +331,45 @@ public class AudioEngine: ObservableObject {
     }
     
     public func seek(to seconds: Double) {
-        self.currentTime = seconds
+        let safeMax = max(0.0, totalDuration - 0.25)
+        let clamped = min(max(0.0, seconds), safeMax)
+        lastSeekTimestamp = ProcessInfo.processInfo.systemUptime
+        self.currentTime = clamped
         engineQueue.async {
-            _ = tsrossa_seek(seconds)
+            _ = tsrossa_seek(clamped)
+        }
+    }
+
+    public func setVolume(sliderValue: Double) {
+        let clamped = min(max(0.0, sliderValue), 1.0)
+        let hwVol = self.hardwareVolumeEnabled
+        engineQueue.async {
+            tsrossa_set_slider_volume(clamped, hwVol)
+        }
+    }
+
+    public func setBufferProfile(_ index: Int) {
+        self.bufferProfileIndex = index
+        engineQueue.async {
+            tsrossa_set_buffer_profile(Int32(index))
+        }
+    }
+
+    public func triggerDacWarmup(durationMs: UInt32 = 350) {
+        engineQueue.async {
+            tsrossa_trigger_warmup(durationMs)
+        }
+    }
+
+    public func prepareNextTrack(path: String) {
+        engineQueue.async {
+            _ = tsrossa_prepare_next_track(path)
+        }
+    }
+
+    public func clearNextTrack() {
+        engineQueue.async {
+            tsrossa_clear_next_track()
         }
     }
     
@@ -347,10 +388,15 @@ public class AudioEngine: ObservableObject {
             guard let self = self else { return }
             if self.isPlaying && !self.isPaused && !self.isAdvancingTrack {
                 let t = tsrossa_get_current_time()
-                let stillPlaying = tsrossa_is_playing()
-                self.currentTime = t
+                let elapsedSinceSeek = ProcessInfo.processInfo.systemUptime - self.lastSeekTimestamp
+                if !self.isSeeking && elapsedSinceSeek > 0.8 {
+                    self.currentTime = t
+                }
                 AppViewModel.shared.updateLyricIndex(currentTime: t)
-                if !stillPlaying && self.totalDuration > 0 && t >= self.totalDuration - 0.5 {
+
+                if tsrossa_consume_gapless_transition() {
+                    self.handleSeamlessGaplessAdvance()
+                } else if tsrossa_is_track_finished() && self.totalDuration > 0 && elapsedSinceSeek > 0.4 {
                     self.isAdvancingTrack = true
                     if AppViewModel.shared.isRepeat, let current = self.currentTrack {
                         self.play(track: current)
@@ -359,6 +405,13 @@ public class AudioEngine: ObservableObject {
                     }
                 }
             }
+        }
+    }
+
+    private func handleSeamlessGaplessAdvance() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            AppViewModel.shared.playNextTrack()
         }
     }
     

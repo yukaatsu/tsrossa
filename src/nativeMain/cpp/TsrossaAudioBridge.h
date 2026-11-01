@@ -25,17 +25,31 @@ void tsrossa_resume(void);
 void tsrossa_stop(void);
 bool tsrossa_seek(double seconds);
 
+// Volume, DSP & Profile
 void tsrossa_set_volume_db(int db);
+void tsrossa_set_slider_volume(double sliderValue, bool useHardwareVolume);
+void tsrossa_set_buffer_profile(int profileIndex);
+void tsrossa_trigger_warmup(uint32_t durationMs);
+void tsrossa_set_dither_enabled(bool enabled);
+
 void tsrossa_set_hog_mode_enabled(bool enabled);
 void tsrossa_set_auto_clock_enabled(bool enabled);
 void tsrossa_set_ram_lock_enabled(bool enabled);
 
+// Gapless Playback Engine
+bool tsrossa_prepare_next_track(const char* filePath);
+void tsrossa_clear_next_track(void);
+bool tsrossa_is_track_finished(void);
+bool tsrossa_consume_gapless_transition(void);
+
+// Telemetry & State
 bool tsrossa_is_playing(void);
 double tsrossa_get_current_time(void);
 double tsrossa_get_total_duration(void);
 uint32_t tsrossa_get_track_sample_rate(void);
 uint32_t tsrossa_get_track_bit_depth(void);
 uint32_t tsrossa_get_track_channels(void);
+double tsrossa_get_actual_hardware_sample_rate(void);
 
 const char* tsrossa_get_telemetry_json(void);
 
