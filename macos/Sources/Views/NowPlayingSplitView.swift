@@ -28,7 +28,7 @@ public struct NowPlayingSplitView: View {
                         }
                     }
                 }
-                .frame(maxWidth: 340, maxHeight: 340)
+                .frame(maxWidth: 320, maxHeight: 320)
                 .continuousSquircle(24)
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -103,7 +103,7 @@ public struct NowPlayingSplitView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.trailing, 24)
         }
-        .padding(.bottom, 90) // Room for floating transport capsule
+        .padding(.bottom, 16)
     }
 
     private func badgeView(text: String, color: Color) -> some View {

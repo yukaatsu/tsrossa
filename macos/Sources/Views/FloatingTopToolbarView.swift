@@ -69,5 +69,9 @@ public struct FloatingTopToolbarView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .liquidGlass(role: .floatingPillBar, cornerRadius: 18, tint: theme.primary)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            WindowZoomManager.shared.toggleFitToScreen()
+        }
     }
 }

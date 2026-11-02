@@ -8,7 +8,7 @@ public final class ScrubberState: ObservableObject {
 }
 
 public struct PlaybackScrubberView: View {
-    @ObservedObject var engine = AudioEngine.shared
+    @ObservedObject var progress = AudioEngine.shared.progress
     @ObservedObject var state = ScrubberState()
     public var accentColor: Color
 
@@ -17,9 +17,9 @@ public struct PlaybackScrubberView: View {
     }
 
     public var body: some View {
-        let duration = max(engine.totalDuration, 0.001)
-        let displayedTime = state.dragFraction.map { $0 * duration } ?? engine.currentTime
-        let progress = min(max(displayedTime / duration, 0.0), 1.0)
+        let duration = max(progress.totalDuration, 0.001)
+        let displayedTime = state.dragFraction.map { $0 * duration } ?? progress.currentTime
+        let progressFraction = min(max(displayedTime / duration, 0.0), 1.0)
 
         HStack(spacing: 8) {
             Text(formatTime(displayedTime))
@@ -43,14 +43,14 @@ public struct PlaybackScrubberView: View {
                                 endPoint: .trailing
                             )
                         )
-                        .frame(width: width * CGFloat(progress), height: state.isHovering || state.dragFraction != nil ? 6 : 4)
+                        .frame(width: width * CGFloat(progressFraction), height: state.isHovering || state.dragFraction != nil ? 6 : 4)
 
                     if state.isHovering || state.dragFraction != nil {
                         Circle()
                             .fill(Color.white)
                             .frame(width: 12, height: 12)
                             .shadow(color: Color.black.opacity(0.35), radius: 3, x: 0, y: 1)
-                            .offset(x: max(0, min(width - 12, width * CGFloat(progress) - 6)))
+                            .offset(x: max(0, min(width - 12, width * CGFloat(progressFraction) - 6)))
                     }
                 }
                 .frame(maxHeight: .infinity)
@@ -63,22 +63,22 @@ public struct PlaybackScrubberView: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            engine.isSeeking = true
+                            progress.isSeeking = true
                             let fraction = min(max(0.0, Double(value.location.x / width)), 1.0)
                             state.dragFraction = fraction
                         }
                         .onEnded { value in
                             let fraction = min(max(0.0, Double(value.location.x / width)), 1.0)
-                            let targetTime = fraction * engine.totalDuration
+                            let targetTime = fraction * progress.totalDuration
                             state.dragFraction = nil
-                            engine.isSeeking = false
-                            engine.seek(to: targetTime)
+                            progress.isSeeking = false
+                            AudioEngine.shared.seek(to: targetTime)
                         }
                 )
             }
             .frame(height: 18)
 
-            Text(formatTime(engine.totalDuration))
+            Text(formatTime(progress.totalDuration))
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)

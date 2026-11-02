@@ -187,47 +187,142 @@ public struct AmbientArtworkMeshBackground: View {
     }
 
     public var body: some View {
-        ZStack {
-            // Base background
-            if isDark {
-                Color(red: 0.05, green: 0.05, blue: 0.07)
+        GeometryReader { geo in
+            ZStack {
+                // Base background
+                if isDark {
+                    Color(red: 0.05, green: 0.05, blue: 0.07)
+                } else {
+                    Color(red: 0.95, green: 0.96, blue: 0.98)
+                }
+
+                if canvasMode == .liquidRefraction || canvasMode == .ambientMesh {
+                    if let img = artwork {
+                        Image(nsImage: img)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .blur(radius: 80)
+                            .opacity(isDark ? 0.38 : 0.20)
+                            .clipped()
+                    } else {
+                        // Ambient gradient mesh fallback
+                        LinearGradient(
+                            colors: [
+                                accentColor.opacity(isDark ? 0.35 : 0.20),
+                                Color.indigo.opacity(isDark ? 0.20 : 0.10),
+                                Color.clear
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .blur(radius: 60)
+                    }
+                }
+
+                // Subtle dark/light vignette
+                RadialGradient(
+                    gradient: Gradient(colors: [
+                        Color.clear,
+                        isDark ? Color.black.opacity(0.45) : Color.white.opacity(0.25)
+                    ]),
+                    center: .center,
+                    startRadius: 180,
+                    endRadius: max(geo.size.width, geo.size.height) * 0.75
+                )
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+}
+
+// ==============================================================================
+// WINDOW ZOOM & FIT-TO-SCREEN MANAGER (macOS Double-Tap / Double-Click Zoom)
+// ==============================================================================
+
+public final class WindowZoomManager: NSObject, NSWindowDelegate {
+    public static let shared = WindowZoomManager()
+    private var savedRestoreFrames: [Int: NSRect] = [:]
+    private var mouseMonitor: Any?
+
+    public func configure(window: NSWindow) {
+        window.delegate = self
+        window.minSize = NSSize(width: 920, height: 620)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        installTopBarDoubleTapMonitorIfNeeded()
+    }
+
+    /// Toggles Fit-to-Screen (Zoom to NSScreen.visibleFrame or restores previous size)
+    public func toggleFitToScreen(for targetWindow: NSWindow? = nil) {
+        guard let window = targetWindow ?? NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first,
+              let screen = window.screen ?? NSScreen.main else { return }
+
+        let visibleFrame = screen.visibleFrame
+        let currentFrame = window.frame
+        let winNum = window.windowNumber
+
+        let isAlreadyFitted =
+            abs(currentFrame.origin.x - visibleFrame.origin.x) <= 8 &&
+            abs(currentFrame.origin.y - visibleFrame.origin.y) <= 8 &&
+            abs(currentFrame.width - visibleFrame.width) <= 8 &&
+            abs(currentFrame.height - visibleFrame.height) <= 8
+
+        if isAlreadyFitted {
+            if let restore = savedRestoreFrames[winNum] {
+                window.setFrame(restore, display: true, animate: true)
             } else {
-                Color(red: 0.95, green: 0.96, blue: 0.98)
+                let defaultWidth = min(1220.0, visibleFrame.width * 0.82)
+                let defaultHeight = min(780.0, visibleFrame.height * 0.82)
+                let centered = NSRect(
+                    x: visibleFrame.midX - defaultWidth / 2.0,
+                    y: visibleFrame.midY - defaultHeight / 2.0,
+                    width: defaultWidth,
+                    height: defaultHeight
+                )
+                window.setFrame(centered, display: true, animate: true)
+            }
+        } else {
+            savedRestoreFrames[winNum] = currentFrame
+            window.setFrame(visibleFrame, display: true, animate: true)
+        }
+    }
+
+    public func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
+        return window.screen?.visibleFrame ?? newFrame
+    }
+
+    private func installTopBarDoubleTapMonitorIfNeeded() {
+        guard mouseMonitor == nil else { return }
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            guard let self = self,
+                  event.clickCount == 2,
+                  let window = event.window,
+                  let contentView = window.contentView else {
+                return event
             }
 
-            if canvasMode == .liquidRefraction || canvasMode == .ambientMesh {
-                if let img = artwork {
-                    Image(nsImage: img)
-                        .resizable()
-                        .scaledToFill()
-                        .blur(radius: 80)
-                        .opacity(isDark ? 0.40 : 0.22)
-                        .scaleEffect(1.2)
-                } else {
-                    // Ambient gradient mesh fallback
-                    LinearGradient(
-                        colors: [
-                            accentColor.opacity(isDark ? 0.35 : 0.20),
-                            Color.indigo.opacity(isDark ? 0.20 : 0.10),
-                            Color.clear
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .blur(radius: 60)
+            let loc = event.locationInWindow
+            let topDistance = contentView.bounds.height - loc.y
+            // 58pt top titlebar/toolbar boundary
+            guard topDistance >= 0 && topDistance <= 58 else {
+                return event
+            }
+
+            // Exclude text search fields or buttons
+            if let hitView = contentView.hitTest(loc) {
+                if hitView is NSTextView || hitView is NSTextField || hitView is NSControl {
+                    return event
                 }
             }
 
-            // Subtle dark/light vignette
-            RadialGradient(
-                gradient: Gradient(colors: [
-                    Color.clear,
-                    isDark ? Color.black.opacity(0.45) : Color.white.opacity(0.25)
-                ]),
-                center: .center,
-                startRadius: 200,
-                endRadius: 700
-            )
+            DispatchQueue.main.async {
+                self.toggleFitToScreen(for: window)
+            }
+            return event
         }
     }
 }

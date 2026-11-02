@@ -8,6 +8,8 @@ public final class AlbumArtCache {
     private let memoryCache = NSCache<NSString, NSImage>()
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
+    private var missingPaths = Set<String>()
+    private let lock = NSLock()
 
     private init() {
         memoryCache.countLimit = 250
@@ -28,18 +30,46 @@ public final class AlbumArtCache {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    public func thumbnailImage(for trackPath: String) -> NSImage? {
+    public func thumbnailImage(for trackPath: String, knownThumbPath: String? = nil) -> NSImage? {
         let key = NSString(string: trackPath)
         if let cached = memoryCache.object(forKey: key) {
             return cached
         }
 
+        lock.lock()
+        let isKnownMissing = missingPaths.contains(trackPath)
+        lock.unlock()
+
+        if isKnownMissing && (knownThumbPath == nil || knownThumbPath?.isEmpty == true) {
+            return nil
+        }
+
+        // 1. Try known thumbnail path if provided
+        if let path = knownThumbPath, !path.isEmpty {
+            if fileManager.fileExists(atPath: path), let img = NSImage(contentsOfFile: path) {
+                memoryCache.setObject(img, forKey: key)
+                lock.lock()
+                missingPaths.remove(trackPath)
+                lock.unlock()
+                return img
+            }
+        }
+
+        // 2. Try SHA256 hashed filename in disk cache
         let hash = sha256Hex(trackPath)
         let diskURL = cacheDirectory.appendingPathComponent("\(hash).jpg")
-        if let img = NSImage(contentsOf: diskURL) {
+        if fileManager.fileExists(atPath: diskURL.path), let img = NSImage(contentsOf: diskURL) {
             memoryCache.setObject(img, forKey: key)
+            lock.lock()
+            missingPaths.remove(trackPath)
+            lock.unlock()
             return img
         }
+
+        // 3. Negative cache: mark as missing to skip subsequent disk probes
+        lock.lock()
+        missingPaths.insert(trackPath)
+        lock.unlock()
         return nil
     }
 
@@ -78,6 +108,9 @@ public final class AlbumArtCache {
             try? jpgData.write(to: thumbURL)
             if let savedThumb = NSImage(data: jpgData) {
                 memoryCache.setObject(savedThumb, forKey: NSString(string: trackURL.path))
+                lock.lock()
+                missingPaths.remove(trackURL.path)
+                lock.unlock()
             }
             return (thumbURL.path, accent.hexString)
         }

@@ -46,34 +46,38 @@ public struct MainAppView: View {
         let theme = activeTheme
 
         ZStack {
-            // Layer 0: Ambient Artwork Mesh Background (behind entire window)
-            AmbientArtworkMeshBackground(
-                artwork: engine.currentTrack?.artwork,
-                accentColor: theme.primary,
-                canvasMode: currentCanvasMode,
-                isDark: isEffectiveDark
-            )
-            .ignoresSafeArea()
-
-            // Layer 1: NavigationSplitView Workspace
-            NavigationSplitView {
+            // Layer 1: Deterministic App Shell (HStack + VStack)
+            HStack(spacing: 0) {
                 SidebarView(theme: theme)
-                    .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 270)
-            } detail: {
-                workspaceContent(theme: theme)
-                    .safeAreaInset(edge: .top, spacing: 0) {
-                        FloatingTopToolbarView(theme: theme)
-                            .padding(.horizontal, 18)
-                            .padding(.top, 10)
-                            .padding(.bottom, 6)
+                    .frame(width: 236)
+                    .frame(maxHeight: .infinity)
+
+                Rectangle()
+                    .fill(Color.white.opacity(isEffectiveDark ? 0.08 : 0.14))
+                    .frame(width: 1)
+                    .frame(maxHeight: .infinity)
+
+                VStack(spacing: 0) {
+                    FloatingTopToolbarView(theme: theme)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 12)
+                        .padding(.bottom, 8)
+
+                    ZStack {
+                        workspaceContent(theme: theme)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        LiquidTransportBarView(theme: theme)
-                            .padding(.horizontal, 18)
-                            .padding(.bottom, 12)
-                            .padding(.top, 6)
-                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+
+                    LiquidTransportBarView(theme: theme)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 6)
+                        .padding(.bottom, 12)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // Layer 2: Modal Sheets & Overlays
             if vm.showNewPlaylistModal {
@@ -123,6 +127,14 @@ public struct MainAppView: View {
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+        }
+        .background {
+            AmbientArtworkMeshBackground(
+                artwork: engine.currentTrack?.artwork,
+                accentColor: theme.primary,
+                canvasMode: currentCanvasMode,
+                isDark: isEffectiveDark
+            )
         }
         .frame(minWidth: 920, minHeight: 620)
         .tint(theme.primary)

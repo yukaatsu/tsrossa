@@ -10,7 +10,7 @@ public struct LiquidTransportBarView: View {
     }
 
     public var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             // Left: Concentric Squircle Mini Artwork & Track Info
             HStack(spacing: 12) {
                 if let track = engine.currentTrack {
@@ -42,7 +42,7 @@ public struct LiquidTransportBarView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
-                    .frame(maxWidth: 160, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     HStack(spacing: 10) {
                         TsrossaBrandIcon(size: 38, cornerRadius: 10)
@@ -55,9 +55,12 @@ public struct LiquidTransportBarView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .frame(maxWidth: 160, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            .frame(width: 210, alignment: .leading)
+
+            Spacer(minLength: 12)
 
             // Center: Playback Controls & Scrubber Timeline
             VStack(spacing: 4) {
@@ -121,6 +124,7 @@ public struct LiquidTransportBarView: View {
                 PlaybackScrubberView(accentColor: theme.primary)
                     .frame(maxWidth: 440)
             }
+            .frame(minWidth: 240, maxWidth: 480)
 
             Spacer(minLength: 12)
 
@@ -170,6 +174,7 @@ public struct LiquidTransportBarView: View {
                         .frame(width: 36, alignment: .trailing)
                 }
             }
+            .frame(width: 210, alignment: .trailing)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)

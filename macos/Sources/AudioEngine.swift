@@ -35,6 +35,13 @@ public struct HardwareTelemetrySnapshot: Codable {
     public init() {}
 }
 
+public final class AudioProgressModel: ObservableObject {
+    @Published public var currentTime: Double = 0.0
+    @Published public var totalDuration: Double = 0.0
+    @Published public var isSeeking: Bool = false
+    public init() {}
+}
+
 public class AudioEngine: ObservableObject {
     public static let shared = AudioEngine()
     
@@ -42,15 +49,36 @@ public class AudioEngine: ObservableObject {
     /// Keeping CoreAudio HAL mutations off the Main Thread prevents CFRunLoopGetMain() deadlocks!
     public let engineQueue = DispatchQueue(label: "com.yuka.tsrossa.coreaudio.hal", qos: .userInitiated)
     
+    public let progress = AudioProgressModel()
+
+    public var currentTime: Double {
+        get { progress.currentTime }
+        set { progress.currentTime = newValue }
+    }
+    public var totalDuration: Double {
+        get { progress.totalDuration }
+        set { progress.totalDuration = newValue }
+    }
+    public var isSeeking: Bool {
+        get { progress.isSeeking }
+        set { progress.isSeeking = newValue }
+    }
+
     @Published public var isPlaying: Bool = false
     @Published public var isPaused: Bool = false
-    @Published public var isSeeking: Bool = false
-    @Published public var currentTime: Double = 0.0
-    @Published public var totalDuration: Double = 0.0
     @Published public var currentTrack: TrackMetadata? = nil
     @Published public var devices: [OutputDevice] = []
     @Published public var selectedDeviceId: UInt32 = 0
-    @Published public var telemetryJson: String = "{}"
+    @Published public var telemetryJson: String = "{}" {
+        didSet {
+            if let data = telemetryJson.data(using: .utf8),
+               let snap = try? JSONDecoder().decode(HardwareTelemetrySnapshot.self, from: data) {
+                self.telemetrySnapshot = snap
+            }
+        }
+    }
+    private(set) public var telemetrySnapshot: HardwareTelemetrySnapshot = HardwareTelemetrySnapshot()
+
     @Published public var hardwareVolumeEnabled: Bool = true
     @Published public var dacWarmupEnabled: Bool = true
     @Published public var bufferProfileIndex: Int = 1
@@ -71,14 +99,6 @@ public class AudioEngine: ObservableObject {
     // Debounce state to prevent double-clicking a track row from loading the FLAC file twice
     private var lastPlayRequestPath: String = ""
     private var lastPlayRequestTime: TimeInterval = 0
-
-    public var telemetrySnapshot: HardwareTelemetrySnapshot {
-        guard let data = telemetryJson.data(using: .utf8),
-              let snap = try? JSONDecoder().decode(HardwareTelemetrySnapshot.self, from: data) else {
-            return HardwareTelemetrySnapshot()
-        }
-        return snap
-    }
     
     private init() {
         engineQueue.async { [weak self] in
@@ -290,16 +310,11 @@ public class AudioEngine: ObservableObject {
             self.refreshDevicesOnEngineQueue(checkHotplug: false)
             
             DispatchQueue.main.async {
-                let updatedTrack = TrackMetadata(
-                    path: track.path,
-                    title: track.title,
-                    artist: track.artist,
-                    album: track.album,
-                    sampleRate: realRate > 0 ? realRate : track.sampleRate,
-                    bitDepth: realBits > 0 ? realBits : track.bitDepth,
-                    channels: realChannels > 0 ? realChannels : track.channels,
-                    durationSeconds: realDuration > 0 ? realDuration : track.durationSeconds
-                )
+                var updatedTrack = track
+                if realRate > 0 { updatedTrack.sampleRate = realRate }
+                if realBits > 0 { updatedTrack.bitDepth = realBits }
+                if realChannels > 0 { updatedTrack.channels = realChannels }
+                if realDuration > 0 { updatedTrack.durationSeconds = realDuration }
                 self.currentTrack = updatedTrack
                 self.isPlaying = true
                 self.isPaused = false

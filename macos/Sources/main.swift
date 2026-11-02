@@ -7,8 +7,14 @@ final class TsrossaAppDelegate: NSObject, NSApplicationDelegate {
         TsrossaBrandLogo.applyMacDockIcon()
         NSApplication.shared.activate(ignoringOtherApps: true)
         if let window = NSApplication.shared.windows.first {
+            WindowZoomManager.shared.configure(window: window)
             window.makeKeyAndOrderFront(nil)
             window.center()
+        }
+        DispatchQueue.main.async {
+            if let window = NSApplication.shared.windows.first {
+                WindowZoomManager.shared.configure(window: window)
+            }
         }
     }
     
@@ -27,6 +33,13 @@ struct TsrossaMacApp: App {
         }
         .windowStyle(HiddenTitleBarWindowStyle())
         .commands {
+            CommandGroup(after: .windowSize) {
+                Button("Fit to Screen (Zoom)") {
+                    WindowZoomManager.shared.toggleFitToScreen()
+                }
+                .keyboardShortcut("z", modifiers: [.command, .option])
+            }
+
             CommandMenu("Playback") {
                 Button("Play / Pause") {
                     AudioEngine.shared.togglePlayPause()

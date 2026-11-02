@@ -23,8 +23,12 @@ public struct SidebarView: View {
                 }
                 Spacer()
             }
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                WindowZoomManager.shared.toggleFitToScreen()
+            }
             .padding(.horizontal, 16)
-            .padding(.top, 16)
+            .padding(.top, 38)
             .padding(.bottom, 18)
 
             // Primary Navigation Items
@@ -114,7 +118,8 @@ public struct SidebarView: View {
             .buttonStyle(PlainButtonStyle())
             .padding(14)
         }
-        .frame(minWidth: 200, maxWidth: 260)
+        .frame(width: 236)
+        .frame(maxHeight: .infinity)
         .background(theme.surface.opacity(0.70))
     }
 

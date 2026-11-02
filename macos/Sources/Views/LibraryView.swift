@@ -12,6 +12,10 @@ public struct LibraryView: View {
     }
 
     public var body: some View {
+        let tracks = vm.filteredTracks
+        let totalDuration = tracks.reduce(0.0) { $0 + $1.durationSeconds }
+        let durationText = formatTotalDuration(totalDuration)
+
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 // Top Header: Title, Track count, and Sort Options
@@ -21,7 +25,7 @@ public struct LibraryView: View {
                             .font(.system(size: 22, weight: .bold))
                             .foregroundStyle(.primary)
 
-                        Text("\(vm.filteredTracks.count) tracks • \(formattedTotalDuration)")
+                        Text("\(tracks.count) tracks • \(durationText)")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
@@ -106,7 +110,7 @@ public struct LibraryView: View {
 
                 // Tracks List
                 LazyVStack(spacing: 2) {
-                    if vm.filteredTracks.isEmpty {
+                    if tracks.isEmpty {
                         VStack(spacing: 8) {
                             Image(systemName: "music.note")
                                 .font(.system(size: 28))
@@ -121,14 +125,14 @@ public struct LibraryView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 40)
                     } else {
-                        ForEach(Array(vm.filteredTracks.enumerated()), id: \.element.id) { index, track in
+                        ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                             trackRow(track: track, index: index + 1)
                         }
                     }
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, 90) // Room for floating transport capsule
+            .padding(.bottom, 16)
         }
     }
 
@@ -143,8 +147,7 @@ public struct LibraryView: View {
         return "All Tracks"
     }
 
-    private var formattedTotalDuration: String {
-        let total = vm.filteredTracks.reduce(0.0) { $0 + $1.durationSeconds }
+    private func formatTotalDuration(_ total: Double) -> String {
         let hours = Int(total) / 3600
         let mins = (Int(total) % 3600) / 60
         if hours > 0 {

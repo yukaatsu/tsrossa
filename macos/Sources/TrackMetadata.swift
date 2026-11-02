@@ -72,7 +72,7 @@ public struct TrackMetadata: Identifiable, Hashable, Codable {
     }
 
     public var artwork: NSImage? {
-        AlbumArtCache.shared.thumbnailImage(for: path)
+        AlbumArtCache.shared.thumbnailImage(for: path, knownThumbPath: artworkThumbPath)
     }
 
     public static func makeTestTrack(
