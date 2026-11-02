@@ -407,6 +407,7 @@ public class AppViewModel: ObservableObject {
         loadSavedPlaylists()
         loadSavedLikedTracks()
         setupKeyboardMonitor()
+        setupTrackpadGestureMonitor()
     }
 
     public func applySorting() {
@@ -428,6 +429,9 @@ public class AppViewModel: ObservableObject {
     
     deinit {
         if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = trackpadMonitor {
             NSEvent.removeMonitor(monitor)
         }
     }
@@ -1144,9 +1148,7 @@ public class AppViewModel: ObservableObject {
                     return nil
                 }
                 if self.isNowPlayingExpanded {
-                    withAnimation(.spring(response: 0.38, dampingFraction: 0.85)) {
-                        self.isNowPlayingExpanded = false
-                    }
+                    self.closeNowPlayingStage()
                     return nil
                 }
             }
@@ -1166,9 +1168,7 @@ public class AppViewModel: ObservableObject {
                     self.switchTab(to: .settings)
                     return nil
                 case 35, 29: // Cmd + P or Cmd + 0 -> Toggle Now Playing Drawer
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                        self.isNowPlayingExpanded.toggle()
-                    }
+                    self.toggleNowPlayingStage()
                     return nil
                 case 34: // Cmd + I -> Track Details / Info
                     withAnimation { self.showTrackDetailsModal.toggle() }
@@ -1261,6 +1261,125 @@ public class AppViewModel: ObservableObject {
                 }
             }
             
+            return event
+        }
+    }
+
+    // =========================================================================
+    // NOW PLAYING STAGE ANIMATION & TRACKPAD TWO-FINGER GESTURE ENGINE
+    // =========================================================================
+    public func openNowPlayingStage() {
+        withAnimation(.spring(response: 0.44, dampingFraction: 0.86)) {
+            self.nowPlayingDragOffset = 0
+            self.isNowPlayingExpanded = true
+        }
+    }
+
+    public func closeNowPlayingStage() {
+        withAnimation(.spring(response: 0.44, dampingFraction: 0.86)) {
+            self.nowPlayingDragOffset = 0
+            self.isNowPlayingExpanded = false
+        }
+    }
+
+    public func toggleNowPlayingStage() {
+        if self.isNowPlayingExpanded {
+            self.closeNowPlayingStage()
+        } else {
+            self.openNowPlayingStage()
+        }
+    }
+
+    private var trackpadMonitor: Any?
+    private var isTrackpadDraggingDrawer: Bool = false
+    private var accumulatedTrackpadDeltaY: CGFloat = 0
+    private var lastTrackpadDeltaY: CGFloat = 0
+
+    public func setupTrackpadGestureMonitor() {
+        guard trackpadMonitor == nil else { return }
+        trackpadMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
+            guard let self = self else { return event }
+            guard event.hasPreciseScrollingDeltas else { return event }
+            if event.momentumPhase != [] { return event }
+
+            guard let window = event.window,
+                  let contentView = window.contentView else { return event }
+
+            if self.showKeyboardShortcutsModal || self.showTrackDetailsModal ||
+               self.showNewPlaylistModal || self.showTelemetry || self.showSaveQueueModal {
+                return event
+            }
+
+            let loc = event.locationInWindow // (0,0) is bottom-left of NSWindow
+            let winW = contentView.bounds.width
+            let winH = contentView.bounds.height
+
+            // When natural scrolling is on, moving fingers UP produces negative scrollingDeltaY
+            // We normalize so fingerUpDelta > 0 means physical fingers moved UPWARD
+            let fingerUpDelta: CGFloat = event.isDirectionInvertedFromDevice
+                ? -event.scrollingDeltaY
+                : event.scrollingDeltaY
+
+            if event.phase == .began {
+                if !self.isNowPlayingExpanded {
+                    // Mini player is at bottom: Y <= 115 pt in window coordinates
+                    if loc.y >= 0 && loc.y <= 115 {
+                        self.isTrackpadDraggingDrawer = true
+                        self.accumulatedTrackpadDeltaY = 0
+                        self.lastTrackpadDeltaY = 0
+                    }
+                } else {
+                    // When Now Playing is open:
+                    // Header area: loc.y >= winH - 95 pt
+                    // OR Left stage: loc.x <= winW * 0.48
+                    let isInHeader = loc.y >= (winH - 95)
+                    let isInLeftStage = loc.x <= (winW * 0.48)
+                    if isInHeader || isInLeftStage {
+                        self.isTrackpadDraggingDrawer = true
+                        self.accumulatedTrackpadDeltaY = 0
+                        self.lastTrackpadDeltaY = 0
+                    }
+                }
+            }
+
+            guard self.isTrackpadDraggingDrawer else { return event }
+
+            if event.phase == .changed || event.phase == .began {
+                self.lastTrackpadDeltaY = fingerUpDelta
+                self.accumulatedTrackpadDeltaY += fingerUpDelta
+
+                if !self.isNowPlayingExpanded {
+                    let upwardPull = max(0, self.accumulatedTrackpadDeltaY)
+                    self.nowPlayingDragOffset = -upwardPull
+                } else {
+                    let downwardPull = max(0, -self.accumulatedTrackpadDeltaY)
+                    self.nowPlayingDragOffset = downwardPull
+                }
+                return nil
+            }
+
+            if event.phase == .ended || event.phase == .cancelled {
+                self.isTrackpadDraggingDrawer = false
+                if !self.isNowPlayingExpanded {
+                    let pulledUpEnough = (-self.nowPlayingDragOffset > 36) || (self.lastTrackpadDeltaY > 8 && -self.nowPlayingDragOffset > 10)
+                    if pulledUpEnough {
+                        self.openNowPlayingStage()
+                    } else {
+                        self.closeNowPlayingStage()
+                    }
+                } else {
+                    let pulledDownEnough = (self.nowPlayingDragOffset > 42) || (self.lastTrackpadDeltaY < -8 && self.nowPlayingDragOffset > 12)
+                    if pulledDownEnough {
+                        self.closeNowPlayingStage()
+                    } else {
+                        self.openNowPlayingStage()
+                    }
+                }
+                self.accumulatedTrackpadDeltaY = 0
+                self.lastTrackpadDeltaY = 0
+                return nil
+            }
+
             return event
         }
     }

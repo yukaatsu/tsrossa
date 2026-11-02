@@ -99,9 +99,7 @@ public struct NowPlayingSplitView: View {
             HStack(spacing: 12) {
                 // Minimize Button
                 Button(action: {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                        vm.isNowPlayingExpanded = false
-                    }
+                    vm.closeNowPlayingStage()
                 }) {
                     HStack(spacing: 5) {
                         Image(systemName: "chevron.down")
@@ -158,7 +156,7 @@ public struct NowPlayingSplitView: View {
         }
         .contentShape(Rectangle())
         .gesture(
-            DragGesture(minimumDistance: 5, coordinateSpace: .global)
+            DragGesture(minimumDistance: 6, coordinateSpace: .named("MainWindowCoordSpace"))
                 .onChanged { val in
                     if val.translation.height > 0 {
                         vm.nowPlayingDragOffset = val.translation.height
@@ -166,11 +164,10 @@ public struct NowPlayingSplitView: View {
                 }
                 .onEnded { val in
                     let shouldClose = val.translation.height > 40 || val.predictedEndTranslation.height > 80
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                        vm.nowPlayingDragOffset = 0
-                        if shouldClose {
-                            vm.isNowPlayingExpanded = false
-                        }
+                    if shouldClose {
+                        vm.closeNowPlayingStage()
+                    } else {
+                        vm.openNowPlayingStage()
                     }
                 }
         )

@@ -28,6 +28,7 @@ public struct SidebarView: View {
             .padding(.horizontal, 16)
             .padding(.top, 38)
             .padding(.bottom, 18)
+            .fixedSize(horizontal: false, vertical: true)
 
             // Primary Navigation Items (Now Playing moved to expandable bottom stage)
             VStack(spacing: 4) {
@@ -36,6 +37,7 @@ public struct SidebarView: View {
                 sidebarNavItem(tab: .settings, title: "Settings & DAC", icon: "slider.horizontal.3", shortcut: "⌘3")
             }
             .padding(.horizontal, 10)
+            .fixedSize(horizontal: false, vertical: true)
 
             Divider()
                 .padding(.vertical, 14)
@@ -59,6 +61,7 @@ public struct SidebarView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
+            .fixedSize(horizontal: false, vertical: true)
 
             // Playlists List
             ScrollView {
@@ -94,8 +97,6 @@ public struct SidebarView: View {
                 }
                 .padding(.horizontal, 10)
             }
-
-            Spacer()
 
             // Footer Quick Actions
             VStack(spacing: 4) {
@@ -152,9 +153,11 @@ public struct SidebarView: View {
                 .buttonStyle(PlainButtonStyle())
             }
             .padding(12)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(width: 236)
+        .frame(minWidth: 200, idealWidth: 226, maxWidth: 236)
         .frame(maxHeight: .infinity)
+        .layoutPriority(2)
         .background {
             ZStack {
                 // Native Mac Optical Blur

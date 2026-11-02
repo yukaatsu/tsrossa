@@ -45,112 +45,126 @@ public struct MainAppView: View {
     public var body: some View {
         let theme = activeTheme
 
-        ZStack {
-            // Layer 1: Deterministic App Shell (HStack + VStack)
-            HStack(spacing: 0) {
-                SidebarView(theme: theme)
-                    .frame(width: 236)
-                    .frame(maxHeight: .infinity)
+        GeometryReader { geo in
+            let windowH = geo.size.height
+            let baseOffset: CGFloat = vm.isNowPlayingExpanded ? 0.0 : windowH
+            let drawerY = min(windowH, max(0.0, baseOffset + vm.nowPlayingDragOffset))
+            let openProgress: CGFloat = windowH > 0 ? min(1.0, max(0.0, 1.0 - (drawerY / windowH))) : 0.0
 
-                Rectangle()
-                    .fill(Color.white.opacity(isEffectiveDark ? 0.08 : 0.14))
-                    .frame(width: 1)
-                    .frame(maxHeight: .infinity)
+            ZStack {
+                // Layer 1: Deterministic App Shell (HStack + VStack)
+                HStack(spacing: 0) {
+                    SidebarView(theme: theme)
+                        .frame(minWidth: 200, idealWidth: 226, maxWidth: 236)
+                        .frame(maxHeight: .infinity)
+                        .layoutPriority(2)
 
-                VStack(spacing: 0) {
-                    FloatingTopToolbarView(theme: theme)
-                        .padding(.horizontal, 18)
-                        .padding(.top, 12)
-                        .padding(.bottom, 8)
+                    Rectangle()
+                        .fill(Color.white.opacity(isEffectiveDark ? 0.08 : 0.14))
+                        .frame(width: 1)
+                        .frame(maxHeight: .infinity)
 
-                    ZStack {
-                        workspaceContent(theme: theme)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 0) {
+                        FloatingTopToolbarView(theme: theme)
+                            .padding(.horizontal, 18)
+                            .padding(.top, 12)
+                            .padding(.bottom, 8)
+
+                        ZStack {
+                            workspaceContent(theme: theme)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+
+                        LiquidTransportBarView(theme: theme)
+                            .padding(.horizontal, 18)
+                            .padding(.top, 6)
+                            .padding(.bottom, 12)
+                            .opacity(1.0 - Double(openProgress))
+                            .scaleEffect(1.0 - (openProgress * 0.03))
+                            .offset(y: openProgress * 24)
+                            .allowsHitTesting(openProgress < 0.5)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-
-                    LiquidTransportBarView(theme: theme)
-                        .padding(.horizontal, 18)
-                        .padding(.top, 6)
-                        .padding(.bottom, 12)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
 
-            // Layer 1.5: Expandable Now Playing Stage Drawer
-            if vm.isNowPlayingExpanded || vm.nowPlayingDragOffset < 0 {
-                Color.black.opacity(0.55)
+                // Layer 1.5: Persistent Geometry-Driven Now Playing Stage Drawer
+                Color.black
+                    .opacity(0.60 * Double(openProgress))
                     .ignoresSafeArea()
+                    .allowsHitTesting(openProgress > 0.1)
                     .onTapGesture {
-                        withAnimation(.spring(response: 0.38, dampingFraction: 0.85)) {
-                            vm.isNowPlayingExpanded = false
-                        }
+                        vm.closeNowPlayingStage()
                     }
 
                 NowPlayingSplitView(theme: theme)
-                    .offset(y: max(0, vm.nowPlayingDragOffset))
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .offset(y: drawerY)
+                    .opacity(openProgress > 0.01 ? 1.0 : 0.0)
+                    .allowsHitTesting(openProgress > 0.5)
                     .zIndex(15)
-            }
 
-            // Layer 2: Modal Sheets & Overlays
-            if vm.showNewPlaylistModal {
-                Color.black.opacity(0.65)
-                    .ignoresSafeArea()
-                    .onTapGesture { vm.showNewPlaylistModal = false }
+                // Layer 2: Modal Sheets & Overlays
+                if vm.showNewPlaylistModal {
+                    Color.black.opacity(0.65)
+                        .ignoresSafeArea()
+                        .onTapGesture { vm.showNewPlaylistModal = false }
 
-                CreatePlaylistModalSheet(theme: theme)
-                    .transition(.scale(scale: 0.95).combined(with: .opacity))
-            }
-
-            if vm.showTrackDetailsModal {
-                Color.black.opacity(0.65)
-                    .ignoresSafeArea()
-                    .onTapGesture { vm.showTrackDetailsModal = false }
-
-                TrackDetailsModalSheet(theme: theme)
-                    .transition(.scale(scale: 0.95).combined(with: .opacity))
-            }
-
-            if vm.showTelemetry {
-                Color.black.opacity(0.65)
-                    .ignoresSafeArea()
-                    .onTapGesture { vm.showTelemetry = false }
-
-                TelemetryModalView(theme: theme)
-                    .transition(.scale(scale: 0.95).combined(with: .opacity))
-            }
-
-            if vm.showKeyboardShortcutsModal {
-                Color.black.opacity(0.65)
-                    .ignoresSafeArea()
-                    .onTapGesture { vm.showKeyboardShortcutsModal = false }
-
-                KeyboardShortcutsModalSheet(theme: theme)
-                    .transition(.scale(scale: 0.95).combined(with: .opacity))
-            }
-
-            // Layer 3: Toast Notification Pill
-            if !vm.toastMessage.isEmpty {
-                VStack {
-                    Spacer()
-                    HStack(spacing: 8) {
-                        Image(systemName: "info.circle.fill")
-                            .font(.system(size: 13))
-                            .foregroundStyle(theme.primary)
-                        Text(vm.toastMessage)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.primary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .liquidGlass(role: .floatingPillBar, cornerRadius: 20, tint: theme.primary)
-                    .padding(.bottom, 95)
+                    CreatePlaylistModalSheet(theme: theme)
+                        .transition(.scale(scale: 0.95).combined(with: .opacity))
                 }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+
+                if vm.showTrackDetailsModal {
+                    Color.black.opacity(0.65)
+                        .ignoresSafeArea()
+                        .onTapGesture { vm.showTrackDetailsModal = false }
+
+                    TrackDetailsModalSheet(theme: theme)
+                        .transition(.scale(scale: 0.95).combined(with: .opacity))
+                }
+
+                if vm.showTelemetry {
+                    Color.black.opacity(0.65)
+                        .ignoresSafeArea()
+                        .onTapGesture { vm.showTelemetry = false }
+
+                    TelemetryModalView(theme: theme)
+                        .transition(.scale(scale: 0.95).combined(with: .opacity))
+                }
+
+                if vm.showKeyboardShortcutsModal {
+                    Color.black.opacity(0.65)
+                        .ignoresSafeArea()
+                        .onTapGesture { vm.showKeyboardShortcutsModal = false }
+
+                    KeyboardShortcutsModalSheet(theme: theme)
+                        .transition(.scale(scale: 0.95).combined(with: .opacity))
+                }
+
+                // Layer 3: Toast Notification Pill
+                if !vm.toastMessage.isEmpty {
+                    VStack {
+                        Spacer()
+                        HStack(spacing: 8) {
+                            Image(systemName: "info.circle.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(theme.primary)
+                            Text(vm.toastMessage)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.primary)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .liquidGlass(role: .floatingPillBar, cornerRadius: 20, tint: theme.primary)
+                        .padding(.bottom, 95)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .coordinateSpace(name: "MainWindowCoordSpace")
+            .frame(width: geo.size.width, height: geo.size.height)
         }
         .background {
             AmbientArtworkMeshBackground(
@@ -160,7 +174,7 @@ public struct MainAppView: View {
                 isDark: isEffectiveDark
             )
         }
-        .frame(minWidth: 920, minHeight: 620)
+        .frame(minWidth: 880, minHeight: 600)
         .preferredColorScheme(isEffectiveDark ? .dark : .light)
         .opacity(vm.hasAppeared ? 1 : 0)
         .scaleEffect(vm.hasAppeared ? 1 : 0.985)

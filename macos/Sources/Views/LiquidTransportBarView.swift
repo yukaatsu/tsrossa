@@ -13,9 +13,7 @@ public struct LiquidTransportBarView: View {
         HStack(spacing: 12) {
             // Left: Concentric Squircle Mini Artwork & Track Info
             Button(action: {
-                withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                    vm.isNowPlayingExpanded = true
-                }
+                vm.openNowPlayingStage()
             }) {
                 HStack(spacing: 12) {
                     if let track = engine.currentTrack {
@@ -66,7 +64,7 @@ public struct LiquidTransportBarView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(PlainButtonStyle())
-            .frame(minWidth: 190, idealWidth: 220, maxWidth: 260, alignment: .leading)
+            .frame(minWidth: 120, idealWidth: 190, maxWidth: 240, alignment: .leading)
 
             Spacer(minLength: 8)
 
@@ -74,9 +72,7 @@ public struct LiquidTransportBarView: View {
             VStack(spacing: 3) {
                 // Grabber handle for drag-up
                 Button(action: {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                        vm.isNowPlayingExpanded = true
-                    }
+                    vm.openNowPlayingStage()
                 }) {
                     Capsule()
                         .fill(Color.white.opacity(0.28))
@@ -162,7 +158,8 @@ public struct LiquidTransportBarView: View {
                 PlaybackScrubberView(accentColor: theme.primary)
                     .frame(maxWidth: 440)
             }
-            .frame(minWidth: 240, maxWidth: 440)
+            .frame(minWidth: 190, idealWidth: 320, maxWidth: 440)
+            .layoutPriority(1)
 
             Spacer(minLength: 8)
 
@@ -218,9 +215,7 @@ public struct LiquidTransportBarView: View {
 
                 // Expand Chevron Button
                 Button(action: {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                        vm.isNowPlayingExpanded.toggle()
-                    }
+                    vm.toggleNowPlayingStage()
                 }) {
                     Image(systemName: "chevron.up")
                         .font(.system(size: 11, weight: .bold))
@@ -233,13 +228,13 @@ public struct LiquidTransportBarView: View {
                 .buttonStyle(PlainButtonStyle())
                 .help("Open Full Now Playing Stage (⌘P)")
             }
-            .frame(minWidth: 240, idealWidth: 290, maxWidth: 320, alignment: .trailing)
+            .frame(minWidth: 140, idealWidth: 250, maxWidth: 300, alignment: .trailing)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .liquidGlass(role: .transportCapsule, cornerRadius: 24, tint: theme.primary)
         .simultaneousGesture(
-            DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            DragGesture(minimumDistance: 6, coordinateSpace: .named("MainWindowCoordSpace"))
                 .onChanged { val in
                     if val.translation.height < 0 {
                         vm.nowPlayingDragOffset = val.translation.height
@@ -247,11 +242,10 @@ public struct LiquidTransportBarView: View {
                 }
                 .onEnded { val in
                     let shouldOpen = val.translation.height < -25 || val.predictedEndTranslation.height < -50
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                        vm.nowPlayingDragOffset = 0
-                        if shouldOpen {
-                            vm.isNowPlayingExpanded = true
-                        }
+                    if shouldOpen {
+                        vm.openNowPlayingStage()
+                    } else {
+                        vm.closeNowPlayingStage()
                     }
                 }
         )

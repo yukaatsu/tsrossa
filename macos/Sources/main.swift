@@ -175,9 +175,7 @@ struct TsrossaMacApp: App {
                 Divider()
 
                 Button("Toggle Now Playing Stage") {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                        AppViewModel.shared.isNowPlayingExpanded.toggle()
-                    }
+                    AppViewModel.shared.toggleNowPlayingStage()
                 }
                 .keyboardShortcut("p", modifiers: .command)
                 

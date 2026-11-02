@@ -261,7 +261,8 @@ public final class WindowZoomManager: NSObject, NSWindowDelegate {
 
     public func configure(window: NSWindow) {
         window.delegate = self
-        window.minSize = NSSize(width: 920, height: 620)
+        window.minSize = NSSize(width: 880, height: 600)
+        window.contentMinSize = NSSize(width: 880, height: 600)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         installTopBarDoubleTapMonitorIfNeeded()
