@@ -43,6 +43,8 @@ public struct KeyboardShortcutsModalSheet: View {
                 VStack(spacing: 18) {
                     shortcutSection(title: "Playback & Audio") {
                         shortcutRow(keys: ["Space"], description: "Play / Pause toggle")
+                        shortcutRow(keys: ["Return"], description: "Play highlighted / selected track")
+                        shortcutRow(keys: ["↑", "↓"], description: "Select track in library")
                         shortcutRow(keys: ["⌘", "→"], description: "Next track")
                         shortcutRow(keys: ["⌘", "←"], description: "Previous track")
                         shortcutRow(keys: ["⌘", "↑"], description: "Volume increase")
@@ -53,10 +55,10 @@ public struct KeyboardShortcutsModalSheet: View {
                     }
 
                     shortcutSection(title: "Navigation & Tabs") {
-                        shortcutRow(keys: ["⌘", "1"], description: "Now Playing view")
-                        shortcutRow(keys: ["⌘", "2"], description: "Library view")
-                        shortcutRow(keys: ["⌘", "3"], description: "Playlists view")
-                        shortcutRow(keys: ["⌘", "4"], description: "Settings view")
+                        shortcutRow(keys: ["⌘", "1"], description: "Music Library")
+                        shortcutRow(keys: ["⌘", "2"], description: "Playlists")
+                        shortcutRow(keys: ["⌘", "3"], description: "Settings & DAC")
+                        shortcutRow(keys: ["⌘", "P"], description: "Toggle Now Playing stage")
                         shortcutRow(keys: ["⌥", "←"], description: "Previous workspace tab")
                         shortcutRow(keys: ["⌥", "→"], description: "Next workspace tab")
                     }
@@ -69,7 +71,7 @@ public struct KeyboardShortcutsModalSheet: View {
                         shortcutRow(keys: ["⌘", "I"], description: "Track technical info")
                         shortcutRow(keys: ["⌘", "U"], description: "CoreAudio telemetry audit")
                         shortcutRow(keys: ["⌘", "/"], description: "Show keyboard shortcuts")
-                        shortcutRow(keys: ["Esc"], description: "Dismiss active modal / blur")
+                        shortcutRow(keys: ["Esc"], description: "Dismiss active modal / drawer")
                     }
                 }
                 .padding(20)

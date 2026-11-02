@@ -29,12 +29,11 @@ public struct SidebarView: View {
             .padding(.top, 38)
             .padding(.bottom, 18)
 
-            // Primary Navigation Items
+            // Primary Navigation Items (Now Playing moved to expandable bottom stage)
             VStack(spacing: 4) {
-                sidebarNavItem(tab: .nowPlaying, title: "Now Playing", icon: "play.circle.fill", shortcut: "⌘1")
-                sidebarNavItem(tab: .library, title: "Music Library", icon: "music.note.list", shortcut: "⌘2")
-                sidebarNavItem(tab: .playlist, title: "Playlists", icon: "folder.fill", shortcut: "⌘3")
-                sidebarNavItem(tab: .settings, title: "Settings & DAC", icon: "slider.horizontal.3", shortcut: "⌘4")
+                sidebarNavItem(tab: .library, title: "Music Library", icon: "music.note.house.fill", shortcut: "⌘1")
+                sidebarNavItem(tab: .playlist, title: "Playlists", icon: "music.note.list", shortcut: "⌘2")
+                sidebarNavItem(tab: .settings, title: "Settings & DAC", icon: "slider.horizontal.3", shortcut: "⌘3")
             }
             .padding(.horizontal, 10)
 

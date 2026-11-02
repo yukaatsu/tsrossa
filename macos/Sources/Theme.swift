@@ -467,9 +467,62 @@ public enum TsrossaBrandLogo {
         loadBundledImage(named: "ic_launcher_foreground.png") ?? launcherImage
     }()
     
+    public static func makeMacSquircleIcon(from source: NSImage, canvasSize: CGFloat = 512) -> NSImage {
+        let targetSize = NSSize(width: canvasSize, height: canvasSize)
+        let output = NSImage(size: targetSize)
+        output.lockFocus()
+        defer { output.unlockFocus() }
+
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return source }
+        ctx.setAllowsAntialiasing(true)
+        ctx.setShouldAntialias(true)
+        ctx.interpolationQuality = .high
+
+        // Standar Apple macOS Big Sur+ Icon Grid:
+        // Badan squircle = 80.47% dari kanvas (824/1024), margin = 9.765% di tiap sisi.
+        let margin = canvasSize * 0.09765625
+        let bodySize = canvasSize - (margin * 2.0)
+        let bodyRect = NSRect(x: margin, y: margin, width: bodySize, height: bodySize)
+        let cornerRadius = bodySize * 0.225
+
+        // 1. Gambar Drop Shadow standar macOS Dock di belakang squircle
+        ctx.saveGState()
+        let shadowOffset = CGSize(width: 0, height: -canvasSize * 0.018)
+        let shadowBlur = canvasSize * 0.045
+        ctx.setShadow(
+            offset: shadowOffset,
+            blur: shadowBlur,
+            color: NSColor(calibratedWhite: 0.0, alpha: 0.38).cgColor
+        )
+        let shadowPath = NSBezierPath(roundedRect: bodyRect, xRadius: cornerRadius, yRadius: cornerRadius)
+        NSColor.black.setFill()
+        shadowPath.fill()
+        ctx.restoreGState()
+
+        // 2. Clip ke Continuous Squircle dan gambar artwork ikon
+        ctx.saveGState()
+        let clipPath = NSBezierPath(roundedRect: bodyRect, xRadius: cornerRadius, yRadius: cornerRadius)
+        clipPath.addClip()
+        source.draw(
+            in: bodyRect,
+            from: NSRect(origin: .zero, size: source.size),
+            operation: .sourceOver,
+            fraction: 1.0
+        )
+
+        // 3. Tambahkan Inner Specular Rim Highlight (1.5pt) khas Liquid Glass macOS
+        let strokePath = NSBezierPath(roundedRect: bodyRect.insetBy(dx: 1.0, dy: 1.0), xRadius: cornerRadius - 1.0, yRadius: cornerRadius - 1.0)
+        strokePath.lineWidth = max(1.5, canvasSize * 0.003)
+        NSColor(calibratedWhite: 1.0, alpha: 0.22).setStroke()
+        strokePath.stroke()
+        ctx.restoreGState()
+
+        return output
+    }
+
     public static func applyMacDockIcon() {
-        if let icon = launcherImage {
-            NSApplication.shared.applicationIconImage = icon
+        if let rawIcon = launcherImage {
+            NSApplication.shared.applicationIconImage = makeMacSquircleIcon(from: rawIcon, canvasSize: 512)
         }
     }
 }

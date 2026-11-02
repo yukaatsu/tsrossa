@@ -79,6 +79,22 @@ public struct MainAppView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // Layer 1.5: Expandable Now Playing Stage Drawer
+            if vm.isNowPlayingExpanded || vm.nowPlayingDragOffset < 0 {
+                Color.black.opacity(0.55)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.85)) {
+                            vm.isNowPlayingExpanded = false
+                        }
+                    }
+
+                NowPlayingSplitView(theme: theme)
+                    .offset(y: max(0, vm.nowPlayingDragOffset))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(15)
+            }
+
             // Layer 2: Modal Sheets & Overlays
             if vm.showNewPlaylistModal {
                 Color.black.opacity(0.65)
@@ -161,10 +177,6 @@ public struct MainAppView: View {
     private func workspaceContent(theme: LiquidGlassTheme) -> some View {
         ZStack {
             switch vm.activeTab {
-            case .nowPlaying:
-                NowPlayingSplitView(theme: theme)
-                    .id(AppTab.nowPlaying)
-                    .transition(contextualTabTransition)
             case .library:
                 LibraryView(theme: theme)
                     .id(AppTab.library)
@@ -183,18 +195,11 @@ public struct MainAppView: View {
     }
 
     private var contextualTabTransition: AnyTransition {
-        if vm.activeTab == .nowPlaying {
-            return .asymmetric(
-                insertion: .scale(scale: 0.96).combined(with: .opacity),
-                removal: .scale(scale: 1.04).combined(with: .opacity)
-            )
-        } else {
-            let edge: Edge = vm.tabTransitionDirection >= 0 ? .bottom : .top
-            return .asymmetric(
-                insertion: .move(edge: edge).combined(with: .opacity),
-                removal: .move(edge: edge == .bottom ? .top : .bottom).combined(with: .opacity)
-            )
-        }
+        let edge: Edge = vm.tabTransitionDirection >= 0 ? .bottom : .top
+        return .asymmetric(
+            insertion: .move(edge: edge).combined(with: .opacity),
+            removal: .move(edge: edge == .bottom ? .top : .bottom).combined(with: .opacity)
+        )
     }
 }
 

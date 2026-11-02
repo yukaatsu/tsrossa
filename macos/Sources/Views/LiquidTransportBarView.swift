@@ -13,7 +13,9 @@ public struct LiquidTransportBarView: View {
         HStack(spacing: 12) {
             // Left: Concentric Squircle Mini Artwork & Track Info
             Button(action: {
-                vm.switchTab(to: .nowPlaying)
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
+                    vm.isNowPlayingExpanded = true
+                }
             }) {
                 HStack(spacing: 12) {
                     if let track = engine.currentTrack {
@@ -69,7 +71,22 @@ public struct LiquidTransportBarView: View {
             Spacer(minLength: 8)
 
             // Center: Playback Controls & Scrubber Timeline
-            VStack(spacing: 4) {
+            VStack(spacing: 3) {
+                // Grabber handle for drag-up
+                Button(action: {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
+                        vm.isNowPlayingExpanded = true
+                    }
+                }) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.28))
+                        .frame(width: 36, height: 4)
+                        .padding(.top, 2)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Drag up or click to open Now Playing (⌘P)")
+
                 HStack(spacing: 14) {
                     // Shuffle Button
                     Button(action: { vm.isShuffle.toggle() }) {
@@ -198,11 +215,45 @@ public struct LiquidTransportBarView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 38, alignment: .trailing)
                 }
+
+                // Expand Chevron Button
+                Button(action: {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
+                        vm.isNowPlayingExpanded.toggle()
+                    }
+                }) {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(Color.white.opacity(0.06))
+                        .continuousSquircle(6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Open Full Now Playing Stage (⌘P)")
             }
-            .frame(minWidth: 220, idealWidth: 260, maxWidth: 280, alignment: .trailing)
+            .frame(minWidth: 240, idealWidth: 290, maxWidth: 320, alignment: .trailing)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .liquidGlass(role: .transportCapsule, cornerRadius: 24, tint: theme.primary)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 8, coordinateSpace: .global)
+                .onChanged { val in
+                    if val.translation.height < 0 {
+                        vm.nowPlayingDragOffset = val.translation.height
+                    }
+                }
+                .onEnded { val in
+                    let shouldOpen = val.translation.height < -25 || val.predictedEndTranslation.height < -50
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
+                        vm.nowPlayingDragOffset = 0
+                        if shouldOpen {
+                            vm.isNowPlayingExpanded = true
+                        }
+                    }
+                }
+        )
     }
 }

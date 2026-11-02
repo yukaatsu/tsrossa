@@ -82,6 +82,11 @@ public class AudioEngine: ObservableObject {
     @Published public var hardwareVolumeEnabled: Bool = true
     @Published public var dacWarmupEnabled: Bool = true
     @Published public var bufferProfileIndex: Int = 1
+    @Published public var volume: Double = 1.0 {
+        didSet {
+            setVolume(sliderValue: volume)
+        }
+    }
     
     private var progressTimer: Timer?
     private var hotplugTimer: Timer?
@@ -366,6 +371,11 @@ public class AudioEngine: ObservableObject {
             }
         } else if let track = currentTrack {
             play(track: track)
+        } else if let selPath = AppViewModel.shared.selectedTrackPath,
+                  let selTrack = AppViewModel.shared.filteredTracks.first(where: { $0.path == selPath }) {
+            play(track: selTrack)
+        } else if let first = AppViewModel.shared.filteredTracks.first ?? AppViewModel.shared.tracks.first {
+            play(track: first)
         }
     }
     

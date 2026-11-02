@@ -4,17 +4,15 @@ import AppKit
 import SwiftUI
 
 public enum AppTab: String, CaseIterable {
-    case nowPlaying = "Now Playing"
     case library = "Library"
-    case playlist = "Playlist"
+    case playlist = "Playlists"
     case settings = "Settings"
 
     public var index: Int {
         switch self {
-        case .nowPlaying: return 0
-        case .library: return 1
-        case .playlist: return 2
-        case .settings: return 3
+        case .library: return 0
+        case .playlist: return 1
+        case .settings: return 2
         }
     }
 }
@@ -86,7 +84,7 @@ public struct UserPlaylist: Identifiable, Codable, Hashable {
 public class AppViewModel: ObservableObject {
     public static let shared = AppViewModel()
     
-    @Published public var activeTab: AppTab = .nowPlaying {
+    @Published public var activeTab: AppTab = .library {
         didSet {
             if activeTab == .settings {
                 AudioEngine.shared.refreshDevices()
@@ -94,7 +92,12 @@ public class AppViewModel: ObservableObject {
         }
     }
     @Published public var tabTransitionDirection: Int = 1
-    @Published public var previousTab: AppTab = .nowPlaying
+    @Published public var previousTab: AppTab = .library
+    @Published public var isNowPlayingExpanded: Bool = false
+    @Published public var nowPlayingDragOffset: CGFloat = 0.0
+    @Published public var selectedTrackPath: String? = nil
+    public var lastClickedTrackPath: String? = nil
+    public var lastTrackClickTime: TimeInterval = 0
     @Published public var showKeyboardShortcutsModal: Bool = false
     @Published public var searchFocusTrigger: Int = 0
     @Published public var hasAppeared: Bool = false
@@ -116,6 +119,67 @@ public class AppViewModel: ObservableObject {
             switchTab(to: .library)
         }
         searchFocusTrigger += 1
+    }
+
+    public func selectNextTrackInList() {
+        let list = filteredTracks
+        guard !list.isEmpty else { return }
+        if activeTab != .library && activeTab != .playlist && !isNowPlayingExpanded {
+            switchTab(to: .library)
+        }
+        if let currentSel = selectedTrackPath, let idx = list.firstIndex(where: { $0.path == currentSel }) {
+            let nextIdx = min(list.count - 1, idx + 1)
+            selectedTrackPath = list[nextIdx].path
+        } else if let playing = AudioEngine.shared.currentTrack?.path, let idx = list.firstIndex(where: { $0.path == playing }) {
+            let nextIdx = min(list.count - 1, idx + 1)
+            selectedTrackPath = list[nextIdx].path
+        } else {
+            selectedTrackPath = list.first?.path
+        }
+    }
+
+    public func selectPreviousTrackInList() {
+        let list = filteredTracks
+        guard !list.isEmpty else { return }
+        if activeTab != .library && activeTab != .playlist && !isNowPlayingExpanded {
+            switchTab(to: .library)
+        }
+        if let currentSel = selectedTrackPath, let idx = list.firstIndex(where: { $0.path == currentSel }) {
+            let prevIdx = max(0, idx - 1)
+            selectedTrackPath = list[prevIdx].path
+        } else if let playing = AudioEngine.shared.currentTrack?.path, let idx = list.firstIndex(where: { $0.path == playing }) {
+            let prevIdx = max(0, idx - 1)
+            selectedTrackPath = list[prevIdx].path
+        } else {
+            selectedTrackPath = list.first?.path
+        }
+    }
+
+    public func playSelectedOrHighlightedTrack() {
+        let list = filteredTracks
+        guard !list.isEmpty else { return }
+        if let selPath = selectedTrackPath, let track = list.first(where: { $0.path == selPath }) {
+            AudioEngine.shared.play(track: track)
+        } else if let first = list.first {
+            selectedTrackPath = first.path
+            AudioEngine.shared.play(track: first)
+        }
+    }
+
+    public func handleTrackRowClick(track: TrackMetadata) {
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        let now = ProcessInfo.processInfo.systemUptime
+        let nativeDoubleClick = (NSApp.currentEvent?.clickCount ?? 1) >= 2
+        let rapidSecondTap = (lastClickedTrackPath == track.path) && ((now - lastTrackClickTime) < 0.40)
+
+        selectedTrackPath = track.path
+        lastClickedTrackPath = track.path
+        lastTrackClickTime = now
+
+        if nativeDoubleClick || rapidSecondTap {
+            lastTrackClickTime = 0
+            AudioEngine.shared.play(track: track)
+        }
     }
     @Published public var tracks: [TrackMetadata] = []
     @Published public var searchText: String = "" {
@@ -945,7 +1009,9 @@ public class AppViewModel: ObservableObject {
                 self.tracks = TrackSorter.sort(initialTracks, by: self.sortField, order: self.sortOrder)
                 if selectFirstIfIdle, let first = self.tracks.first, AudioEngine.shared.currentTrack == nil {
                     AudioEngine.shared.currentTrack = first
+                    self.selectedTrackPath = first.path
                     self.updateThemeForTrack(track: first)
+                    self.loadLyrics(for: first)
                 }
                 // Enrich durations and FLAC/ID3 tags in the background without blocking UI
                 MetadataScanner.enrichMetadataInBackground(tracks: initialTracks) { [weak self] enriched in
@@ -953,6 +1019,10 @@ public class AppViewModel: ObservableObject {
                     self.tracks = TrackSorter.sort(enriched, by: self.sortField, order: self.sortOrder)
                     if self.makeFolderAsPlaylist {
                         self.rebuildFolderPlaylists()
+                    }
+                    if !AudioEngine.shared.isPlaying, let cur = AudioEngine.shared.currentTrack,
+                       let enrichedMatch = self.tracks.first(where: { $0.path == cur.path }) {
+                        AudioEngine.shared.currentTrack = enrichedMatch
                     }
                 }
             }
@@ -983,7 +1053,7 @@ public class AppViewModel: ObservableObject {
         return String(format: "%02d:%02d", mins, secs)
     }
     
-    // Desktop Keyboard Shortcut Monitor (Command & Option shortcuts; bare arrow keys reserved for list navigation)
+    // Desktop Keyboard Shortcut Monitor (Command & Option shortcuts; bare arrow keys for list navigation)
     public func setupKeyboardMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
@@ -992,33 +1062,56 @@ public class AppViewModel: ObservableObject {
             let firstResponder = NSApp.keyWindow?.firstResponder
             let isEditingText = firstResponder is NSTextView && (firstResponder as? NSTextView)?.isEditable == true
             
+            let cleanFlags = event.modifierFlags
+                .intersection(.deviceIndependentFlagsMask)
+                .subtracting([.numericPad, .function])
+            let isCommand = cleanFlags.contains(.command)
+            let isOption = cleanFlags.contains(.option)
+            
             if isEditingText {
                 if event.type == .keyDown {
-                    // Escape -> unfocus text field, close modal, or exit theater
+                    // Escape -> unfocus text field or close modal
                     if event.keyCode == 53 {
-                        if self.isTheaterMode {
-                            self.isTheaterMode = false
-                            return nil
-                        }
                         NSApp.keyWindow?.makeFirstResponder(nil)
                         return nil
                     }
-                    // When searching in the top Omnibar (not in New Playlist modal):
-                    if !self.showNewPlaylistModal && !self.searchText.isEmpty {
-                        let count = self.filteredTracks.count
-                        if (event.keyCode == 36 || event.keyCode == 76) && count > 0 { // Return / Enter -> Play selected search result!
+                    // Enter in search field
+                    if (event.keyCode == 36 || event.keyCode == 76) {
+                        if !self.searchText.isEmpty && !self.filteredTracks.isEmpty {
                             self.playSelectedSearchResult()
                             return nil
-                        } else if event.keyCode == 125 && count > 0 { // Down Arrow -> Move search highlight down
-                            self.searchSelectedIndex = min(count - 1, self.searchSelectedIndex + 1)
-                            return nil
-                        } else if event.keyCode == 126 && count > 0 { // Up Arrow -> Move search highlight up
-                            self.searchSelectedIndex = max(0, self.searchSelectedIndex - 1)
+                        } else {
+                            NSApp.keyWindow?.makeFirstResponder(nil)
+                            self.playSelectedOrHighlightedTrack()
                             return nil
                         }
                     }
+                    // Down Arrow in search field -> transfer focus to track list & select next
+                    if event.keyCode == 125 {
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                        self.selectNextTrackInList()
+                        return nil
+                    }
+                    if event.keyCode == 126 {
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                        self.selectPreviousTrackInList()
+                        return nil
+                    }
+                    // If command key is pressed while editing text:
+                    // Standard text shortcuts (A=0, C=8, V=9, X=7, Z=6) stay in textview
+                    if isCommand {
+                        let textEditingKeyCodes: Set<UInt16> = [0, 6, 7, 8, 9]
+                        if textEditingKeyCodes.contains(event.keyCode) {
+                            return event
+                        }
+                        // Non-text editing command shortcut -> unfocus search and let command handle it!
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                    } else {
+                        return event
+                    }
+                } else {
+                    return event
                 }
-                return event
             }
             
             // Swallow keyUp for Spacebar so focused SwiftUI buttons don't re-trigger on Space release
@@ -1029,11 +1122,7 @@ public class AppViewModel: ObservableObject {
                 return event
             }
             
-            if event.keyCode == 53 { // Global Escape closes any modal or theater view
-                if self.isTheaterMode {
-                    self.isTheaterMode = false
-                    return nil
-                }
+            if event.keyCode == 53 { // Global Escape closes any modal or Now Playing drawer
                 if self.showKeyboardShortcutsModal {
                     withAnimation { self.showKeyboardShortcutsModal = false }
                     return nil
@@ -1054,27 +1143,32 @@ public class AppViewModel: ObservableObject {
                     withAnimation { self.showTelemetry = false }
                     return nil
                 }
+                if self.isNowPlayingExpanded {
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.85)) {
+                        self.isNowPlayingExpanded = false
+                    }
+                    return nil
+                }
             }
 
-            let isCommand = event.modifierFlags.contains(.command)
-            let isOption = event.modifierFlags.contains(.option)
-            
             if isCommand {
                 switch event.keyCode {
                 case 3: // Cmd + F -> Focus Search Omnibar
                     self.focusSearchBar()
                     return nil
-                case 18: // Cmd + 1 -> Now Playing
-                    self.switchTab(to: .nowPlaying)
-                    return nil
-                case 19: // Cmd + 2 -> Library
+                case 18: // Cmd + 1 -> Library
                     self.switchTab(to: .library)
                     return nil
-                case 20: // Cmd + 3 -> Play Queue
+                case 19: // Cmd + 2 -> Playlists
                     self.switchTab(to: .playlist)
                     return nil
-                case 21: // Cmd + 4 -> Settings
+                case 20: // Cmd + 3 -> Settings
                     self.switchTab(to: .settings)
+                    return nil
+                case 35, 29: // Cmd + P or Cmd + 0 -> Toggle Now Playing Drawer
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
+                        self.isNowPlayingExpanded.toggle()
+                    }
                     return nil
                 case 34: // Cmd + I -> Track Details / Info
                     withAnimation { self.showTrackDetailsModal.toggle() }
@@ -1149,13 +1243,20 @@ public class AppViewModel: ObservableObject {
                     NSApp.keyWindow?.makeFirstResponder(nil)
                     AudioEngine.shared.togglePlayPause()
                     return nil
-                case 36, 76: // Return / Enter -> Play highlighted search result if searching
+                case 125: // Down Arrow -> Select Next Track in list
+                    self.selectNextTrackInList()
+                    return nil
+                case 126: // Up Arrow -> Select Previous Track in list
+                    self.selectPreviousTrackInList()
+                    return nil
+                case 36, 76: // Return / Enter -> Play highlighted track
                     if !self.searchText.isEmpty && !self.filteredTracks.isEmpty {
                         self.playSelectedSearchResult()
-                        return nil
+                    } else {
+                        self.playSelectedOrHighlightedTrack()
                     }
+                    return nil
                 default:
-                    // Bare arrow keys (123, 124, 125, 126) fall through untouched to allow normal list navigation!
                     break
                 }
             }

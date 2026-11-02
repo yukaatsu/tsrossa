@@ -157,25 +157,29 @@ struct TsrossaMacApp: App {
 
                 Divider()
 
-                Button("Now Playing") {
-                    AppViewModel.shared.switchTab(to: .nowPlaying)
-                }
-                .keyboardShortcut("1", modifiers: .command)
-                
                 Button("Music Library") {
                     AppViewModel.shared.switchTab(to: .library)
                 }
-                .keyboardShortcut("2", modifiers: .command)
+                .keyboardShortcut("1", modifiers: .command)
                 
-                Button("Play Queue") {
+                Button("Playlists") {
                     AppViewModel.shared.switchTab(to: .playlist)
                 }
-                .keyboardShortcut("3", modifiers: .command)
+                .keyboardShortcut("2", modifiers: .command)
                 
                 Button("DAC & Settings") {
                     AppViewModel.shared.switchTab(to: .settings)
                 }
-                .keyboardShortcut("4", modifiers: .command)
+                .keyboardShortcut("3", modifiers: .command)
+                
+                Divider()
+
+                Button("Toggle Now Playing Stage") {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
+                        AppViewModel.shared.isNowPlayingExpanded.toggle()
+                    }
+                }
+                .keyboardShortcut("p", modifiers: .command)
                 
                 Divider()
                 

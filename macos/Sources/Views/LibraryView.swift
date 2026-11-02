@@ -19,126 +19,135 @@ public struct LibraryView: View {
         GeometryReader { geo in
             let availableWidth = geo.size.width
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    // Top Header: Title, Track count, and Sort Options
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(headerTitle)
-                                .font(.system(size: 22, weight: .bold))
-                                .foregroundStyle(.primary)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        // Top Header: Title, Track count, and Sort Options
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(headerTitle)
+                                    .font(.system(size: 22, weight: .bold))
+                                    .foregroundStyle(.primary)
 
-                            Text("\(tracks.count) tracks • \(durationText)")
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
+                                Text("\(tracks.count) tracks • \(durationText)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
 
-                        Spacer()
+                            Spacer()
 
-                        // Sort Order Menu
-                        Menu {
-                            ForEach(SortField.allCases) { field in
-                                Button(action: {
-                                    if vm.sortField == field {
-                                        vm.sortOrder = (vm.sortOrder == .ascending) ? .descending : .ascending
-                                    } else {
-                                        vm.sortField = field
-                                        vm.sortOrder = .ascending
-                                    }
-                                }) {
-                                    HStack {
-                                        Text(field.rawValue)
+                            // Sort Order Menu
+                            Menu {
+                                ForEach(SortField.allCases) { field in
+                                    Button(action: {
                                         if vm.sortField == field {
-                                            Image(systemName: vm.sortOrder == .ascending ? "chevron.up" : "chevron.down")
+                                            vm.sortOrder = (vm.sortOrder == .ascending) ? .descending : .ascending
+                                        } else {
+                                            vm.sortField = field
+                                            vm.sortOrder = .ascending
+                                        }
+                                    }) {
+                                        HStack {
+                                            Text(field.rawValue)
+                                            if vm.sortField == field {
+                                                Image(systemName: vm.sortOrder == .ascending ? "chevron.up" : "chevron.down")
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "arrow.up.arrow.down")
-                                    .font(.system(size: 11))
-                                Text("Sort: \(vm.sortField.rawValue)")
-                                    .font(.system(size: 11, weight: .medium))
-                                Image(systemName: vm.sortOrder == .ascending ? "chevron.up" : "chevron.down")
-                                    .font(.system(size: 9))
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color.white.opacity(0.08))
-                            .continuousSquircle(8)
-                        }
-                        .menuStyle(BorderlessButtonMenuStyle())
-                    }
-                    .padding(.top, 8)
-
-                    // Audiophile Filter Pills Row (Horizontally Scrollable)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            filterChip(title: "ALL", isSelected: vm.selectedFormatFilter == "ALL") {
-                                vm.selectedFormatFilter = "ALL"
-                            }
-                            filterChip(title: "FLAC", isSelected: vm.selectedFormatFilter == "FLAC") {
-                                vm.selectedFormatFilter = "FLAC"
-                            }
-                            filterChip(title: "WAV", isSelected: vm.selectedFormatFilter == "WAV") {
-                                vm.selectedFormatFilter = "WAV"
-                            }
-
-                            Divider()
-                                .frame(height: 16)
-
-                            filterChip(title: "24-bit Hi-Res", isSelected: vm.selectedBitDepthFilter == 24) {
-                                vm.selectedBitDepthFilter = (vm.selectedBitDepthFilter == 24) ? 0 : 24
-                            }
-                            filterChip(title: "192 kHz", isSelected: vm.selectedSampleRateFilter == 192000) {
-                                vm.selectedSampleRateFilter = (vm.selectedSampleRateFilter == 192000) ? 0 : 192000
-                            }
-                            filterChip(title: "96 kHz", isSelected: vm.selectedSampleRateFilter == 96000) {
-                                vm.selectedSampleRateFilter = (vm.selectedSampleRateFilter == 96000) ? 0 : 96000
-                            }
-
-                            if vm.hasActiveFilters {
-                                Button("Reset Filters") {
-                                    vm.selectedFormatFilter = "ALL"
-                                    vm.selectedBitDepthFilter = 0
-                                    vm.selectedSampleRateFilter = 0
-                                    vm.searchText = ""
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "arrow.up.arrow.down")
+                                        .font(.system(size: 11))
+                                    Text("Sort: \(vm.sortField.rawValue)")
+                                        .font(.system(size: 11, weight: .medium))
+                                    Image(systemName: vm.sortOrder == .ascending ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 9))
                                 }
-                                .font(.system(size: 11))
-                                .foregroundStyle(theme.primary)
-                                .padding(.leading, 4)
-                                .contentShape(Rectangle())
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.white.opacity(0.08))
+                                .continuousSquircle(8)
                             }
+                            .menuStyle(BorderlessButtonMenuStyle())
                         }
-                        .padding(.vertical, 2)
-                    }
+                        .padding(.top, 8)
 
-                    // Tracks List
-                    LazyVStack(spacing: 2) {
-                        if tracks.isEmpty {
-                            VStack(spacing: 8) {
-                                Image(systemName: "music.note")
-                                    .font(.system(size: 28))
-                                    .foregroundStyle(.secondary)
-                                Text("No tracks found")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(.primary)
-                                Text("Try adjusting your filters or choose another music folder.")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
+                        // Audiophile Filter Pills Row (Horizontally Scrollable)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                filterChip(title: "ALL", isSelected: vm.selectedFormatFilter == "ALL") {
+                                    vm.selectedFormatFilter = "ALL"
+                                }
+                                filterChip(title: "FLAC", isSelected: vm.selectedFormatFilter == "FLAC") {
+                                    vm.selectedFormatFilter = "FLAC"
+                                }
+                                filterChip(title: "WAV", isSelected: vm.selectedFormatFilter == "WAV") {
+                                    vm.selectedFormatFilter = "WAV"
+                                }
+
+                                Divider()
+                                    .frame(height: 16)
+
+                                filterChip(title: "24-bit Hi-Res", isSelected: vm.selectedBitDepthFilter == 24) {
+                                    vm.selectedBitDepthFilter = (vm.selectedBitDepthFilter == 24) ? 0 : 24
+                                }
+                                filterChip(title: "192 kHz", isSelected: vm.selectedSampleRateFilter == 192000) {
+                                    vm.selectedSampleRateFilter = (vm.selectedSampleRateFilter == 192000) ? 0 : 192000
+                                }
+                                filterChip(title: "96 kHz", isSelected: vm.selectedSampleRateFilter == 96000) {
+                                    vm.selectedSampleRateFilter = (vm.selectedSampleRateFilter == 96000) ? 0 : 96000
+                                }
+
+                                if vm.hasActiveFilters {
+                                    Button("Reset Filters") {
+                                        vm.selectedFormatFilter = "ALL"
+                                        vm.selectedBitDepthFilter = 0
+                                        vm.selectedSampleRateFilter = 0
+                                        vm.searchText = ""
+                                    }
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(theme.primary)
+                                    .padding(.leading, 4)
+                                    .contentShape(Rectangle())
+                                }
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 40)
-                        } else {
-                            ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
-                                trackRow(track: track, index: index + 1, width: availableWidth)
+                            .padding(.vertical, 2)
+                        }
+
+                        // Tracks List
+                        LazyVStack(spacing: 2) {
+                            if tracks.isEmpty {
+                                VStack(spacing: 8) {
+                                    Image(systemName: "music.note")
+                                        .font(.system(size: 28))
+                                        .foregroundStyle(.secondary)
+                                    Text("No tracks found")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                    Text("Try adjusting your filters or choose another music folder.")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 40)
+                            } else {
+                                ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+                                    trackRow(track: track, index: index + 1, width: availableWidth)
+                                        .id(track.path)
+                                }
                             }
                         }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 16)
+                }
+                .onChange(of: vm.selectedTrackPath) { newPath in
+                    guard let target = newPath else { return }
+                    withAnimation(.easeOut(duration: 0.16)) {
+                        proxy.scrollTo(target, anchor: .center)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
             }
         }
     }
@@ -179,11 +188,13 @@ public struct LibraryView: View {
 
     private func trackRow(track: TrackMetadata, index: Int, width: CGFloat) -> some View {
         let isCurrent = engine.currentTrack?.path == track.path
+        let isSelected = vm.selectedTrackPath == track.path
         let isLiked = vm.isLiked(track: track)
+
         return HStack(spacing: 12) {
-            trackIndexView(isCurrent: isCurrent, index: index)
+            trackIndexView(track: track, isCurrent: isCurrent, index: index)
             trackArtworkView(track: track)
-            trackInfoView(track: track, isCurrent: isCurrent)
+            trackInfoView(track: track, isCurrent: isCurrent, isSelected: isSelected)
             Spacer()
             if width > 600 {
                 Text(track.album)
@@ -210,13 +221,30 @@ public struct LibraryView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(isCurrent ? theme.primary.opacity(0.12) : Color.white.opacity(0.02))
+        .background {
+            if isCurrent {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(theme.primary.opacity(0.18))
+            } else if isSelected {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(theme.primary.opacity(0.35), lineWidth: 1)
+                    )
+            } else {
+                Color.white.opacity(0.02)
+            }
+        }
         .continuousSquircle(10)
         .contentShape(Rectangle())
         .onTapGesture {
-            engine.play(track: track)
+            vm.handleTrackRowClick(track: track)
         }
         .contextMenu {
+            Button("Play Track") {
+                engine.play(track: track)
+            }
             Button("Play Next") {
                 vm.upNextQueue.insert(track, at: 0)
             }
@@ -230,19 +258,25 @@ public struct LibraryView: View {
         }
     }
 
-    private func trackIndexView(isCurrent: Bool, index: Int) -> some View {
-        ZStack {
-            if isCurrent && engine.isPlaying && !engine.isPaused {
-                Image(systemName: "speaker.wave.2.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.primary)
-            } else {
-                Text("\(index)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
+    private func trackIndexView(track: TrackMetadata, isCurrent: Bool, index: Int) -> some View {
+        Button(action: {
+            engine.play(track: track)
+        }) {
+            ZStack {
+                if isCurrent && engine.isPlaying && !engine.isPaused {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.primary)
+                } else {
+                    Text("\(index)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
             }
+            .frame(width: 24, height: 24, alignment: .trailing)
+            .contentShape(Rectangle())
         }
-        .frame(width: 24, alignment: .trailing)
+        .buttonStyle(PlainButtonStyle())
     }
 
     private func trackArtworkView(track: TrackMetadata) -> some View {
@@ -264,10 +298,10 @@ public struct LibraryView: View {
         .continuousSquircle(6)
     }
 
-    private func trackInfoView(track: TrackMetadata, isCurrent: Bool) -> some View {
+    private func trackInfoView(track: TrackMetadata, isCurrent: Bool, isSelected: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(track.title)
-                .font(.system(size: 13, weight: isCurrent ? .bold : .regular))
+                .font(.system(size: 13, weight: isCurrent ? .bold : (isSelected ? .semibold : .regular)))
                 .foregroundStyle(isCurrent ? theme.primary : .primary)
                 .lineLimit(1)
 
