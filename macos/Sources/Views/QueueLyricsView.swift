@@ -4,6 +4,7 @@ public struct QueueLyricsView: View {
     @ObservedObject var vm = AppViewModel.shared
     @ObservedObject var engine = AudioEngine.shared
     public var theme: LiquidGlassTheme
+    @Namespace private var queueTabNamespace
 
     public init(theme: LiquidGlassTheme) {
         self.theme = theme
@@ -23,6 +24,7 @@ public struct QueueLyricsView: View {
                     }
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
                 }
             }
             .padding(.top, 4)
@@ -40,14 +42,26 @@ public struct QueueLyricsView: View {
 
     private func tabButton(title: String, tab: QueuePanelTab) -> some View {
         let isSelected = vm.queueTab == tab
-        return Button(action: { vm.queueTab = tab }) {
-            Text(title)
-                .font(.system(size: 12, weight: isSelected ? .bold : .medium))
-                .foregroundStyle(isSelected ? theme.onPrimary : .secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(isSelected ? theme.primary : Color.white.opacity(0.06))
-                .continuousSquircle(8)
+        return Button(action: {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) {
+                vm.queueTab = tab
+            }
+        }) {
+            ZStack {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(theme.primary)
+                        .matchedGeometryEffect(id: "queueTabPill", in: queueTabNamespace)
+                }
+                Text(title)
+                    .font(.system(size: 12, weight: isSelected ? .bold : .medium))
+                    .foregroundStyle(isSelected ? theme.onPrimary : .secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+            }
+            .background(isSelected ? Color.clear : Color.white.opacity(0.06))
+            .continuousSquircle(8)
+            .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -58,9 +72,9 @@ public struct QueueLyricsView: View {
                 // Priority Queue items
                 if !vm.upNextQueue.isEmpty {
                     HStack {
-                        Text("MANUAL QUEUE")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                        Text("Manual Queue")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(theme.primary)
                         Spacer()
                     }
                     .padding(.top, 4)
@@ -87,6 +101,8 @@ public struct QueueLyricsView: View {
                                 Image(systemName: "xmark")
                                     .font(.system(size: 10))
                                     .foregroundStyle(.secondary)
+                                    .frame(width: 24, height: 24)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(PlainButtonStyle())
                         }
@@ -98,8 +114,8 @@ public struct QueueLyricsView: View {
 
                 // Library upcoming items
                 HStack {
-                    Text("PLAYING FROM LIBRARY")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    Text("Playing from Library")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
@@ -129,6 +145,7 @@ public struct QueueLyricsView: View {
                             .padding(8)
                             .background(Color.white.opacity(0.02))
                             .continuousSquircle(8)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(PlainButtonStyle())
                     }

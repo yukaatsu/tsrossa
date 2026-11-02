@@ -28,6 +28,8 @@ public struct TrackDetailsModalSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(PlainButtonStyle())
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
             }
             .padding(20)
 
@@ -67,9 +69,9 @@ public struct TrackDetailsModalSheet: View {
 
                         // Technical Specifications Grid
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("TECHNICAL SPECIFICATIONS")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                            Text("Technical Specifications")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(theme.primary)
 
                             specRow(label: "Sample Rate", value: "\(track.sampleRate) Hz (\(track.sampleRate / 1000) kHz)")
                             specRow(label: "Bit Depth", value: "\(track.bitDepth)-Bit Integer")
@@ -89,8 +91,16 @@ public struct TrackDetailsModalSheet: View {
                 }
             }
         }
-        .frame(width: 480, height: 440)
-        .background(theme.surface.opacity(0.85))
+        .frame(minWidth: 340, idealWidth: 460, maxWidth: 520, minHeight: 280, idealHeight: 420, maxHeight: 520)
+        .background(theme.surface.opacity(0.94))
+        .background(.ultraThinMaterial)
+        .continuousSquircle(20)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.5), radius: 24, x: 0, y: 12)
+        .padding(24)
     }
 
     private func specRow(label: String, value: String) -> some View {

@@ -4,10 +4,19 @@ import AppKit
 import SwiftUI
 
 public enum AppTab: String, CaseIterable {
+    case nowPlaying = "Now Playing"
     case library = "Library"
     case playlist = "Playlist"
-    case nowPlaying = "Now Playing"
     case settings = "Settings"
+
+    public var index: Int {
+        switch self {
+        case .nowPlaying: return 0
+        case .library: return 1
+        case .playlist: return 2
+        case .settings: return 3
+        }
+    }
 }
 
 public struct UserPlaylist: Identifiable, Codable, Hashable {
@@ -83,6 +92,30 @@ public class AppViewModel: ObservableObject {
                 AudioEngine.shared.refreshDevices()
             }
         }
+    }
+    @Published public var tabTransitionDirection: Int = 1
+    @Published public var previousTab: AppTab = .nowPlaying
+    @Published public var showKeyboardShortcutsModal: Bool = false
+    @Published public var searchFocusTrigger: Int = 0
+    @Published public var hasAppeared: Bool = false
+
+    public func switchTab(to newTab: AppTab) {
+        guard activeTab != newTab else { return }
+        tabTransitionDirection = newTab.index > activeTab.index ? 1 : -1
+        previousTab = activeTab
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            activeTab = newTab
+        }
+        if newTab == .library {
+            selectedPlaylistId = nil
+        }
+    }
+
+    public func focusSearchBar() {
+        if activeTab != .library {
+            switchTab(to: .library)
+        }
+        searchFocusTrigger += 1
     }
     @Published public var tracks: [TrackMetadata] = []
     @Published public var searchText: String = "" {
@@ -852,7 +885,7 @@ public class AppViewModel: ObservableObject {
         let tabs = AppTab.allCases
         if let idx = tabs.firstIndex(of: activeTab) {
             let prev = (idx - 1 + tabs.count) % tabs.count
-            activeTab = tabs[prev]
+            switchTab(to: tabs[prev])
         }
     }
 
@@ -860,7 +893,7 @@ public class AppViewModel: ObservableObject {
         let tabs = AppTab.allCases
         if let idx = tabs.firstIndex(of: activeTab) {
             let next = (idx + 1) % tabs.count
-            activeTab = tabs[next]
+            switchTab(to: tabs[next])
         }
     }
     
@@ -1001,16 +1034,24 @@ public class AppViewModel: ObservableObject {
                     self.isTheaterMode = false
                     return nil
                 }
+                if self.showKeyboardShortcutsModal {
+                    withAnimation { self.showKeyboardShortcutsModal = false }
+                    return nil
+                }
+                if self.showTrackDetailsModal {
+                    withAnimation { self.showTrackDetailsModal = false }
+                    return nil
+                }
                 if self.showNewPlaylistModal {
-                    self.showNewPlaylistModal = false
+                    withAnimation { self.showNewPlaylistModal = false }
                     return nil
                 }
                 if self.showSaveQueueModal {
-                    self.showSaveQueueModal = false
+                    withAnimation { self.showSaveQueueModal = false }
                     return nil
                 }
                 if self.showTelemetry {
-                    self.showTelemetry = false
+                    withAnimation { self.showTelemetry = false }
                     return nil
                 }
             }
@@ -1020,23 +1061,29 @@ public class AppViewModel: ObservableObject {
             
             if isCommand {
                 switch event.keyCode {
-                case 3: // Cmd + F -> Toggle Theater Mode
-                    self.isTheaterMode.toggle()
+                case 3: // Cmd + F -> Focus Search Omnibar
+                    self.focusSearchBar()
                     return nil
                 case 18: // Cmd + 1 -> Now Playing
-                    self.activeTab = .nowPlaying
+                    self.switchTab(to: .nowPlaying)
                     return nil
                 case 19: // Cmd + 2 -> Library
-                    self.activeTab = .library
+                    self.switchTab(to: .library)
                     return nil
                 case 20: // Cmd + 3 -> Play Queue
-                    self.activeTab = .playlist
+                    self.switchTab(to: .playlist)
                     return nil
                 case 21: // Cmd + 4 -> Settings
-                    self.activeTab = .settings
+                    self.switchTab(to: .settings)
+                    return nil
+                case 34: // Cmd + I -> Track Details / Info
+                    withAnimation { self.showTrackDetailsModal.toggle() }
+                    return nil
+                case 44: // Cmd + / -> Keyboard Shortcuts Help
+                    withAnimation { self.showKeyboardShortcutsModal.toggle() }
                     return nil
                 case 32: // Cmd + U -> Audio Pipeline Diagnostics
-                    self.showTelemetry.toggle()
+                    withAnimation { self.showTelemetry.toggle() }
                     return nil
                 case 33: // Cmd + [ -> Previous Tab
                     self.selectPreviousTab()

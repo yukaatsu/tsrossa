@@ -88,9 +88,20 @@ public struct LiquidGlassModifier: ViewModifier {
                         shape.fill(swiftUIMaterial)
 
                         // Layer 2: Chromatic Artwork Refraction Tint
-                        shape.fill(
-                            tint.opacity((isDark ? 0.11 : 0.08) * activeFactor + hoverBoost)
-                        )
+                        if role == .navigationSidebar {
+                            LinearGradient(
+                                colors: [
+                                    tint.opacity((isDark ? 0.22 : 0.16) * activeFactor),
+                                    tint.opacity((isDark ? 0.09 : 0.06) * activeFactor)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        } else {
+                            shape.fill(
+                                tint.opacity((isDark ? 0.14 : 0.09) * activeFactor + hoverBoost)
+                            )
+                        }
 
                         // Layer 3: Top Surface Specular Sheen
                         shape.fill(
@@ -324,6 +335,33 @@ public final class WindowZoomManager: NSObject, NSWindowDelegate {
             }
             return event
         }
+    }
+}
+
+public struct TsrossaInteractiveRowStyle: ButtonStyle {
+    public var isSelected: Bool = false
+    public var activeTint: Color = .pink
+    public var cornerRadius: CGFloat = 8
+
+    public init(isSelected: Bool = false, activeTint: Color = .pink, cornerRadius: CGFloat = 8) {
+        self.isSelected = isSelected
+        self.activeTint = activeTint
+        self.cornerRadius = cornerRadius
+    }
+
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(
+                        isSelected ? activeTint.opacity(0.18) :
+                        (configuration.isPressed ? Color.white.opacity(0.10) : Color.clear)
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
+            .animation(.spring(response: 0.18, dampingFraction: 0.8), value: configuration.isPressed)
+            .animation(.spring(response: 0.24, dampingFraction: 0.8), value: isSelected)
     }
 }
 

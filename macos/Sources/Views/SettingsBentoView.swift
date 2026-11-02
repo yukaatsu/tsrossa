@@ -24,9 +24,9 @@ public struct SettingsBentoView: View {
                 }
                 .padding(.top, 8)
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 310), spacing: 16)], spacing: 16) {
                     // CARD 1: CoreAudio Output Device & Hog Mode
-                    bentoCard(title: "COREAUDIO HARDWARE", icon: "hifispeaker.fill") {
+                    bentoCard(title: "CoreAudio Endpoint & Clock", icon: "hifispeaker.fill") {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Active Output Device")
                                 .font(.system(size: 11, weight: .medium))
@@ -52,6 +52,7 @@ public struct SettingsBentoView: View {
                                     .padding(8)
                                     .background(dev.id == engine.selectedDeviceId ? theme.primary.opacity(0.12) : Color.white.opacity(0.03))
                                     .continuousSquircle(8)
+                                    .contentShape(Rectangle())
                                 }
                                 .buttonStyle(PlainButtonStyle())
                             }
@@ -69,7 +70,7 @@ public struct SettingsBentoView: View {
                     }
 
                     // CARD 2: Engine Performance & Jitter Defense
-                    bentoCard(title: "MEMORY & JITTER DEFENSE", icon: "memorychip") {
+                    bentoCard(title: "Memory & Jitter Defense", icon: "memorychip") {
                         VStack(alignment: .leading, spacing: 10) {
                             Toggle("POSIX mlock() RAM Playback", isOn: $vm.isRamPlayback)
                                 .font(.system(size: 12))
@@ -86,9 +87,9 @@ public struct SettingsBentoView: View {
                                 .foregroundStyle(.secondary)
 
                             Picker("", selection: $vm.bufferProfile) {
-                                Text("64ms Ultra-Low Latency").tag("64ms Ultra Low")
+                                Text("64ms Low Latency").tag("64ms Ultra Low")
                                 Text("160ms Balanced").tag("160ms Balanced")
-                                Text("192ms Jitter Safe (Studio)").tag("192ms Jitter Safe")
+                                Text("192ms Studio Safe").tag("192ms Jitter Safe")
                             }
                             .pickerStyle(RadioGroupPickerStyle())
                             .font(.system(size: 11))
@@ -101,51 +102,73 @@ public struct SettingsBentoView: View {
                     }
 
                     // CARD 3: Liquid Glass Appearance
-                    bentoCard(title: "LIQUID GLASS DESIGN", icon: "sparkles") {
-                        VStack(alignment: .leading, spacing: 10) {
+                    bentoCard(title: "Liquid Glass Appearance", icon: "sparkles") {
+                        VStack(alignment: .leading, spacing: 12) {
                             Text("Theme Mode")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(.secondary)
 
                             Picker("", selection: $vm.themeMode) {
-                                ForEach(AppThemeMode.allCases) { mode in
-                                    Text(mode.rawValue).tag(mode.rawValue)
-                                }
+                                Text("Dark Glass").tag("DARK")
+                                Text("Light Glass").tag("LIGHT")
                             }
                             .pickerStyle(SegmentedPickerStyle())
 
-                            Divider().padding(.vertical, 4)
+                            Divider().padding(.vertical, 2)
 
                             Text("Background Canvas")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(.secondary)
 
                             Picker("", selection: $vm.bgCanvasMode) {
-                                ForEach(BackgroundCanvasMode.allCases) { mode in
-                                    Text(mode.rawValue).tag(mode.rawValue)
-                                }
+                                Text("Refraction").tag("DYNAMIC")
+                                Text("Mesh Aura").tag("AURA")
+                                Text("Minimal").tag("BLACK")
                             }
                             .pickerStyle(SegmentedPickerStyle())
 
-                            Divider().padding(.vertical, 4)
+                            Divider().padding(.vertical, 2)
 
                             Text("Accent Palette")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(.secondary)
 
-                            Picker("", selection: $vm.accentColorMode) {
-                                Text("DYNAMIC").tag("DYNAMIC")
-                                Text("ROSE").tag("ROSE")
-                                Text("MATCHA").tag("MATCHA")
-                                Text("GOLD").tag("GOLD")
-                                Text("CYAN").tag("CYAN")
+                            HStack(spacing: 12) {
+                                ForEach(ThemePaletteOption.allOptions) { opt in
+                                    Button(action: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                            vm.accentColorMode = opt.id
+                                        }
+                                    }) {
+                                        VStack(spacing: 4) {
+                                            ZStack {
+                                                Circle()
+                                                    .fill(opt.color)
+                                                    .frame(width: 24, height: 24)
+
+                                                if vm.accentColorMode == opt.id {
+                                                    Circle()
+                                                        .strokeBorder(Color.white, lineWidth: 2)
+                                                        .frame(width: 30, height: 30)
+                                                }
+                                            }
+                                            .frame(width: 32, height: 32)
+
+                                            Text(opt.name.components(separatedBy: " ").first ?? opt.name)
+                                                .font(.system(size: 9.5, weight: vm.accentColorMode == opt.id ? .bold : .regular))
+                                                .foregroundStyle(vm.accentColorMode == opt.id ? .primary : .secondary)
+                                        }
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                }
                             }
-                            .pickerStyle(SegmentedPickerStyle())
+                            .padding(.top, 2)
                         }
                     }
 
                     // CARD 4: Music Library & Updates
-                    bentoCard(title: "LIBRARY & APPLICATION", icon: "folder.badge.gearshape") {
+                    bentoCard(title: "Library & Application", icon: "folder.badge.gearshape") {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Music Directory")
                                 .font(.system(size: 11, weight: .medium))
@@ -169,6 +192,7 @@ public struct SettingsBentoView: View {
                                 .padding(.vertical, 6)
                                 .background(Color.white.opacity(0.08))
                                 .continuousSquircle(8)
+                                .contentShape(Rectangle())
 
                                 Button("Rescan Library") {
                                     vm.rescanCurrentFolder()
@@ -178,6 +202,7 @@ public struct SettingsBentoView: View {
                                 .padding(.vertical, 6)
                                 .background(Color.white.opacity(0.08))
                                 .continuousSquircle(8)
+                                .contentShape(Rectangle())
                             }
 
                             Toggle("Auto-create Folder as Playlist", isOn: $vm.makeFolderAsPlaylist)
@@ -204,6 +229,7 @@ public struct SettingsBentoView: View {
                                         .padding(.vertical, 5)
                                         .background(theme.primary.opacity(0.12))
                                         .continuousSquircle(6)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(PlainButtonStyle())
                             }
@@ -212,7 +238,7 @@ public struct SettingsBentoView: View {
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, 90) // Room for floating transport capsule
+            .padding(.bottom, 16)
         }
     }
 
@@ -223,8 +249,8 @@ public struct SettingsBentoView: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(theme.primary)
                 Text(title)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.primary)
                 Spacer()
             }
 

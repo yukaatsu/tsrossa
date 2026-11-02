@@ -30,6 +30,28 @@ public enum BackgroundCanvasMode: String, Codable, CaseIterable, Identifiable {
     public var id: String { rawValue }
 }
 
+public struct ThemePaletteOption: Identifiable, Hashable {
+    public let id: String
+    public let name: String
+    public let color: Color
+    public let nsColor: NSColor
+
+    public static func == (lhs: ThemePaletteOption, rhs: ThemePaletteOption) -> Bool {
+        lhs.id == rhs.id
+    }
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
+    public static let allOptions: [ThemePaletteOption] = [
+        ThemePaletteOption(id: "DYNAMIC", name: "Dynamic Artwork", color: Color(red: 0.95, green: 0.25, blue: 0.45), nsColor: NSColor(srgbRed: 0.95, green: 0.25, blue: 0.45, alpha: 1.0)),
+        ThemePaletteOption(id: "ROSE", name: "Rose Ruby", color: Color(red: 1.0, green: 0.18, blue: 0.33), nsColor: NSColor(srgbRed: 1.0, green: 0.18, blue: 0.33, alpha: 1.0)),
+        ThemePaletteOption(id: "MATCHA", name: "Matcha Emerald", color: Color(red: 0.62, green: 0.82, blue: 0.38), nsColor: NSColor(srgbRed: 0.62, green: 0.82, blue: 0.38, alpha: 1.0)),
+        ThemePaletteOption(id: "GOLD", name: "Studio Gold", color: Color(red: 1.0, green: 0.84, blue: 0.0), nsColor: NSColor(srgbRed: 1.0, green: 0.84, blue: 0.0, alpha: 1.0)),
+        ThemePaletteOption(id: "CYAN", name: "Audiophile Cyan", color: Color(red: 0.0, green: 0.90, blue: 1.0), nsColor: NSColor(srgbRed: 0.0, green: 0.90, blue: 1.0, alpha: 1.0))
+    ]
+}
+
 public enum AccentColorMode: String, Codable, CaseIterable, Identifiable {
     case dynamicArtwork = "Dynamic Artwork"
     case systemBlue = "Apple Blue"
@@ -163,7 +185,6 @@ public struct LiquidGlassTheme: Equatable {
 
         let hue = hsl.h
         let sat = min(1.0, max(0.40, hsl.s))
-        let neutralSat = min(0.12, sat * 0.22)
 
         if isDark {
             self.primary = hslToColor(h: hue, s: min(0.85, sat * 1.05), l: 0.76)
@@ -180,15 +201,16 @@ public struct LiquidGlassTheme: Equatable {
             self.tertiary = hslToColor(h: tertHue, s: sat * 0.70, l: 0.80)
             self.tertiaryContainer = hslToColor(h: tertHue, s: sat * 0.50, l: 0.28)
 
-            self.surface = hslToColor(h: hue, s: neutralSat, l: 0.065)
-            self.surfaceContainerLowest = hslToColor(h: hue, s: neutralSat, l: 0.038)
-            self.surfaceContainerLow = hslToColor(h: hue, s: neutralSat, l: 0.085)
-            self.surfaceContainer = hslToColor(h: hue, s: neutralSat, l: 0.115)
-            self.surfaceContainerHigh = hslToColor(h: hue, s: neutralSat, l: 0.155)
-            self.surfaceContainerHighest = hslToColor(h: hue, s: neutralSat, l: 0.205)
+            let surfaceSat = min(0.32, max(0.14, sat * 0.40))
+            self.surface = hslToColor(h: hue, s: surfaceSat, l: 0.082)
+            self.surfaceContainerLowest = hslToColor(h: hue, s: surfaceSat, l: 0.045)
+            self.surfaceContainerLow = hslToColor(h: hue, s: surfaceSat, l: 0.095)
+            self.surfaceContainer = hslToColor(h: hue, s: surfaceSat, l: 0.13)
+            self.surfaceContainerHigh = hslToColor(h: hue, s: surfaceSat, l: 0.17)
+            self.surfaceContainerHighest = hslToColor(h: hue, s: surfaceSat, l: 0.22)
 
-            self.outline = hslToColor(h: hue, s: neutralSat * 1.5, l: 0.32)
-            self.outlineVariant = hslToColor(h: hue, s: neutralSat * 1.2, l: 0.18)
+            self.outline = hslToColor(h: hue, s: surfaceSat * 1.5, l: 0.32)
+            self.outlineVariant = hslToColor(h: hue, s: surfaceSat * 1.2, l: 0.18)
 
             self.textPrimary = Color(white: 0.96)
             self.textSecondary = Color(white: 0.65)
@@ -209,15 +231,16 @@ public struct LiquidGlassTheme: Equatable {
             self.tertiary = hslToColor(h: tertHue, s: sat * 0.70, l: 0.35)
             self.tertiaryContainer = hslToColor(h: tertHue, s: sat * 0.50, l: 0.90)
 
-            self.surface = hslToColor(h: hue, s: neutralSat, l: 0.96)
+            let lightSurfaceSat = min(0.24, max(0.10, sat * 0.25))
+            self.surface = hslToColor(h: hue, s: lightSurfaceSat, l: 0.95)
             self.surfaceContainerLowest = Color.white
-            self.surfaceContainerLow = hslToColor(h: hue, s: neutralSat, l: 0.94)
-            self.surfaceContainer = hslToColor(h: hue, s: neutralSat, l: 0.90)
-            self.surfaceContainerHigh = hslToColor(h: hue, s: neutralSat, l: 0.86)
-            self.surfaceContainerHighest = hslToColor(h: hue, s: neutralSat, l: 0.82)
+            self.surfaceContainerLow = hslToColor(h: hue, s: lightSurfaceSat, l: 0.93)
+            self.surfaceContainer = hslToColor(h: hue, s: lightSurfaceSat, l: 0.89)
+            self.surfaceContainerHigh = hslToColor(h: hue, s: lightSurfaceSat, l: 0.85)
+            self.surfaceContainerHighest = hslToColor(h: hue, s: lightSurfaceSat, l: 0.81)
 
-            self.outline = hslToColor(h: hue, s: neutralSat * 1.5, l: 0.65)
-            self.outlineVariant = hslToColor(h: hue, s: neutralSat * 1.2, l: 0.80)
+            self.outline = hslToColor(h: hue, s: lightSurfaceSat * 1.5, l: 0.65)
+            self.outlineVariant = hslToColor(h: hue, s: lightSurfaceSat * 1.2, l: 0.80)
 
             self.textPrimary = Color(white: 0.10)
             self.textSecondary = Color(white: 0.38)

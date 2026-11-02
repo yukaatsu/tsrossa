@@ -5,8 +5,11 @@ public struct TelemetryModalView: View {
     @ObservedObject var engine = AudioEngine.shared
     @ObservedObject var vm = AppViewModel.shared
     @ObservedObject var logger = AppLogger.shared
+    public var theme: LiquidGlassTheme?
 
-    public init() {}
+    public init(theme: LiquidGlassTheme? = nil) {
+        self.theme = theme
+    }
 
     private var snap: HardwareTelemetrySnapshot {
         engine.telemetrySnapshot
@@ -27,15 +30,8 @@ public struct TelemetryModalView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Drag Handle Indicator
-            Capsule()
-                .fill(Color.white.opacity(0.2))
-                .frame(width: 38, height: 4)
-                .padding(.top, 12)
-                .padding(.bottom, 14)
-
-            // Header
-            HStack(alignment: .top) {
+            // Header (Native macOS Dialog Header - No iOS drag handle)
+            HStack(alignment: .center) {
                 HStack(spacing: 10) {
                     Circle()
                         .fill(snap.hogModeStatus == "EXCLUSIVE_HOG" ? Color.green : Color.orange)
@@ -64,26 +60,29 @@ public struct TelemetryModalView: View {
                     }
                 }
                 .buttonStyle(PlainButtonStyle())
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
             }
             .padding(.horizontal, 20)
+            .padding(.top, 20)
             .padding(.bottom, 16)
 
             // Quick Diagnostic Metric Tiles (Real C++ CoreAudio HAL Metrics)
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 metricTile(
-                    title: "SIGNAL PATH",
+                    title: "Signal Path",
                     value: snap.streamIsInteger ? "32-Bit Int Direct" : "64-Bit DSP -> Float",
                     detail: snap.streamIsInteger ? "Bit-Perfect memcpy" : (snap.ditherEnabled ? "TPDF Dither ON" : "No Dither"),
                     isPositive: snap.streamIsInteger
                 )
                 metricTile(
-                    title: "HARDWARE RATE",
+                    title: "Hardware Rate",
                     value: snap.actualHardwareSampleRate > 0 ? "\(Int(snap.actualHardwareSampleRate)) Hz" : "Standby",
                     detail: snap.sampleRate > 0 ? "Stream: \(snap.sampleRate) Hz" : "No active stream",
                     isPositive: snap.actualHardwareSampleRate > 0 && UInt32(snap.actualHardwareSampleRate) == snap.sampleRate
                 )
                 metricTile(
-                    title: "RAM BUFFER",
+                    title: "RAM Buffer",
                     value: String(format: "%.1f%%", snap.ringBufferFillPercent),
                     detail: snap.isMemoryLocked ? "mlock() Active" : "Dynamic Virtual RAM",
                     isPositive: snap.isMemoryLocked
@@ -105,6 +104,7 @@ public struct TelemetryModalView: View {
                     .frame(height: 36)
                     .background(Color.white.opacity(0.12))
                     .continuousSquircle(18)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
 
@@ -119,6 +119,7 @@ public struct TelemetryModalView: View {
                     .frame(height: 36)
                     .background(Color.white.opacity(0.12))
                     .continuousSquircle(18)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
 
@@ -132,6 +133,7 @@ public struct TelemetryModalView: View {
                     .frame(width: 80, height: 36)
                     .background(Color.white.opacity(0.08))
                     .continuousSquircle(18)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
             }
@@ -140,9 +142,9 @@ public struct TelemetryModalView: View {
 
             // Category Filter Pills & Search
             HStack(spacing: 8) {
-                categoryPill(title: "ALL", category: nil)
+                categoryPill(title: "All", category: nil)
                 ForEach(LogCategory.allCases, id: \.self) { cat in
-                    categoryPill(title: cat.rawValue, category: cat)
+                    categoryPill(title: cat.rawValue.capitalized, category: cat)
                 }
                 Spacer()
                 HStack(spacing: 4) {
@@ -187,20 +189,22 @@ public struct TelemetryModalView: View {
                 .background(Color.black.opacity(0.35))
             }
         }
-        .frame(width: 620, height: 560)
-        .background(TsrossaColors.deepNavy)
+        .frame(minWidth: 380, idealWidth: 620, maxWidth: 660, minHeight: 340, idealHeight: 540, maxHeight: 600)
+        .background(theme?.surface.opacity(0.94) ?? TsrossaColors.deepNavy)
+        .background(.ultraThinMaterial)
         .continuousSquircle(24)
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.7), radius: 30, x: 0, y: 15)
+        .padding(24)
     }
 
     private func metricTile(title: String, value: String, detail: String, isPositive: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundColor(TsrossaColors.textSecondary)
             Text(value)
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -224,8 +228,9 @@ public struct TelemetryModalView: View {
                 .foregroundColor(vm.telemetrySelectedCategory == category ? Color.white : Color.white.opacity(0.5))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(vm.telemetrySelectedCategory == category ? Color.white.opacity(0.2) : Color.clear)
+                .background(vm.telemetrySelectedCategory == category ? (theme?.primary.opacity(0.4) ?? Color.white.opacity(0.2)) : Color.clear)
                 .continuousSquircle(6)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
     }

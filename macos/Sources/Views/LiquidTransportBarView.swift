@@ -12,74 +12,86 @@ public struct LiquidTransportBarView: View {
     public var body: some View {
         HStack(spacing: 12) {
             // Left: Concentric Squircle Mini Artwork & Track Info
-            HStack(spacing: 12) {
-                if let track = engine.currentTrack {
-                    Group {
-                        if let art = track.artwork {
-                            Image(nsImage: art)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            ZStack {
-                                Color.white.opacity(0.08)
-                                Image(systemName: "music.note")
-                                    .font(.system(size: 16, weight: .semibold))
+            Button(action: {
+                vm.switchTab(to: .nowPlaying)
+            }) {
+                HStack(spacing: 12) {
+                    if let track = engine.currentTrack {
+                        Group {
+                            if let art = track.artwork {
+                                Image(nsImage: art)
+                                    .resizable()
+                                    .scaledToFill()
+                            } else {
+                                ZStack {
+                                    Color.white.opacity(0.08)
+                                    Image(systemName: "music.note")
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .frame(width: 44, height: 44)
+                        .continuousSquircle(ConcentricSquircle.innerRadius(outerRadius: 24, padding: 8))
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(track.title)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+
+                            Text(track.artist)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        HStack(spacing: 10) {
+                            TsrossaBrandIcon(size: 38, cornerRadius: 10)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("TSRossa")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(.primary)
+                                Text("Ready to Play")
+                                    .font(.system(size: 11))
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(width: 44, height: 44)
-                    .continuousSquircle(ConcentricSquircle.innerRadius(outerRadius: 24, padding: 8))
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(track.title)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-
-                        Text(track.artist)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    HStack(spacing: 10) {
-                        TsrossaBrandIcon(size: 38, cornerRadius: 10)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("TSRossa")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(.primary)
-                            Text("Ready to Play")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .contentShape(Rectangle())
             }
-            .frame(width: 210, alignment: .leading)
+            .buttonStyle(PlainButtonStyle())
+            .frame(minWidth: 190, idealWidth: 220, maxWidth: 260, alignment: .leading)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 8)
 
             // Center: Playback Controls & Scrubber Timeline
             VStack(spacing: 4) {
-                HStack(spacing: 18) {
+                HStack(spacing: 14) {
                     // Shuffle Button
                     Button(action: { vm.isShuffle.toggle() }) {
                         Image(systemName: "shuffle")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(vm.isShuffle ? theme.primary : .secondary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(TsrossaScaleButtonStyle())
+                    .help("Toggle Shuffle (⌘S)")
 
                     // Previous Track Button
                     Button(action: { vm.playPreviousTrack() }) {
                         Image(systemName: "backward.fill")
                             .font(.system(size: 14))
                             .foregroundStyle(.primary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(TsrossaScaleButtonStyle())
+                    .help("Previous Track (⌘←)")
 
                     // Play / Pause Hero Button
                     Button(action: { engine.togglePlayPause() }) {
@@ -92,16 +104,22 @@ public struct LiquidTransportBarView: View {
                                 .foregroundColor(theme.onPrimary)
                                 .offset(x: engine.isPlaying && !engine.isPaused ? 0 : 1)
                         }
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
                     }
                     .buttonStyle(TsrossaScaleButtonStyle())
+                    .help("Play / Pause (Space)")
 
                     // Next Track Button
                     Button(action: { vm.playNextTrack(userInitiated: true) }) {
                         Image(systemName: "forward.fill")
                             .font(.system(size: 14))
                             .foregroundStyle(.primary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(TsrossaScaleButtonStyle())
+                    .help("Next Track (⌘→)")
 
                     // Repeat 3-State Button
                     Button(action: {
@@ -116,20 +134,23 @@ public struct LiquidTransportBarView: View {
                         Image(systemName: vm.repeatMode == .one ? "repeat.1" : "repeat")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(vm.repeatMode != .off ? theme.primary : .secondary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(TsrossaScaleButtonStyle())
+                    .help("Toggle Repeat (⌘T)")
                 }
 
                 // Scrubber View
                 PlaybackScrubberView(accentColor: theme.primary)
                     .frame(maxWidth: 440)
             }
-            .frame(minWidth: 240, maxWidth: 480)
+            .frame(minWidth: 240, maxWidth: 440)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 8)
 
             // Right: Hardware Status Badge & Studio Volume Slider
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 if let track = engine.currentTrack {
                     VStack(alignment: .trailing, spacing: 2) {
                         HStack(spacing: 4) {
@@ -139,11 +160,15 @@ public struct LiquidTransportBarView: View {
                             Text(engine.telemetrySnapshot.streamIsInteger ? "BIT-PERFECT" : "DSP ACTIVE")
                                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                         Text("\(track.sampleRate / 1000) kHz / \(track.bitDepth)-bit")
                             .font(.system(size: 10, design: .monospaced))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -164,17 +189,17 @@ public struct LiquidTransportBarView: View {
                         ),
                         in: -60...0
                     )
-                    .frame(width: 80)
+                    .frame(width: 68)
                     .tint(theme.primary)
 
                     Text("\(vm.volumeDb) dB")
                         .font(.system(size: 10, design: .monospaced))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
-                        .frame(width: 36, alignment: .trailing)
+                        .frame(width: 38, alignment: .trailing)
                 }
             }
-            .frame(width: 210, alignment: .trailing)
+            .frame(minWidth: 220, idealWidth: 260, maxWidth: 280, alignment: .trailing)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)

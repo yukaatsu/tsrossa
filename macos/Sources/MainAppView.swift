@@ -86,7 +86,7 @@ public struct MainAppView: View {
                     .onTapGesture { vm.showNewPlaylistModal = false }
 
                 CreatePlaylistModalSheet(theme: theme)
-                    .transition(.scale.combined(with: .opacity))
+                    .transition(.scale(scale: 0.95).combined(with: .opacity))
             }
 
             if vm.showTrackDetailsModal {
@@ -95,8 +95,7 @@ public struct MainAppView: View {
                     .onTapGesture { vm.showTrackDetailsModal = false }
 
                 TrackDetailsModalSheet(theme: theme)
-                    .continuousSquircle(24)
-                    .transition(.scale.combined(with: .opacity))
+                    .transition(.scale(scale: 0.95).combined(with: .opacity))
             }
 
             if vm.showTelemetry {
@@ -104,8 +103,17 @@ public struct MainAppView: View {
                     .ignoresSafeArea()
                     .onTapGesture { vm.showTelemetry = false }
 
-                TelemetryModalView()
-                    .transition(.scale.combined(with: .opacity))
+                TelemetryModalView(theme: theme)
+                    .transition(.scale(scale: 0.95).combined(with: .opacity))
+            }
+
+            if vm.showKeyboardShortcutsModal {
+                Color.black.opacity(0.65)
+                    .ignoresSafeArea()
+                    .onTapGesture { vm.showKeyboardShortcutsModal = false }
+
+                KeyboardShortcutsModalSheet(theme: theme)
+                    .transition(.scale(scale: 0.95).combined(with: .opacity))
             }
 
             // Layer 3: Toast Notification Pill
@@ -137,23 +145,55 @@ public struct MainAppView: View {
             )
         }
         .frame(minWidth: 920, minHeight: 620)
+        .preferredColorScheme(isEffectiveDark ? .dark : .light)
+        .opacity(vm.hasAppeared ? 1 : 0)
+        .scaleEffect(vm.hasAppeared ? 1 : 0.985)
         .tint(theme.primary)
         .onAppear {
             vm.loadInitialMusicDirectory()
+            withAnimation(.easeOut(duration: 0.35)) {
+                vm.hasAppeared = true
+            }
         }
     }
 
     @ViewBuilder
     private func workspaceContent(theme: LiquidGlassTheme) -> some View {
-        switch vm.activeTab {
-        case .nowPlaying:
-            NowPlayingSplitView(theme: theme)
-        case .library:
-            LibraryView(theme: theme)
-        case .playlist:
-            LibraryView(theme: theme, playlistsOnlyMode: true)
-        case .settings:
-            SettingsBentoView(theme: theme)
+        ZStack {
+            switch vm.activeTab {
+            case .nowPlaying:
+                NowPlayingSplitView(theme: theme)
+                    .id(AppTab.nowPlaying)
+                    .transition(contextualTabTransition)
+            case .library:
+                LibraryView(theme: theme)
+                    .id(AppTab.library)
+                    .transition(contextualTabTransition)
+            case .playlist:
+                LibraryView(theme: theme, playlistsOnlyMode: true)
+                    .id(AppTab.playlist)
+                    .transition(contextualTabTransition)
+            case .settings:
+                SettingsBentoView(theme: theme)
+                    .id(AppTab.settings)
+                    .transition(contextualTabTransition)
+            }
+        }
+        .animation(.spring(response: 0.36, dampingFraction: 0.82), value: vm.activeTab)
+    }
+
+    private var contextualTabTransition: AnyTransition {
+        if vm.activeTab == .nowPlaying {
+            return .asymmetric(
+                insertion: .scale(scale: 0.96).combined(with: .opacity),
+                removal: .scale(scale: 1.04).combined(with: .opacity)
+            )
+        } else {
+            let edge: Edge = vm.tabTransitionDirection >= 0 ? .bottom : .top
+            return .asymmetric(
+                insertion: .move(edge: edge).combined(with: .opacity),
+                removal: .move(edge: edge == .bottom ? .top : .bottom).combined(with: .opacity)
+            )
         }
     }
 }

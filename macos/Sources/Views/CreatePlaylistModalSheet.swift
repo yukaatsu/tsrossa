@@ -12,11 +12,11 @@ public struct CreatePlaylistModalSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("NEW PLAYLIST")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    Text("New Playlist")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(theme.primary)
                     Text("Create Playlist or Smart Filter")
-                        .font(.system(size: 18, weight: .bold))
+                        .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(.primary)
                 }
                 Spacer()
@@ -26,14 +26,16 @@ public struct CreatePlaylistModalSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(PlainButtonStyle())
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("PLAYLIST NAME")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                Text("Playlist Name")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
 
-                TextField("e.g., Favorites, Late Night, Polyphia...", text: $vm.newPlaylistName)
+                TextField("e.g. Audiophile Reference, Late Night Jazz...", text: $vm.newPlaylistName)
                     .textFieldStyle(PlainTextFieldStyle())
                     .padding(10)
                     .background(Color.white.opacity(0.06))
@@ -41,8 +43,8 @@ public struct CreatePlaylistModalSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("SMART FILTER KEYWORD (OPTIONAL)")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                Text("Smart Filter Keyword (Optional)")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
 
                 TextField("e.g. artist or album keyword to auto-match...", text: $vm.newPlaylistKeyword)
@@ -61,6 +63,7 @@ public struct CreatePlaylistModalSheet: View {
                 .padding(.vertical, 8)
                 .background(Color.white.opacity(0.08))
                 .continuousSquircle(8)
+                .contentShape(Rectangle())
 
                 Spacer()
 
@@ -73,12 +76,20 @@ public struct CreatePlaylistModalSheet: View {
                 .background(theme.primary)
                 .foregroundStyle(theme.onPrimary)
                 .continuousSquircle(8)
+                .contentShape(Rectangle())
             }
             .padding(.top, 8)
         }
-        .padding(24)
-        .frame(width: 440)
-        .background(theme.surface.opacity(0.92))
+        .padding(22)
+        .frame(minWidth: 320, idealWidth: 420, maxWidth: 460)
+        .background(theme.surface.opacity(0.94))
+        .background(.ultraThinMaterial)
         .continuousSquircle(20)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.5), radius: 24, x: 0, y: 12)
+        .padding(24)
     }
 }

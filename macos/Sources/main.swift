@@ -40,6 +40,37 @@ struct TsrossaMacApp: App {
                 .keyboardShortcut("z", modifiers: [.command, .option])
             }
 
+            CommandMenu("File") {
+                Button("Open Music Directory...") {
+                    AppViewModel.shared.openFolderPicker()
+                }
+                .keyboardShortcut("o", modifiers: .command)
+
+                Button("New Playlist...") {
+                    AppViewModel.shared.openCreatePlaylistModal()
+                }
+                .keyboardShortcut("n", modifiers: .command)
+
+                Button("Rescan Library") {
+                    AppViewModel.shared.rescanCurrentFolder()
+                }
+                .keyboardShortcut("r", modifiers: .command)
+
+                Divider()
+
+                Button("Get Audio Track Info") {
+                    AppViewModel.shared.showTrackDetailsModal.toggle()
+                }
+                .keyboardShortcut("i", modifiers: .command)
+            }
+
+            CommandMenu("Edit") {
+                Button("Find in Music Library") {
+                    AppViewModel.shared.focusSearchBar()
+                }
+                .keyboardShortcut("f", modifiers: .command)
+            }
+
             CommandMenu("Playback") {
                 Button("Play / Pause") {
                     AudioEngine.shared.togglePlayPause()
@@ -56,6 +87,18 @@ struct TsrossaMacApp: App {
                 }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
                 
+                Divider()
+
+                Button("Seek Forward 5s") {
+                    AudioEngine.shared.seek(to: AudioEngine.shared.currentTime + 5.0)
+                }
+                .keyboardShortcut(.rightArrow, modifiers: .option)
+
+                Button("Seek Backward 5s") {
+                    AudioEngine.shared.seek(to: max(0.0, AudioEngine.shared.currentTime - 5.0))
+                }
+                .keyboardShortcut(.leftArrow, modifiers: .option)
+
                 Divider()
                 
                 Button("Volume Up (+1 dBFS)") {
@@ -86,6 +129,13 @@ struct TsrossaMacApp: App {
                 }
                 .keyboardShortcut("t", modifiers: .command)
 
+                Button("Toggle Like Track") {
+                    if let cur = AudioEngine.shared.currentTrack {
+                        AppViewModel.shared.toggleLike(track: cur)
+                    }
+                }
+                .keyboardShortcut("l", modifiers: .command)
+
                 Divider()
 
                 Button("Audio Pipeline Diagnostics") {
@@ -108,22 +158,22 @@ struct TsrossaMacApp: App {
                 Divider()
 
                 Button("Now Playing") {
-                    AppViewModel.shared.activeTab = .nowPlaying
+                    AppViewModel.shared.switchTab(to: .nowPlaying)
                 }
                 .keyboardShortcut("1", modifiers: .command)
                 
                 Button("Music Library") {
-                    AppViewModel.shared.activeTab = .library
+                    AppViewModel.shared.switchTab(to: .library)
                 }
                 .keyboardShortcut("2", modifiers: .command)
                 
                 Button("Play Queue") {
-                    AppViewModel.shared.activeTab = .playlist
+                    AppViewModel.shared.switchTab(to: .playlist)
                 }
                 .keyboardShortcut("3", modifiers: .command)
                 
                 Button("DAC & Settings") {
-                    AppViewModel.shared.activeTab = .settings
+                    AppViewModel.shared.switchTab(to: .settings)
                 }
                 .keyboardShortcut("4", modifiers: .command)
                 
@@ -133,6 +183,13 @@ struct TsrossaMacApp: App {
                     AppViewModel.shared.showTelemetry.toggle()
                 }
                 .keyboardShortcut("d", modifiers: .command)
+            }
+
+            CommandGroup(replacing: .help) {
+                Button("Keyboard Shortcuts Guide") {
+                    AppViewModel.shared.showKeyboardShortcutsModal.toggle()
+                }
+                .keyboardShortcut("/", modifiers: .command)
             }
         }
     }
