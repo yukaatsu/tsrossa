@@ -3,8 +3,61 @@ import AppKit
 import AVFoundation
 
 // ==============================================================================
-// MATERIAL 3 / MATERIAL YOU DYNAMIC COLOR ENGINE (Pure Native Swift / Apple Silicon)
-// Replicates Android 12/13/14 Monet Dynamic Color Extraction & Tonal Palettes
+// STRONGLY-TYPED UI/UX THEME ENUMS (Apple Human Interface Guidelines)
+// ==============================================================================
+
+public enum AppThemeMode: String, Codable, CaseIterable, Identifiable {
+    case system = "System Auto"
+    case dark = "Dark Glass"
+    case light = "Light Glass"
+
+    public var id: String { rawValue }
+
+    public var preferredColorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .dark: return .dark
+        case .light: return .light
+        }
+    }
+}
+
+public enum BackgroundCanvasMode: String, Codable, CaseIterable, Identifiable {
+    case liquidRefraction = "Liquid Glass Refraction"
+    case ambientMesh = "Ambient Artwork Mesh"
+    case pureGlass = "Pure Minimal Glass"
+
+    public var id: String { rawValue }
+}
+
+public enum AccentColorMode: String, Codable, CaseIterable, Identifiable {
+    case dynamicArtwork = "Dynamic Artwork"
+    case systemBlue = "Apple Blue"
+    case studioAmber = "Studio Amber"
+    case emeraldHiRes = "Hi-Res Emerald"
+    case amethyst = "Royal Amethyst"
+
+    public var id: String { rawValue }
+}
+
+public enum MainWorkspaceTab: String, Codable, CaseIterable, Identifiable {
+    case nowPlaying = "Now Playing"
+    case library = "Library"
+    case playlists = "Playlists"
+    case settings = "Settings"
+
+    public var id: String { rawValue }
+}
+
+public enum QueuePanelTab: String, Codable, CaseIterable, Identifiable {
+    case upNext = "Up Next"
+    case lyrics = "Lyrics"
+
+    public var id: String { rawValue }
+}
+
+// ==============================================================================
+// LIQUID GLASS ADAPTIVE THEME SYSTEM (Light / Dark / High-Contrast WCAG)
 // ==============================================================================
 
 fileprivate struct HSL {
@@ -50,84 +103,136 @@ fileprivate func hslToColor(h: Double, s: Double, l: Double) -> Color {
     return Color(red: r1 + m, green: g1 + m, blue: b1 + m)
 }
 
-public struct DynamicMaterialTheme: Equatable {
+public struct LiquidGlassTheme: Equatable {
+    public let isDark: Bool
+    public let reduceTransparency: Bool
+    public let specularTopOpacity: Double
+    public let rimOpacity: Double
+
     public let seedColor: Color
+    public let primary: Color
+    public let onPrimary: Color
+    public let primaryContainer: Color
+    public let onPrimaryContainer: Color
     
-    // Core Material 3 Dark Palette
-    public let primary: Color                  // Tone 80 - High contrast vibrant accent
-    public let onPrimary: Color                // Tone 20 - Deep contrast text on primary
-    public let primaryContainer: Color         // Tone 30 - Pill / badge background
-    public let onPrimaryContainer: Color       // Tone 90 - Text on primaryContainer
+    public let secondary: Color
+    public let secondaryContainer: Color
+    public let onSecondaryContainer: Color
     
-    public let secondary: Color                // Tone 80 (Chroma reduced)
-    public let secondaryContainer: Color       // Tone 30
-    public let onSecondaryContainer: Color     // Tone 90
+    public let tertiary: Color
+    public let tertiaryContainer: Color
     
-    public let tertiary: Color                 // Tone 80 (Hue shifted +60deg)
-    public let tertiaryContainer: Color        // Tone 30
+    public let surface: Color
+    public let surfaceContainerLowest: Color
+    public let surfaceContainerLow: Color
+    public let surfaceContainer: Color
+    public let surfaceContainerHigh: Color
+    public let surfaceContainerHighest: Color
     
-    // Surface Tonal System (Subtly tinted with seed color)
-    public let surface: Color                  // Tone 6
-    public let surfaceContainerLowest: Color   // Tone 4 - Deepest app background
-    public let surfaceContainerLow: Color      // Tone 9 - Cards / list rows
-    public let surfaceContainer: Color         // Tone 12 - Nav bar / modal surfaces
-    public let surfaceContainerHigh: Color     // Tone 16 - Floating pills / headers
-    public let surfaceContainerHighest: Color  // Tone 21 - Input fields / hover
-    
-    public let outline: Color                  // Tone 35 - Card strokes
-    public let outlineVariant: Color           // Tone 20 - Subtle dividers
+    public let outline: Color
+    public let outlineVariant: Color
     
     public let textPrimary: Color
     public let textSecondary: Color
     public let textMuted: Color
     public var error: Color { Color(red: 1.0, green: 0.36, blue: 0.36) }
-    
-    public static func == (lhs: DynamicMaterialTheme, rhs: DynamicMaterialTheme) -> Bool {
-        return lhs.primary == rhs.primary && lhs.surface == rhs.surface
+
+    public static func == (lhs: LiquidGlassTheme, rhs: LiquidGlassTheme) -> Bool {
+        lhs.isDark == rhs.isDark && lhs.primary == rhs.primary && lhs.surface == rhs.surface
     }
-    
-    // Tsrossa's signature Crimson Rose fallback (#FF2E55) matching Android ic_launcher
-    public static let defaultTheme = DynamicMaterialTheme(seedR: 1.0, seedG: 0.18, seedB: 0.33)
-    
-    public init(seedR: Double, seedG: Double, seedB: Double) {
-        let hsl = rgbToHsl(r: seedR, g: seedG, b: seedB)
-        self.seedColor = Color(red: seedR, green: seedG, blue: seedB)
-        
+
+    public static let defaultTheme = LiquidGlassTheme(
+        accentNSColor: NSColor(srgbRed: 1.0, green: 0.18, blue: 0.33, alpha: 1.0),
+        isDark: true,
+        reduceTransparency: false
+    )
+
+    public init(accentNSColor: NSColor, isDark: Bool = true, reduceTransparency: Bool = false) {
+        self.isDark = isDark
+        self.reduceTransparency = reduceTransparency
+
+        let srgb = accentNSColor.usingColorSpace(.sRGB) ?? NSColor(srgbRed: 1.0, green: 0.18, blue: 0.33, alpha: 1.0)
+        let r = Double(srgb.redComponent)
+        let g = Double(srgb.greenComponent)
+        let b = Double(srgb.blueComponent)
+        let hsl = rgbToHsl(r: r, g: g, b: b)
+
+        self.seedColor = Color(nsColor: srgb)
+        self.specularTopOpacity = isDark ? 0.16 : 0.42
+        self.rimOpacity = isDark ? 0.44 : 0.72
+
         let hue = hsl.h
         let sat = min(1.0, max(0.40, hsl.s))
         let neutralSat = min(0.12, sat * 0.22)
-        
-        // M3 Accent Colors
-        self.primary = hslToColor(h: hue, s: min(0.85, sat * 1.05), l: 0.78)
-        self.onPrimary = hslToColor(h: hue, s: sat, l: 0.14)
-        self.primaryContainer = hslToColor(h: hue, s: sat * 0.75, l: 0.24)
-        self.onPrimaryContainer = hslToColor(h: hue, s: sat * 0.85, l: 0.92)
-        
-        let secHue = (hue + 18).truncatingRemainder(dividingBy: 360)
-        self.secondary = hslToColor(h: secHue, s: sat * 0.55, l: 0.75)
-        self.secondaryContainer = hslToColor(h: secHue, s: sat * 0.45, l: 0.26)
-        self.onSecondaryContainer = hslToColor(h: secHue, s: sat * 0.60, l: 0.90)
-        
-        let tertHue = (hue + 60).truncatingRemainder(dividingBy: 360)
-        self.tertiary = hslToColor(h: tertHue, s: sat * 0.70, l: 0.80)
-        self.tertiaryContainer = hslToColor(h: tertHue, s: sat * 0.50, l: 0.28)
-        
-        // M3 Dark Surface Palette
-        self.surface = hslToColor(h: hue, s: neutralSat, l: 0.065)
-        self.surfaceContainerLowest = hslToColor(h: hue, s: neutralSat, l: 0.038)
-        self.surfaceContainerLow = hslToColor(h: hue, s: neutralSat, l: 0.085)
-        self.surfaceContainer = hslToColor(h: hue, s: neutralSat, l: 0.115)
-        self.surfaceContainerHigh = hslToColor(h: hue, s: neutralSat, l: 0.155)
-        self.surfaceContainerHighest = hslToColor(h: hue, s: neutralSat, l: 0.205)
-        
-        self.outline = hslToColor(h: hue, s: neutralSat * 1.5, l: 0.32)
-        self.outlineVariant = hslToColor(h: hue, s: neutralSat * 1.2, l: 0.18)
-        
-        self.textPrimary = Color(white: 0.96)
-        self.textSecondary = Color(white: 0.65)
-        self.textMuted = Color(white: 0.42)
+
+        if isDark {
+            self.primary = hslToColor(h: hue, s: min(0.85, sat * 1.05), l: 0.76)
+            self.onPrimary = hslToColor(h: hue, s: sat, l: 0.14)
+            self.primaryContainer = hslToColor(h: hue, s: sat * 0.75, l: 0.24)
+            self.onPrimaryContainer = hslToColor(h: hue, s: sat * 0.85, l: 0.92)
+
+            let secHue = (hue + 18).truncatingRemainder(dividingBy: 360)
+            self.secondary = hslToColor(h: secHue, s: sat * 0.55, l: 0.75)
+            self.secondaryContainer = hslToColor(h: secHue, s: sat * 0.45, l: 0.26)
+            self.onSecondaryContainer = hslToColor(h: secHue, s: sat * 0.60, l: 0.90)
+
+            let tertHue = (hue + 60).truncatingRemainder(dividingBy: 360)
+            self.tertiary = hslToColor(h: tertHue, s: sat * 0.70, l: 0.80)
+            self.tertiaryContainer = hslToColor(h: tertHue, s: sat * 0.50, l: 0.28)
+
+            self.surface = hslToColor(h: hue, s: neutralSat, l: 0.065)
+            self.surfaceContainerLowest = hslToColor(h: hue, s: neutralSat, l: 0.038)
+            self.surfaceContainerLow = hslToColor(h: hue, s: neutralSat, l: 0.085)
+            self.surfaceContainer = hslToColor(h: hue, s: neutralSat, l: 0.115)
+            self.surfaceContainerHigh = hslToColor(h: hue, s: neutralSat, l: 0.155)
+            self.surfaceContainerHighest = hslToColor(h: hue, s: neutralSat, l: 0.205)
+
+            self.outline = hslToColor(h: hue, s: neutralSat * 1.5, l: 0.32)
+            self.outlineVariant = hslToColor(h: hue, s: neutralSat * 1.2, l: 0.18)
+
+            self.textPrimary = Color(white: 0.96)
+            self.textSecondary = Color(white: 0.65)
+            self.textMuted = Color(white: 0.42)
+        } else {
+            // Light Glass Palette
+            self.primary = hslToColor(h: hue, s: min(0.95, sat * 1.10), l: 0.38)
+            self.onPrimary = Color.white
+            self.primaryContainer = hslToColor(h: hue, s: sat * 0.70, l: 0.90)
+            self.onPrimaryContainer = hslToColor(h: hue, s: sat * 0.85, l: 0.15)
+
+            let secHue = (hue + 18).truncatingRemainder(dividingBy: 360)
+            self.secondary = hslToColor(h: secHue, s: sat * 0.55, l: 0.40)
+            self.secondaryContainer = hslToColor(h: secHue, s: sat * 0.45, l: 0.90)
+            self.onSecondaryContainer = hslToColor(h: secHue, s: sat * 0.60, l: 0.18)
+
+            let tertHue = (hue + 60).truncatingRemainder(dividingBy: 360)
+            self.tertiary = hslToColor(h: tertHue, s: sat * 0.70, l: 0.35)
+            self.tertiaryContainer = hslToColor(h: tertHue, s: sat * 0.50, l: 0.90)
+
+            self.surface = hslToColor(h: hue, s: neutralSat, l: 0.96)
+            self.surfaceContainerLowest = Color.white
+            self.surfaceContainerLow = hslToColor(h: hue, s: neutralSat, l: 0.94)
+            self.surfaceContainer = hslToColor(h: hue, s: neutralSat, l: 0.90)
+            self.surfaceContainerHigh = hslToColor(h: hue, s: neutralSat, l: 0.86)
+            self.surfaceContainerHighest = hslToColor(h: hue, s: neutralSat, l: 0.82)
+
+            self.outline = hslToColor(h: hue, s: neutralSat * 1.5, l: 0.65)
+            self.outlineVariant = hslToColor(h: hue, s: neutralSat * 1.2, l: 0.80)
+
+            self.textPrimary = Color(white: 0.10)
+            self.textSecondary = Color(white: 0.38)
+            self.textMuted = Color(white: 0.60)
+        }
+    }
+
+    // DynamicMaterialTheme backward compatibility constructor
+    public init(seedR: Double, seedG: Double, seedB: Double) {
+        let ns = NSColor(srgbRed: CGFloat(seedR), green: CGFloat(seedG), blue: CGFloat(seedB), alpha: 1.0)
+        self.init(accentNSColor: ns, isDark: true, reduceTransparency: false)
     }
 }
+
+public typealias DynamicMaterialTheme = LiquidGlassTheme
 
 // ==============================================================================
 // ARTWORK & COLOR EXTRACTION UTILITIES
@@ -135,9 +240,9 @@ public struct DynamicMaterialTheme: Equatable {
 
 public class ArtworkExtractor {
     private static let imageCache = NSCache<NSString, NSImage>()
-    private static var themeCache: [String: DynamicMaterialTheme] = [:]
+    private static var themeCache: [String: LiquidGlassTheme] = [:]
     
-    public static func loadArtworkAndTheme(for path: String, completion: @escaping (NSImage?, DynamicMaterialTheme) -> Void) {
+    public static func loadArtworkAndTheme(for path: String, completion: @escaping (NSImage?, LiquidGlassTheme) -> Void) {
         if let cachedImage = imageCache.object(forKey: path as NSString),
            let cachedTheme = themeCache[path] {
             completion(cachedImage, cachedTheme)
@@ -145,14 +250,15 @@ public class ArtworkExtractor {
         }
         
         DispatchQueue.global(qos: .userInitiated).async {
-            let artwork = extractArtwork(from: path)
-            var theme: DynamicMaterialTheme = .defaultTheme
+            // First check fast disk thumbnail cache
+            let cachedImage = AlbumArtCache.shared.thumbnailImage(for: path)
+            let artwork = cachedImage ?? extractArtwork(from: path)
+            var theme: LiquidGlassTheme = .defaultTheme
             
             if let artwork = artwork {
                 imageCache.setObject(artwork, forKey: path as NSString)
-                if let seed = extractSeedColor(from: artwork) {
-                    theme = DynamicMaterialTheme(seedR: seed.r, seedG: seed.g, seedB: seed.b)
-                }
+                let accent = ColorContrastHelper.extractDominantAccent(from: artwork)
+                theme = LiquidGlassTheme(accentNSColor: accent.nsColor, isDark: true, reduceTransparency: false)
             }
             themeCache[path] = theme
             
@@ -164,79 +270,20 @@ public class ArtworkExtractor {
     
     public static func extractArtwork(from filePath: String) -> NSImage? {
         let url = URL(fileURLWithPath: filePath)
-        
-        // 1. Check embedded ID3 / FLAC metadata via AVFoundation
-        let asset = AVURLAsset(url: url)
-        let items = AVMetadataItem.metadataItems(from: asset.metadata, withKey: AVMetadataKey.commonKeyArtwork, keySpace: .common)
-        for item in items {
-            if let data = item.dataValue, let image = NSImage(data: data) {
-                return image
-            }
-        }
-        
-        // 2. Fallback: check adjacent directory image files (cover.jpg, folder.jpg, artwork.png)
-        let parentDir = url.deletingLastPathComponent()
-        let commonNames = ["cover.jpg", "cover.png", "folder.jpg", "folder.png", "artwork.jpg", "artwork.png", "front.jpg"]
+        let folder = url.deletingLastPathComponent()
+        let commonNames = ["cover.jpg", "cover.png", "folder.jpg", "front.jpg", "front.png", "artwork.jpg"]
         for name in commonNames {
-            let imgUrl = parentDir.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: imgUrl.path), let img = NSImage(contentsOf: imgUrl) {
+            let imgURL = folder.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: imgURL.path), let img = NSImage(contentsOf: imgURL) {
                 return img
             }
         }
-        
         return nil
-    }
-    
-    public static func extractSeedColor(from image: NSImage) -> (r: Double, g: Double, b: Double)? {
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        
-        let width = 32
-        let height = 32
-        var rawData = [UInt8](repeating: 0, count: width * height * 4)
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-        
-        guard let context = CGContext(
-            data: &rawData,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo
-        ) else { return nil }
-        
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        
-        var bestColor: (r: Double, g: Double, b: Double)? = nil
-        var maxScore: Double = -1.0
-        
-        for i in stride(from: 0, to: rawData.count, by: 4) {
-            let r = Double(rawData[i]) / 255.0
-            let g = Double(rawData[i+1]) / 255.0
-            let b = Double(rawData[i+2]) / 255.0
-            
-            let maxC = max(r, max(g, b))
-            let minC = min(r, min(g, b))
-            let delta = maxC - minC
-            let sat = maxC == 0 ? 0 : delta / maxC
-            let lum = 0.299 * r + 0.587 * g + 0.114 * b
-            
-            // Android Monet Filter: prioritize vibrant saturated tones, ignore muddy darks and washed out lights
-            if sat > 0.22 && lum > 0.16 && lum < 0.84 {
-                let score = sat * 0.70 + (1.0 - abs(lum - 0.50)) * 0.30
-                if score > maxScore {
-                    maxScore = score
-                    bestColor = (r, g, b)
-                }
-            }
-        }
-        return bestColor
     }
 }
 
 // ==============================================================================
-// TACTILE INTERACTIVE CONTROLS (Guarantees 100% Full-Hit-Area Clickability on macOS)
+// TACTILE INTERACTIVE CONTROLS
 // ==============================================================================
 
 public struct TsrossaScaleButtonStyle: ButtonStyle {
@@ -315,7 +362,7 @@ public struct InteractiveCircleButton: View {
                 .font(.system(size: iconSize, weight: .bold))
                 .foregroundColor(fg)
                 .frame(width: size, height: size)
-                .contentShape(Circle()) // 100% of circle bounds intercepts mouse clicks!
+                .contentShape(Circle())
         }
         .buttonStyle(TsrossaCircleButtonStyle(bg: bg, strokeColor: strokeColor))
     }
@@ -349,11 +396,11 @@ public struct GlassmorphicSurface: ViewModifier {
     public func body(content: Content) -> some View {
         content
             .background(
-                RoundedRectangle(cornerRadius: cornerRadius)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(TsrossaColors.surfaceContainer.opacity(opacity))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(borderColor, lineWidth: 0.8)
             )
     }
@@ -366,7 +413,7 @@ extension View {
 }
 
 // ==============================================================================
-// AUTHENTIC ANDROID TSROSSA LOGO LOADER & VIEW (macOS Dock + Desktop UI)
+// AUTHENTIC TSROSSA LOGO LOADER & VIEW (macOS Dock + Desktop UI)
 // ==============================================================================
 
 public enum TsrossaBrandLogo {
@@ -415,14 +462,13 @@ public struct TsrossaBrandIcon: View {
     
     public var body: some View {
         ZStack {
-            // Exact radial background from Android ic_launcher_background.xml
-            RoundedRectangle(cornerRadius: cornerRadius)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(
                     RadialGradient(
                         colors: [
-                            Color(red: 0.118, green: 0.071, blue: 0.141), // #1E1224
-                            Color(red: 0.063, green: 0.047, blue: 0.086), // #100C16
-                            Color(red: 0.027, green: 0.020, blue: 0.039)  // #07050A
+                            Color(red: 0.118, green: 0.071, blue: 0.141),
+                            Color(red: 0.063, green: 0.047, blue: 0.086),
+                            Color(red: 0.027, green: 0.020, blue: 0.039)
                         ],
                         center: .center,
                         startRadius: 2,
@@ -431,7 +477,6 @@ public struct TsrossaBrandIcon: View {
                 )
                 .frame(width: size, height: size)
             
-            // Subtle crimson aura glow from ic_launcher_background.xml (#47E11D48)
             Circle()
                 .fill(
                     RadialGradient(
@@ -454,7 +499,7 @@ public struct TsrossaBrandIcon: View {
                     .aspectRatio(contentMode: .fit)
                     .frame(width: size * 1.18, height: size * 1.18)
                     .frame(width: size, height: size)
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             } else if let img = TsrossaBrandLogo.launcherImage {
                 Image(nsImage: img)
                     .resizable()
@@ -462,14 +507,13 @@ public struct TsrossaBrandIcon: View {
                     .antialiased(true)
                     .aspectRatio(contentMode: .fill)
                     .frame(width: size, height: size)
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             }
         }
         .frame(width: size, height: size)
         .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
         )
     }
 }
-

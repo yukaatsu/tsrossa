@@ -101,6 +101,7 @@ public class AppViewModel: ObservableObject {
     @Published public var playlists: [UserPlaylist] = []
     @Published public var selectedPlaylistId: String? = nil
     @Published public var showNewPlaylistModal: Bool = false
+    @Published public var showTrackDetailsModal: Bool = false
     @Published public var newPlaylistName: String = ""
     @Published public var newPlaylistKeyword: String = ""
     @Published public var newPlaylistSelectedPaths: Set<String> = []
@@ -122,6 +123,7 @@ public class AppViewModel: ObservableObject {
     @Published public var currentLyrics: [LyricLine] = []
     @Published public var currentLyricIndex: Int = -1
     @Published public var queueTabMode: String = "QUEUE" // "QUEUE" or "LYRICS"
+    @Published public var queueTab: QueuePanelTab = .upNext
     @Published public var isLoadingLyrics: Bool = false
     
     // Theater / Fullscreen Mode (YouTube Music style Cmd + F)
@@ -677,6 +679,10 @@ public class AppViewModel: ObservableObject {
     
     public func isTrackLiked(_ path: String) -> Bool {
         return likedTrackPaths.contains(path)
+    }
+    
+    public func isLiked(track: TrackMetadata) -> Bool {
+        return likedTrackPaths.contains(track.path)
     }
     
     public func toggleLike(track: TrackMetadata) {

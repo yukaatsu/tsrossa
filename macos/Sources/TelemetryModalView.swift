@@ -104,7 +104,7 @@ public struct TelemetryModalView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 36)
                     .background(Color.white.opacity(0.12))
-                    .cornerRadius(18)
+                    .continuousSquircle(18)
                 }
                 .buttonStyle(PlainButtonStyle())
 
@@ -118,7 +118,7 @@ public struct TelemetryModalView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 36)
                     .background(Color.white.opacity(0.12))
-                    .cornerRadius(18)
+                    .continuousSquircle(18)
                 }
                 .buttonStyle(PlainButtonStyle())
 
@@ -131,7 +131,7 @@ public struct TelemetryModalView: View {
                     .foregroundColor(TsrossaColors.textSecondary)
                     .frame(width: 80, height: 36)
                     .background(Color.white.opacity(0.08))
-                    .cornerRadius(18)
+                    .continuousSquircle(18)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
@@ -158,7 +158,7 @@ public struct TelemetryModalView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(Color.white.opacity(0.08))
-                .cornerRadius(8)
+                .continuousSquircle(8)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 10)
@@ -189,9 +189,9 @@ public struct TelemetryModalView: View {
         }
         .frame(width: 620, height: 560)
         .background(TsrossaColors.deepNavy)
-        .cornerRadius(24)
+        .continuousSquircle(24)
         .overlay(
-            RoundedRectangle(cornerRadius: 24)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.7), radius: 30, x: 0, y: 15)
@@ -214,7 +214,7 @@ public struct TelemetryModalView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color.white.opacity(0.06))
-        .cornerRadius(12)
+        .continuousSquircle(12)
     }
 
     private func categoryPill(title: String, category: LogCategory?) -> some View {
@@ -225,7 +225,7 @@ public struct TelemetryModalView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(vm.telemetrySelectedCategory == category ? Color.white.opacity(0.2) : Color.clear)
-                .cornerRadius(6)
+                .continuousSquircle(6)
         }
         .buttonStyle(PlainButtonStyle())
     }

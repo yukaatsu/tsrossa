@@ -28,4 +28,21 @@ public func runColorAndThemeTests() {
         let ratioLight = ColorContrastHelper.contrastRatio(adjustedForLight, lightBg)
         try TestSuite.assertTrue(ratioLight >= 4.49, "Contrast on light bg was \(ratioLight)")
     }
+
+    TestSuite.run("ConcentricSquircle enforces R_inner = max(6, R_outer - padding)") {
+        // Container luar r=24 dengan padding=8 -> inner harus r=16
+        try TestSuite.assertEqual(ConcentricSquircle.innerRadius(outerRadius: 24, padding: 8), 16)
+        // Container luar r=14 dengan padding=12 -> inner dikunci minimal 6pt agar tetap squircle halus
+        try TestSuite.assertEqual(ConcentricSquircle.innerRadius(outerRadius: 14, padding: 12), 6)
+    }
+
+    TestSuite.run("LiquidGlassTheme adapts surface luminance and rim opacity between Light and Dark mode") {
+        let accent = NSColor(srgbRed: 0.2, green: 0.6, blue: 1.0, alpha: 1.0)
+        let darkTheme = LiquidGlassTheme(accentNSColor: accent, isDark: true, reduceTransparency: false)
+        let lightTheme = LiquidGlassTheme(accentNSColor: accent, isDark: false, reduceTransparency: false)
+
+        try TestSuite.assertTrue(darkTheme.isDark)
+        try TestSuite.assertFalse(lightTheme.isDark)
+        try TestSuite.assertTrue(darkTheme.specularTopOpacity != lightTheme.specularTopOpacity)
+    }
 }

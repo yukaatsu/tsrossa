@@ -58,6 +58,8 @@ swiftc -O \
     "$DIR/macos/Sources/AlbumArtCache.swift" \
     "$DIR/macos/Sources/TrackMetadata.swift" \
     "$DIR/macos/Sources/QueueHelper.swift" \
+    "$DIR/macos/Sources/Theme.swift" \
+    "$DIR/macos/Sources/LiquidGlassComponents.swift" \
     "${SWIFT_SOURCES[@]}" \
     "$TEST_BUILD_DIR/main_test.swift" \
     -framework Cocoa \
