@@ -2,7 +2,9 @@
 
 Bit-perfect audiophile music player for macOS (macOS 12.0 Monterey through macOS 15+ Sequoia) on Apple Silicon (arm64) and Intel (x86_64).
 
-tsrossa bypasses the macOS system CoreAudio software mixer, volume scaling, and alert sound multiplexing by communicating directly with hardware output devices in **Exclusive Hog Mode** (`kAudioDevicePropertyHogMode`) and dynamically switching physical DAC hardware clocks to match native file sampling frequencies.
+> 💡 **Looking for the Android version?** Switch to the default [`android` branch](https://github.com/yukaatsu/tsrossa/tree/android).  
+> To clone only the Android app:  
+> `git clone -b android --single-branch https://github.com/yukaatsu/tsrossa.git tsrossa-android`
 
 ---
 
