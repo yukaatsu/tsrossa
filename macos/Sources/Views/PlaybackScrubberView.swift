@@ -1,6 +1,9 @@
 import SwiftUI
 
 public final class ScrubberState: ObservableObject {
+    public static let compactShared = ScrubberState()
+    public static let stageShared = ScrubberState()
+
     @Published public var dragFraction: Double? = nil
     @Published public var isHovering: Bool = false
 
@@ -9,31 +12,39 @@ public final class ScrubberState: ObservableObject {
 
 public struct PlaybackScrubberView: View {
     @ObservedObject var progress = AudioEngine.shared.progress
-    @ObservedObject var state = ScrubberState()
+    @ObservedObject var state: ScrubberState
     public var accentColor: Color
+    public var compact: Bool
 
-    public init(accentColor: Color = .pink) {
+    public init(accentColor: Color = .pink, compact: Bool = false) {
         self.accentColor = accentColor
+        self.compact = compact
+        self.state = compact ? ScrubberState.compactShared : ScrubberState.stageShared
     }
 
     public var body: some View {
         let duration = max(progress.totalDuration, 0.001)
         let displayedTime = state.dragFraction.map { $0 * duration } ?? progress.currentTime
         let progressFraction = min(max(displayedTime / duration, 0.0), 1.0)
+        let timeWidth: CGFloat = compact ? 34 : 44
+        let timeFontSize: CGFloat = compact ? 9.5 : 11
+        let geoHeight: CGFloat = compact ? 12 : 18
+        let barH: CGFloat = compact ? (state.isHovering || state.dragFraction != nil ? 4.8 : 3.0) : (state.isHovering || state.dragFraction != nil ? 6 : 4)
+        let thumbDim: CGFloat = compact ? 10 : 12
 
-        HStack(spacing: 8) {
+        HStack(spacing: compact ? 6 : 8) {
             Text(formatTime(displayedTime))
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .font(.system(size: timeFontSize, weight: .medium, design: .monospaced))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
-                .frame(width: 44, alignment: .trailing)
+                .frame(width: timeWidth, alignment: .trailing)
 
             GeometryReader { geo in
                 let width = max(geo.size.width, 1)
                 ZStack(alignment: .leading) {
                     Capsule(style: .continuous)
                         .fill(Color.primary.opacity(0.12))
-                        .frame(height: state.isHovering || state.dragFraction != nil ? 6 : 4)
+                        .frame(height: barH)
 
                     Capsule(style: .continuous)
                         .fill(
@@ -43,14 +54,14 @@ public struct PlaybackScrubberView: View {
                                 endPoint: .trailing
                             )
                         )
-                        .frame(width: width * CGFloat(progressFraction), height: state.isHovering || state.dragFraction != nil ? 6 : 4)
+                        .frame(width: width * CGFloat(progressFraction), height: barH)
 
                     if state.isHovering || state.dragFraction != nil {
                         Circle()
                             .fill(Color.white)
-                            .frame(width: 12, height: 12)
+                            .frame(width: thumbDim, height: thumbDim)
                             .shadow(color: Color.black.opacity(0.35), radius: 3, x: 0, y: 1)
-                            .offset(x: max(0, min(width - 12, width * CGFloat(progressFraction) - 6)))
+                            .offset(x: max(0, min(width - thumbDim, width * CGFloat(progressFraction) - (thumbDim / 2))))
                     }
                 }
                 .frame(maxHeight: .infinity)
@@ -76,13 +87,13 @@ public struct PlaybackScrubberView: View {
                         }
                 )
             }
-            .frame(height: 18)
+            .frame(height: geoHeight)
 
             Text(formatTime(progress.totalDuration))
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .font(.system(size: timeFontSize, weight: .medium, design: .monospaced))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
-                .frame(width: 44, alignment: .leading)
+                .frame(width: timeWidth, alignment: .leading)
         }
     }
 

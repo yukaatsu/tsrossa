@@ -11,15 +11,15 @@ FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 ARCH_FLAGS=""
-SWIFT_TARGET_FLAGS=()
+IS_UNIVERSAL=0
 if [[ "${1:-}" == "--universal" ]]; then
     echo "==> Mode Universal Binary (arm64 + x86_64) aktif"
     ARCH_FLAGS="-arch arm64 -arch x86_64"
-    SWIFT_TARGET_FLAGS=(-target arm64-apple-macos13.0 -target x86_64-apple-macos13.0)
+    IS_UNIVERSAL=1
 else
     HOST_ARCH="$(uname -m)"
     ARCH_FLAGS="-arch $HOST_ARCH"
-    SWIFT_TARGET_FLAGS=(-target "${HOST_ARCH}-apple-macos13.0")
+    IS_UNIVERSAL=0
 fi
 
 echo "==> [1/5] Membersihkan direktori build..."
@@ -53,22 +53,64 @@ while IFS= read -r -d '' file; do
     SWIFT_FILES+=("$file")
 done < <(find "$DIR/macos" -name "*.swift" -print0 | sort -z)
 
-swiftc -parse-as-library -O "${SWIFT_TARGET_FLAGS[@]}" \
-    -module-cache-path "$BUILD_DIR/ModuleCache" \
-    -import-objc-header "$DIR/src/nativeMain/cpp/TsrossaAudioBridge.h" \
-    "${SWIFT_FILES[@]}" \
-    "$BUILD_DIR/libtsrossa_audio.a" \
-    -lc++ -lsqlite3 \
-    -framework Cocoa \
-    -framework SwiftUI \
-    -framework CoreAudio \
-    -framework AudioToolbox \
-    -framework AudioUnit \
-    -framework Accelerate \
-    -framework UniformTypeIdentifiers \
-    -framework MediaPlayer \
-    -framework IOKit \
-    -o "$MACOS_DIR/$APP_NAME"
+if [ "$IS_UNIVERSAL" -eq 1 ]; then
+    echo "    -> Mengompilasi slice arm64..."
+    swiftc -parse-as-library -O -target arm64-apple-macos13.0 \
+        -module-cache-path "$BUILD_DIR/ModuleCache" \
+        -import-objc-header "$DIR/src/nativeMain/cpp/TsrossaAudioBridge.h" \
+        "${SWIFT_FILES[@]}" \
+        "$BUILD_DIR/libtsrossa_audio.a" \
+        -lc++ -lsqlite3 \
+        -framework Cocoa \
+        -framework SwiftUI \
+        -framework CoreAudio \
+        -framework AudioToolbox \
+        -framework AudioUnit \
+        -framework Accelerate \
+        -framework UniformTypeIdentifiers \
+        -framework MediaPlayer \
+        -framework IOKit \
+        -o "$BUILD_DIR/tsrossa_arm64"
+
+    echo "    -> Mengompilasi slice x86_64..."
+    swiftc -parse-as-library -O -target x86_64-apple-macos13.0 \
+        -module-cache-path "$BUILD_DIR/ModuleCache" \
+        -import-objc-header "$DIR/src/nativeMain/cpp/TsrossaAudioBridge.h" \
+        "${SWIFT_FILES[@]}" \
+        "$BUILD_DIR/libtsrossa_audio.a" \
+        -lc++ -lsqlite3 \
+        -framework Cocoa \
+        -framework SwiftUI \
+        -framework CoreAudio \
+        -framework AudioToolbox \
+        -framework AudioUnit \
+        -framework Accelerate \
+        -framework UniformTypeIdentifiers \
+        -framework MediaPlayer \
+        -framework IOKit \
+        -o "$BUILD_DIR/tsrossa_x86_64"
+
+    echo "    -> Menggabungkan Universal Binary dengan lipo..."
+    lipo -create "$BUILD_DIR/tsrossa_arm64" "$BUILD_DIR/tsrossa_x86_64" -output "$MACOS_DIR/$APP_NAME"
+    rm -f "$BUILD_DIR/tsrossa_arm64" "$BUILD_DIR/tsrossa_x86_64"
+else
+    swiftc -parse-as-library -O -target "${HOST_ARCH}-apple-macos13.0" \
+        -module-cache-path "$BUILD_DIR/ModuleCache" \
+        -import-objc-header "$DIR/src/nativeMain/cpp/TsrossaAudioBridge.h" \
+        "${SWIFT_FILES[@]}" \
+        "$BUILD_DIR/libtsrossa_audio.a" \
+        -lc++ -lsqlite3 \
+        -framework Cocoa \
+        -framework SwiftUI \
+        -framework CoreAudio \
+        -framework AudioToolbox \
+        -framework AudioUnit \
+        -framework Accelerate \
+        -framework UniformTypeIdentifiers \
+        -framework MediaPlayer \
+        -framework IOKit \
+        -o "$MACOS_DIR/$APP_NAME"
+fi
 
 echo "==> [4/5] Menyalin Resources & Membuat Info.plist..."
 if [ -f "$DIR/macos/Resources/ic_launcher.png" ]; then

@@ -109,4 +109,50 @@ public func runAudioTagReaderTests() {
         try TestSuite.assertTrue(meta.isMqa)
         try TestSuite.assertEqual(meta.lyrics, "[00:12.00]On a dark desert highway")
     }
+
+    TestSuite.run("AudioTagReader prioritizes synced LYRICS over trailing UNSYNCEDLYRICS in Vorbis Comment") {
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_lyrics_\(UUID().uuidString).flac")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let flacData = SyntheticFlacBuilder.buildSampleFlac(
+            sampleRate: 44100,
+            channels: 2,
+            bitsPerSample: 16,
+            totalSamples: 44100 * 60,
+            comments: [
+                "TITLE=Synced Priority Track",
+                "ARTIST=Ado",
+                "LYRICS=[00:01.20]First line\n[00:04.50]Second line",
+                "UNSYNCEDLYRICS=First line\nSecond line"
+            ]
+        )
+        try flacData.write(to: tempURL)
+
+        let meta = AudioTagReader.readMetadata(from: tempURL)
+        try TestSuite.assertEqual(meta.lyrics, "[00:01.20]First line\n[00:04.50]Second line")
+        try TestSuite.assertTrue(AudioTagReader.containsLrcTimestamp(meta.lyrics ?? ""))
+    }
+
+    TestSuite.run("AudioTagReader.containsLrcTimestamp identifies LRC timestamp formats") {
+        try TestSuite.assertTrue(AudioTagReader.containsLrcTimestamp("[00:12.34]Hello"))
+        try TestSuite.assertTrue(AudioTagReader.containsLrcTimestamp("[01:23:45]Hello"))
+        try TestSuite.assertTrue(AudioTagReader.containsLrcTimestamp("[2:05]Hello"))
+        try TestSuite.assertFalse(AudioTagReader.containsLrcTimestamp("Plain unsynced lyrics line"))
+    }
+
+    TestSuite.run("LyricsManager.parseLrcContent parses both dot and colon timestamp formats") {
+        let lrcWithDot = "[00:05.50]Dot millisecond format"
+        let parsedDot = LyricsManager.shared.parseLrcContent(lrcWithDot)
+        try TestSuite.assertEqual(parsedDot.count, 1)
+        try TestSuite.assertTrue(parsedDot.first?.isSynced ?? false)
+        try TestSuite.assertEqual(parsedDot.first?.text, "Dot millisecond format")
+        try TestSuite.assertEqual(parsedDot.first?.timestampSeconds, 5.5)
+
+        let lrcWithColon = "[01:10:25]Colon millisecond format"
+        let parsedColon = LyricsManager.shared.parseLrcContent(lrcWithColon)
+        try TestSuite.assertEqual(parsedColon.count, 1)
+        try TestSuite.assertTrue(parsedColon.first?.isSynced ?? false)
+        try TestSuite.assertEqual(parsedColon.first?.text, "Colon millisecond format")
+        try TestSuite.assertEqual(parsedColon.first?.timestampSeconds, 70.25)
+    }
 }

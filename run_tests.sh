@@ -53,6 +53,7 @@ done < <(find "$DIR/tests/swift" -name "*.swift" -print0 | sort -z)
 swiftc -O \
     "$DIR/macos/Sources/UpdateManager.swift" \
     "$DIR/macos/Sources/AudioTagReader.swift" \
+    "$DIR/macos/Sources/LyricsManager.swift" \
     "$DIR/macos/Sources/ColorContrastHelper.swift" \
     "$DIR/macos/Sources/FuzzySearchHelper.swift" \
     "$DIR/macos/Sources/AlbumArtCache.swift" \
@@ -63,6 +64,7 @@ swiftc -O \
     "${SWIFT_SOURCES[@]}" \
     "$TEST_BUILD_DIR/main_test.swift" \
     -framework Cocoa \
+    -framework AVFoundation \
     -o "$TEST_BUILD_DIR/swift_tests"
 
 "$TEST_BUILD_DIR/swift_tests"

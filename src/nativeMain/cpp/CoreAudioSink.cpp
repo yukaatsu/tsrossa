@@ -3,6 +3,9 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#include <mach/mach_init.h>
+#include <mach/thread_policy.h>
+#include <mach/thread_act.h>
 #include <sstream>
 #include <algorithm>
 #include <chrono>
@@ -47,6 +50,9 @@ bool CoreAudioSink::init() {
         m_activeDevice = devices.front().id;
       }
     }
+  }
+  if (m_renderScratchBuffer.empty()) {
+    m_renderScratchBuffer.assign(65536, 0);
   }
   return true;
 }
@@ -213,27 +219,67 @@ bool CoreAudioSink::applyHardwareVolumeScalar(AudioDeviceID deviceId, double sli
   outResidualLinearGain = TsrossaDsp::StudioTaper::sliderToLinearGain(sliderValue);
   if (deviceId == kAudioObjectUnknown) return false;
 
+  // 1. Force Unmute so DAC output is never attenuated by hardware mute
+  AudioObjectPropertyAddress muteAddr = {
+      kAudioDevicePropertyMute,
+      kAudioDevicePropertyScopeOutput,
+      kAudioObjectPropertyElementMain
+  };
+  UInt32 muteVal = 0;
+  Boolean muteSettable = false;
+  if (AudioObjectHasProperty(deviceId, &muteAddr) &&
+      AudioObjectIsPropertySettable(deviceId, &muteAddr, &muteSettable) == noErr && muteSettable) {
+    AudioObjectSetPropertyData(deviceId, &muteAddr, 0, nullptr, sizeof(UInt32), &muteVal);
+  }
+
+  // 2. Set VirtualMainVolume
   AudioObjectPropertyAddress volAddr = {
       kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
       kAudioDevicePropertyScopeOutput,
       kAudioObjectPropertyElementMain
   };
-  if (!AudioObjectHasProperty(deviceId, &volAddr)) return false;
-
-  Boolean settable = false;
-  if (AudioObjectIsPropertySettable(deviceId, &volAddr, &settable) != noErr || !settable) return false;
-
   Float32 scalar = static_cast<Float32>(std::clamp(sliderValue, 0.0, 1.0));
-  if (AudioObjectSetPropertyData(deviceId, &volAddr, 0, nullptr, sizeof(Float32), &scalar) == noErr) {
-    outResidualLinearGain = 1.0;
-    return true;
+  bool success = false;
+
+  if (AudioObjectHasProperty(deviceId, &volAddr)) {
+    Boolean settable = false;
+    if (AudioObjectIsPropertySettable(deviceId, &volAddr, &settable) == noErr && settable) {
+      if (AudioObjectSetPropertyData(deviceId, &volAddr, 0, nullptr, sizeof(Float32), &scalar) == noErr) {
+        outResidualLinearGain = 1.0;
+        success = true;
+      }
+    }
   }
-  return false;
+
+  // 3. Set Master (0) and per-channel (1, 2) VolumeScalar if available
+  const UInt32 channels[] = {kAudioObjectPropertyElementMain, 1, 2};
+  for (UInt32 ch : channels) {
+    AudioObjectPropertyAddress chVolAddr = {
+        kAudioDevicePropertyVolumeScalar,
+        kAudioDevicePropertyScopeOutput,
+        ch
+    };
+    if (AudioObjectHasProperty(deviceId, &chVolAddr)) {
+      Boolean settable = false;
+      if (AudioObjectIsPropertySettable(deviceId, &chVolAddr, &settable) == noErr && settable) {
+        if (AudioObjectSetPropertyData(deviceId, &chVolAddr, 0, nullptr, sizeof(Float32), &scalar) == noErr) {
+          outResidualLinearGain = 1.0;
+          success = true;
+        }
+      }
+    }
+  }
+
+  return success;
 }
 
 void CoreAudioSink::setSliderVolume(double sliderValue, bool useHardwareVolume) {
   const double clamped = std::clamp(sliderValue, 0.0, 1.0);
   if (clamped >= 0.9999) {
+    if (useHardwareVolume && m_activeDevice != kAudioObjectUnknown) {
+      double dummyResidual = 1.0;
+      applyHardwareVolumeScalar(m_activeDevice, 1.0, dummyResidual);
+    }
     m_targetGain.store(1.0, std::memory_order_relaxed);
     return;
   }
@@ -397,6 +443,102 @@ bool CoreAudioSink::setDeviceSampleRate(AudioDeviceID deviceId, Float64 targetRa
   return std::abs(m_actualHardwareSampleRate.load() - targetRate) < 0.5;
 }
 
+bool CoreAudioSink::lockHardwarePhysicalStreamFormat(AudioDeviceID deviceId, Float64 targetRate, UInt32 channels, UInt32 preferredBitDepth) {
+  if (deviceId == kAudioObjectUnknown) return false;
+
+  AudioObjectPropertyAddress streamsAddr = {
+      kAudioDevicePropertyStreams,
+      kAudioDevicePropertyScopeOutput,
+      kAudioObjectPropertyElementMain
+  };
+  UInt32 streamsSize = 0;
+  OSStatus status = AudioObjectGetPropertyDataSize(deviceId, &streamsAddr, 0, nullptr, &streamsSize);
+  if (status != noErr || streamsSize == 0) return false;
+
+  UInt32 streamCount = streamsSize / sizeof(AudioStreamID);
+  std::vector<AudioStreamID> streamIds(streamCount);
+  status = AudioObjectGetPropertyData(deviceId, &streamsAddr, 0, nullptr, &streamsSize, streamIds.data());
+  if (status != noErr || streamIds.empty()) return false;
+
+  for (AudioStreamID streamId : streamIds) {
+    AudioObjectPropertyAddress availAddr = {
+        kAudioStreamPropertyAvailablePhysicalFormats,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 availSize = 0;
+    if (AudioObjectGetPropertyDataSize(streamId, &availAddr, 0, nullptr, &availSize) != noErr || availSize == 0) {
+      continue;
+    }
+    UInt32 rangeCount = availSize / sizeof(AudioStreamRangedDescription);
+    std::vector<AudioStreamRangedDescription> ranges(rangeCount);
+    if (AudioObjectGetPropertyData(streamId, &availAddr, 0, nullptr, &availSize, ranges.data()) != noErr) {
+      continue;
+    }
+
+    AudioStreamBasicDescription bestMatch{};
+    int bestScore = -1;
+
+    for (const auto& r : ranges) {
+      const auto& fmt = r.mFormat;
+      if (fmt.mFormatID != kAudioFormatLinearPCM) continue;
+      bool rateOk = (std::abs(fmt.mSampleRate - targetRate) < 0.5) ||
+                    (targetRate >= r.mSampleRateRange.mMinimum && targetRate <= r.mSampleRateRange.mMaximum);
+      if (!rateOk) continue;
+
+      bool isInt = (fmt.mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0;
+      int score = isInt ? 1000 : 100;
+      if (fmt.mBitsPerChannel == 32) score += 300;
+      else if (fmt.mBitsPerChannel == 24) score += 200;
+      else if (fmt.mBitsPerChannel == 16) score += 100;
+      if (fmt.mChannelsPerFrame == channels) score += 50;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = fmt;
+        bestMatch.mSampleRate = targetRate;
+      }
+    }
+
+    if (bestScore > 0) {
+      Boolean settable = false;
+      AudioObjectPropertyAddress physAddr = {
+          kAudioStreamPropertyPhysicalFormat,
+          kAudioObjectPropertyScopeGlobal,
+          kAudioObjectPropertyElementMain
+      };
+      if (AudioObjectIsPropertySettable(streamId, &physAddr, &settable) == noErr && settable) {
+        AudioObjectSetPropertyData(streamId, &physAddr, 0, nullptr, sizeof(AudioStreamBasicDescription), &bestMatch);
+      }
+      AudioObjectPropertyAddress virtAddr = {
+          kAudioStreamPropertyVirtualFormat,
+          kAudioObjectPropertyScopeGlobal,
+          kAudioObjectPropertyElementMain
+      };
+      if (AudioObjectIsPropertySettable(streamId, &virtAddr, &settable) == noErr && settable) {
+        AudioObjectSetPropertyData(streamId, &virtAddr, 0, nullptr, sizeof(AudioStreamBasicDescription), &bestMatch);
+      }
+    }
+  }
+  return true;
+}
+
+void CoreAudioSink::promoteCurrentThreadToRealtime() {
+  thread_time_constraint_policy_data_t policy;
+  policy.period = 100000;
+  policy.computation = 50000;
+  policy.constraint = 85000;
+  policy.preemptible = 1;
+
+  thread_policy_set(
+      mach_thread_self(),
+      THREAD_TIME_CONSTRAINT_POLICY,
+      (thread_policy_t)&policy,
+      THREAD_TIME_CONSTRAINT_POLICY_COUNT
+  );
+  m_machPrioritySet.store(true, std::memory_order_relaxed);
+}
+
 void CoreAudioSink::applyRamLockState(bool shouldLock) {
   if (m_pcmBuffer.empty()) return;
   const size_t byteSize = m_pcmBuffer.size() * sizeof(int32_t);
@@ -432,23 +574,48 @@ void CoreAudioSink::stopDecodeThread() {
 
 void CoreAudioSink::decodeThreadLoop(uint64_t generation) {
   pthread_setname_np("TsrossaDecode");
-  const uint32_t channels = m_channels.load(std::memory_order_acquire);
-  const uint64_t totalFrames = m_totalFrames.load(std::memory_order_acquire);
-  if (channels == 0 || totalFrames == 0) return;
-
-  const uint64_t ringCapacityFrames = MAX_RING_BUFFER_SAMPLES / channels;
-  const uint64_t safetyMarginFrames = std::min<uint64_t>(ringCapacityFrames / 4, m_sampleRate.load() * 4);
-  const uint64_t maxLeadFrames = ringCapacityFrames - safetyMarginFrames;
   constexpr uint64_t kChunkFrames = 16384;
-  std::vector<int32_t> chunkBuf(kChunkFrames * channels);
+  std::vector<int32_t> chunkBuf;
 
   while (!m_stopDecodeThread.load(std::memory_order_acquire)) {
+    // 1. Handle gapless decoder handover outside Real-Time audio callback!
+    if (m_needGaplessDecoderHandoff.load(std::memory_order_acquire)) {
+      std::lock_guard<std::mutex> lk(m_decoderMutex);
+      if (m_needGaplessDecoderHandoff.load(std::memory_order_acquire)) {
+        m_activeDecoder = std::move(m_nextDecoder);
+        m_currentFilePath = m_nextFilePath;
+        m_nextFilePath.clear();
+        m_needGaplessDecoderHandoff.store(false, std::memory_order_release);
+        generation = m_seekGeneration.load(std::memory_order_acquire);
+      }
+      continue;
+    }
+
     if (m_seekGeneration.load(std::memory_order_acquire) != generation) break;
 
-    uint64_t decoded = m_decodedFrames.load(std::memory_order_acquire);
-    if (decoded >= totalFrames) break;
+    const uint32_t channels = m_channels.load(std::memory_order_acquire);
+    const uint64_t totalFrames = m_totalFrames.load(std::memory_order_acquire);
+    if (channels == 0 || totalFrames == 0) {
+      std::unique_lock<std::mutex> lk(m_decoderMutex);
+      if (m_stopDecodeThread.load(std::memory_order_acquire)) break;
+      m_decodeCv.wait_for(lk, std::chrono::milliseconds(25));
+      continue;
+    }
 
+    uint64_t decoded = m_decodedFrames.load(std::memory_order_acquire);
+    if (decoded >= totalFrames) {
+      // DO NOT break out! Stay alive waiting on m_decodeCv for gapless handover or seek!
+      std::unique_lock<std::mutex> lk(m_decoderMutex);
+      if (m_stopDecodeThread.load(std::memory_order_acquire)) break;
+      m_decodeCv.wait_for(lk, std::chrono::milliseconds(25));
+      continue;
+    }
+
+    const uint64_t ringCapacityFrames = MAX_RING_BUFFER_SAMPLES / channels;
+    const uint64_t safetyMarginFrames = std::min<uint64_t>(ringCapacityFrames / 4, m_sampleRate.load() * 4);
+    const uint64_t maxLeadFrames = ringCapacityFrames - safetyMarginFrames;
     uint64_t playhead = m_currentFrameIndex.load(std::memory_order_acquire);
+
     if (decoded >= playhead && (decoded - playhead) >= maxLeadFrames) {
       std::unique_lock<std::mutex> lk(m_decoderMutex);
       m_decodeCv.wait_for(lk, std::chrono::milliseconds(15));
@@ -465,14 +632,25 @@ void CoreAudioSink::decodeThreadLoop(uint64_t generation) {
       continue;
     }
 
+    if (chunkBuf.size() < kChunkFrames * channels) {
+      chunkBuf.resize(kChunkFrames * channels);
+    }
+
     uint64_t framesRead = 0;
     {
       std::lock_guard<std::mutex> lk(m_decoderMutex);
+      if (m_needGaplessDecoderHandoff.load(std::memory_order_acquire)) {
+        continue;
+      }
       if (m_activeDecoder) {
         framesRead = m_activeDecoder->readFramesChunk(chunkBuf.data(), toRead);
       }
     }
-    if (framesRead == 0) break;
+    if (framesRead == 0) {
+      std::unique_lock<std::mutex> lk(m_decoderMutex);
+      m_decodeCv.wait_for(lk, std::chrono::milliseconds(20));
+      continue;
+    }
 
     for (uint64_t f = 0; f < framesRead; ++f) {
       const uint64_t ringFrameIdx = (decoded + f) % ringCapacityFrames;
@@ -513,7 +691,7 @@ bool CoreAudioSink::setupAudioUnit(AudioDeviceID deviceId, Float64 sampleRate, U
   }
 
   // Dual-Path stream format setup:
-  // Try integer format first if requested and bit-perfect unity gain
+  // Always try Native Signed Integer first (32-bit Packed Linear PCM)
   m_streamIsInteger.store(false);
   AudioStreamBasicDescription format;
   memset(&format, 0, sizeof(format));
@@ -522,18 +700,15 @@ bool CoreAudioSink::setupAudioUnit(AudioDeviceID deviceId, Float64 sampleRate, U
   format.mChannelsPerFrame = channels;
   format.mFramesPerPacket = 1;
 
-  if (m_hoggerPid == getpid() && m_targetGain.load() >= 0.99999) {
-    format.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
-    format.mBitsPerChannel = 32;
-    format.mBytesPerFrame = (32 / 8) * channels;
-    format.mBytesPerPacket = format.mBytesPerFrame;
-    status = AudioUnitSetProperty(m_audioUnit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &format, sizeof(format));
-    if (status == noErr) {
-      m_streamIsInteger.store(true);
-    }
-  }
-
-  if (!m_streamIsInteger.load()) {
+  format.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+  format.mBitsPerChannel = 32;
+  format.mBytesPerFrame = (32 / 8) * channels;
+  format.mBytesPerPacket = format.mBytesPerFrame;
+  status = AudioUnitSetProperty(m_audioUnit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &format, sizeof(format));
+  if (status == noErr) {
+    m_streamIsInteger.store(true);
+  } else {
+    // Fallback to Float 32 only if hardware driver strictly mandates float
     format.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
     format.mBitsPerChannel = 32;
     format.mBytesPerFrame = (32 / 8) * channels;
@@ -544,6 +719,12 @@ bool CoreAudioSink::setupAudioUnit(AudioDeviceID deviceId, Float64 sampleRate, U
       return false;
     }
   }
+
+  // Set Mastering sample rate converter complexity and maximum frames per slice
+  UInt32 srcComplexity = kAudioUnitSampleRateConverterComplexity_Mastering;
+  AudioUnitSetProperty(m_audioUnit, kAudioUnitProperty_SampleRateConverterComplexity, kAudioUnitScope_Global, 0, &srcComplexity, sizeof(srcComplexity));
+  UInt32 maxFrames = 4096;
+  AudioUnitSetProperty(m_audioUnit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &maxFrames, sizeof(maxFrames));
 
   AURenderCallbackStruct callback;
   callback.inputProc = renderCallback;
@@ -582,38 +763,67 @@ bool CoreAudioSink::playTrack(const std::string &filePath) {
   stopDecodeThread();
   teardownAudioUnit();
 
-  auto decoder = std::make_unique<MacAudioDecoder>();
-  if (!decoder->openStream(filePath)) {
-    LOGE("CoreAudioSink: Failed to open '%s': %s", filePath.c_str(), decoder->lastOpenError.c_str());
-    return false;
+  uint32_t sr = 0;
+  uint32_t ch = 0;
+  uint32_t bits = 0;
+  uint64_t total = 0;
+  uint64_t framesRead = 0;
+  std::unique_ptr<MacAudioDecoder> decoder;
+
+  bool usedFastPreload = false;
+  if (m_nextTrackReady.load(std::memory_order_acquire) && m_nextFilePath == filePath) {
+    std::lock_guard<std::mutex> lk(m_decoderMutex);
+    if (m_nextTrackReady.load(std::memory_order_acquire) && m_nextFilePath == filePath && m_nextDecoder) {
+      sr = m_nextSampleRate.load();
+      ch = m_nextChannels.load();
+      bits = m_nextBitsPerSample.load();
+      total = m_nextTotalFrames.load();
+      framesRead = m_nextDecodedFrames.load();
+      decoder = std::move(m_nextDecoder);
+      if (m_pcmBuffer.size() != MAX_RING_BUFFER_SAMPLES) {
+        m_pcmBuffer.assign(MAX_RING_BUFFER_SAMPLES, 0);
+      }
+      m_pcmBuffer.swap(m_pcmBufferNext);
+      m_nextTrackReady.store(false, std::memory_order_release);
+      m_nextFilePath.clear();
+      usedFastPreload = true;
+      LOGI("CoreAudioSink: Fast-swapped pre-buffered track '%s' (%llu frames preloaded)", filePath.c_str(), (unsigned long long)framesRead);
+    }
   }
 
-  const uint32_t sr = decoder->getSampleRate();
-  const uint32_t ch = decoder->getChannels();
-  const uint32_t bits = decoder->getBitsPerSample();
-  const uint64_t total = decoder->getTotalFrames();
+  if (!usedFastPreload) {
+    decoder = std::make_unique<MacAudioDecoder>();
+    if (!decoder->openStream(filePath)) {
+      LOGE("CoreAudioSink: Failed to open '%s': %s", filePath.c_str(), decoder->lastOpenError.c_str());
+      return false;
+    }
 
-  if (total == 0 || sr == 0 || ch == 0) return false;
+    sr = decoder->getSampleRate();
+    ch = decoder->getChannels();
+    bits = decoder->getBitsPerSample();
+    total = decoder->getTotalFrames();
+
+    if (total == 0 || sr == 0 || ch == 0) return false;
+
+    if (m_pcmBuffer.size() != MAX_RING_BUFFER_SAMPLES) {
+      m_pcmBuffer.assign(MAX_RING_BUFFER_SAMPLES, 0);
+    }
+
+    // Pre-decode first 5 seconds synchronously for instant playback (< 50ms startup)
+    const uint64_t initialFrames = std::min<uint64_t>(total, static_cast<uint64_t>(sr) * 5);
+    framesRead = decoder->readFramesChunk(m_pcmBuffer.data(), initialFrames);
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(m_decoderMutex);
+    m_activeDecoder = std::move(decoder);
+  }
 
   m_sampleRate.store(sr, std::memory_order_relaxed);
   m_channels.store(ch, std::memory_order_relaxed);
   m_bitsPerSample.store(bits, std::memory_order_relaxed);
   m_totalFrames.store(total, std::memory_order_relaxed);
   m_currentFilePath = filePath;
-
-  if (m_pcmBuffer.size() != MAX_RING_BUFFER_SAMPLES) {
-    m_pcmBuffer.assign(MAX_RING_BUFFER_SAMPLES, 0);
-  }
-
-  // Pre-decode first 5 seconds synchronously for instant playback (< 50ms startup)
-  const uint64_t initialFrames = std::min<uint64_t>(total, static_cast<uint64_t>(sr) * 5);
-  uint64_t framesRead = 0;
-  {
-    std::lock_guard<std::mutex> lk(m_decoderMutex);
-    framesRead = decoder->readFramesChunk(m_pcmBuffer.data(), initialFrames);
-    m_activeDecoder = std::move(decoder);
-  }
-
   m_decodedFrames.store(framesRead, std::memory_order_release);
   m_currentFrameIndex.store(0, std::memory_order_release);
   m_trackFinished.store(false, std::memory_order_release);
@@ -624,10 +834,16 @@ bool CoreAudioSink::playTrack(const std::string &filePath) {
   if (m_activeDevice == kAudioObjectUnknown) {
     init();
   }
+  setHogMode(m_activeDevice, m_hogModeEnabled.load());
   if (m_autoClockEnabled.load()) {
     setDeviceSampleRate(m_activeDevice, static_cast<Float64>(sr));
   }
-  setHogMode(m_activeDevice, m_hogModeEnabled.load());
+  lockHardwarePhysicalStreamFormat(m_activeDevice, static_cast<Float64>(sr), ch, bits);
+
+  if (m_renderScratchBuffer.size() < 16384 * ch) {
+    m_renderScratchBuffer.assign(16384 * ch, 0);
+  }
+  m_machPrioritySet.store(false, std::memory_order_relaxed);
 
   if (!setupAudioUnit(m_activeDevice, static_cast<Float64>(sr), ch, bits)) {
     return false;
@@ -724,7 +940,18 @@ bool CoreAudioSink::seek(double seconds) {
 }
 
 bool CoreAudioSink::prepareNextTrack(const std::string& filePath) {
-  std::lock_guard<std::mutex> lk(m_decoderMutex);
+  const uint64_t myGen = m_prepareNextGen.fetch_add(1, std::memory_order_acq_rel) + 1;
+  std::lock_guard<std::mutex> prepLock(m_nextPrepMutex);
+
+  if (m_prepareNextGen.load(std::memory_order_acquire) != myGen) {
+    return false;
+  }
+
+  // If the same file is already preloaded and ready, no-op
+  if (m_nextTrackReady.load(std::memory_order_acquire) && m_nextFilePath == filePath) {
+    return true;
+  }
+
   m_nextTrackReady.store(false, std::memory_order_release);
 
   auto nextDec = std::make_unique<MacAudioDecoder>();
@@ -734,33 +961,48 @@ bool CoreAudioSink::prepareNextTrack(const std::string& filePath) {
 
   const uint32_t ch = nextDec->getChannels();
   const uint32_t sr = nextDec->getSampleRate();
+  const uint32_t bits = nextDec->getBitsPerSample();
   const uint64_t total = nextDec->getTotalFrames();
   if (ch == 0 || sr == 0 || total == 0) return false;
 
-  if (m_pcmBufferNext.size() < MAX_NEXT_BUFFER_SAMPLES) {
-    m_pcmBufferNext.resize(MAX_NEXT_BUFFER_SAMPLES, 0);
+  // Sized identically to MAX_RING_BUFFER_SAMPLES for O(1) swap!
+  if (m_pcmBufferNext.size() != MAX_RING_BUFFER_SAMPLES) {
+    m_pcmBufferNext.assign(MAX_RING_BUFFER_SAMPLES, 0);
   }
 
-  const uint64_t maxPrebufferFrames = MAX_NEXT_BUFFER_SAMPLES / ch;
-  const uint64_t framesToPreload = std::min<uint64_t>(total, maxPrebufferFrames);
-  const uint64_t readFrames = nextDec->readFramesChunk(m_pcmBufferNext.data(), framesToPreload);
+  const uint64_t maxRingFrames = MAX_RING_BUFFER_SAMPLES / ch;
+  const uint64_t targetPreload = std::min<uint64_t>(total, std::min<uint64_t>(maxRingFrames, static_cast<uint64_t>(sr) * 8));
+  const uint64_t readFrames = nextDec->readFramesChunk(m_pcmBufferNext.data(), targetPreload);
   if (readFrames == 0) return false;
 
-  m_nextFilePath = filePath;
-  m_nextSampleRate.store(sr, std::memory_order_relaxed);
-  m_nextChannels.store(ch, std::memory_order_relaxed);
-  m_nextBitsPerSample.store(nextDec->getBitsPerSample(), std::memory_order_relaxed);
-  m_nextTotalFrames.store(total, std::memory_order_relaxed);
-  m_nextDecodedFrames.store(readFrames, std::memory_order_relaxed);
-  m_nextDecoder = std::move(nextDec);
-  m_nextTrackReady.store(true, std::memory_order_release);
+  if (m_prepareNextGen.load(std::memory_order_acquire) != myGen) {
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(m_decoderMutex);
+    m_nextFilePath = filePath;
+    m_nextSampleRate.store(sr, std::memory_order_relaxed);
+    m_nextChannels.store(ch, std::memory_order_relaxed);
+    m_nextBitsPerSample.store(bits, std::memory_order_relaxed);
+    m_nextTotalFrames.store(total, std::memory_order_relaxed);
+    m_nextDecodedFrames.store(readFrames, std::memory_order_relaxed);
+    m_nextDecoder = std::move(nextDec);
+    m_nextTrackReady.store(true, std::memory_order_release);
+  }
   return true;
 }
 
 void CoreAudioSink::clearNextTrack() {
+  m_prepareNextGen.fetch_add(1, std::memory_order_acq_rel);
   std::lock_guard<std::mutex> lk(m_decoderMutex);
   m_nextTrackReady.store(false, std::memory_order_release);
-  m_nextDecoder.reset();
+  if (m_needGaplessDecoderHandoff.exchange(false, std::memory_order_acq_rel)) {
+    m_activeDecoder = std::move(m_nextDecoder);
+    m_currentFilePath = m_nextFilePath;
+  } else {
+    m_nextDecoder.reset();
+  }
   m_nextFilePath.clear();
 }
 
@@ -822,7 +1064,16 @@ OSStatus CoreAudioSink::handleRender(
   uint64_t framesAvailable = (totalFrames > currentFrame) ? (totalFrames - currentFrame) : 0;
   UInt32 framesToCopy = std::min(static_cast<UInt32>(framesAvailable), inNumberFrames);
 
-  std::vector<int32_t> tempSrc(inNumberFrames * channels, 0);
+  if (!m_machPrioritySet.load(std::memory_order_relaxed)) {
+    promoteCurrentThreadToRealtime();
+  }
+
+  const size_t neededScratch = static_cast<size_t>(inNumberFrames) * channels;
+  if (m_renderScratchBuffer.size() < neededScratch) {
+    m_renderScratchBuffer.assign(neededScratch, 0);
+  }
+  int32_t* tempSrc = m_renderScratchBuffer.data();
+  std::memset(tempSrc, 0, neededScratch * sizeof(int32_t));
 
   // Copy samples from circular ring buffer
   for (UInt32 f = 0; f < framesToCopy; ++f) {
@@ -831,11 +1082,14 @@ OSStatus CoreAudioSink::handleRender(
   }
 
   // Check for seamless gapless transition if track reaches EOF
+  bool didGaplessTransition = false;
   if (framesToCopy < inNumberFrames && m_nextTrackReady.load(std::memory_order_acquire)) {
-    if (m_nextSampleRate.load() == m_sampleRate.load() && m_nextChannels.load() == channels) {
+    if (m_nextSampleRate.load(std::memory_order_relaxed) == m_sampleRate.load(std::memory_order_relaxed) &&
+        m_nextChannels.load(std::memory_order_relaxed) == channels &&
+        m_pcmBufferNext.size() == MAX_RING_BUFFER_SAMPLES) {
       const UInt32 gaplessFramesNeeded = inNumberFrames - framesToCopy;
-      const uint64_t nextTotal = m_nextTotalFrames.load();
-      const uint64_t nextDecoded = m_nextDecodedFrames.load();
+      const uint64_t nextTotal = m_nextTotalFrames.load(std::memory_order_relaxed);
+      const uint64_t nextDecoded = m_nextDecodedFrames.load(std::memory_order_relaxed);
       const UInt32 gaplessFramesToCopy = std::min(gaplessFramesNeeded, static_cast<UInt32>(nextDecoded));
 
       // Copy from next track pre-buffer into the tail of tempSrc
@@ -843,17 +1097,22 @@ OSStatus CoreAudioSink::handleRender(
         std::memcpy(&tempSrc[(framesToCopy + f) * channels], &m_pcmBufferNext[f * channels], channels * sizeof(int32_t));
       }
 
-      // Promote next track to active track
-      std::memcpy(m_pcmBuffer.data(), m_pcmBufferNext.data(), nextDecoded * channels * sizeof(int32_t));
+      // O(1) swap (< 5 nanoseconds, 0 byte heap allocation)
+      m_pcmBuffer.swap(m_pcmBufferNext);
+      m_bitsPerSample.store(m_nextBitsPerSample.load(std::memory_order_relaxed), std::memory_order_relaxed);
+      m_nextTrackReady.store(false, std::memory_order_release);
+
+      // Signal decodeThreadLoop to safely perform handoff outside RT thread
+      m_seekGeneration.fetch_add(1, std::memory_order_acq_rel);
+      m_needGaplessDecoderHandoff.store(true, std::memory_order_release);
+
       m_totalFrames.store(nextTotal, std::memory_order_release);
       m_decodedFrames.store(nextDecoded, std::memory_order_release);
-      m_activeDecoder = std::move(m_nextDecoder);
-      m_currentFilePath = m_nextFilePath;
-      m_nextTrackReady.store(false, std::memory_order_release);
+      m_currentFrameIndex.store(gaplessFramesToCopy, std::memory_order_release);
       m_gaplessTransitioned.store(true, std::memory_order_release);
 
-      m_currentFrameIndex.store(gaplessFramesToCopy, std::memory_order_release);
       framesToCopy += gaplessFramesToCopy;
+      didGaplessTransition = true;
     }
   }
 
@@ -864,7 +1123,7 @@ OSStatus CoreAudioSink::handleRender(
   if (m_streamIsInteger.load(std::memory_order_relaxed)) {
     int32_t* outInt = reinterpret_cast<int32_t*>(outBytes);
     TsrossaDsp::SampleProcessor::processInt32Buffer(
-        tempSrc.data(), outInt, framesToCopy, channels,
+        tempSrc, outInt, framesToCopy, channels,
         m_currentGain, targetGain, ditherEnabled, m_dither
     );
     if (framesToCopy < inNumberFrames) {
@@ -873,7 +1132,7 @@ OSStatus CoreAudioSink::handleRender(
   } else {
     float* outFloat = reinterpret_cast<float*>(outBytes);
     TsrossaDsp::SampleProcessor::processFloat32Buffer(
-        tempSrc.data(), outFloat, framesToCopy, channels,
+        tempSrc, outFloat, framesToCopy, channels,
         m_currentGain, targetGain, ditherEnabled, m_dither
     );
     if (framesToCopy < inNumberFrames) {
@@ -881,13 +1140,14 @@ OSStatus CoreAudioSink::handleRender(
     }
   }
 
-  if (framesToCopy < inNumberFrames && !m_gaplessTransitioned.load()) {
-    m_trackFinished.store(true, std::memory_order_release);
-    m_isPlaying.store(false, std::memory_order_release);
+  if (!didGaplessTransition) {
+    if (framesToCopy < inNumberFrames) {
+      m_trackFinished.store(true, std::memory_order_release);
+      m_isPlaying.store(false, std::memory_order_release);
+    }
+    // CAS advancement of playback head to prevent race with seekTo
+    m_currentFrameIndex.compare_exchange_strong(currentFrame, currentFrame + framesToCopy);
   }
-
-  // CAS advancement of playback head to prevent race with seekTo
-  m_currentFrameIndex.compare_exchange_strong(currentFrame, currentFrame + framesToCopy);
   m_decodeCv.notify_one();
   return noErr;
 }

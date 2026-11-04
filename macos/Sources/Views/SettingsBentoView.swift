@@ -5,16 +5,15 @@ public struct SettingsBentoView: View {
     @ObservedObject var engine = AudioEngine.shared
     @ObservedObject var updater = UpdateManager.shared
     public var theme: LiquidGlassTheme
+    public var isWide: Bool = true
 
-    public init(theme: LiquidGlassTheme) {
+    public init(theme: LiquidGlassTheme, isWide: Bool = true) {
         self.theme = theme
+        self.isWide = isWide
     }
 
     public var body: some View {
-        GeometryReader { geo in
-            let isWide = geo.size.width >= 680
-
-            ScrollView {
+        ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     // Header
                     VStack(alignment: .leading, spacing: 2) {
@@ -54,7 +53,6 @@ public struct SettingsBentoView: View {
                 .padding(.bottom, 24)
             }
         }
-    }
 
     // MARK: - Bento Cards
 
@@ -67,7 +65,11 @@ public struct SettingsBentoView: View {
 
                 VStack(spacing: 4) {
                     ForEach(engine.devices) { dev in
-                        Button(action: { engine.selectDevice(id: dev.id) }) {
+                        Button(action: {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                                engine.selectDevice(id: dev.id)
+                            }
+                        }) {
                             HStack(spacing: 8) {
                                 Image(systemName: dev.id == engine.selectedDeviceId ? "checkmark.circle.fill" : "circle")
                                     .font(.system(size: 13))
@@ -89,7 +91,7 @@ public struct SettingsBentoView: View {
                             .continuousSquircle(8)
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(PlainButtonStyle())
+                        .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.98))
                     }
                 }
 
@@ -211,7 +213,7 @@ public struct SettingsBentoView: View {
                                 }
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(PlainButtonStyle())
+                            .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.92))
                         }
                     }
                     .padding(.top, 2)
@@ -240,7 +242,7 @@ public struct SettingsBentoView: View {
                     Button("Change Folder...") {
                         vm.openFolderPicker()
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(TsrossaScaleButtonStyle())
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(Color.white.opacity(0.08))
@@ -248,9 +250,11 @@ public struct SettingsBentoView: View {
                     .contentShape(Rectangle())
 
                     Button("Rescan Library") {
-                        vm.rescanCurrentFolder()
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                            vm.rescanCurrentFolder()
+                        }
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(TsrossaScaleButtonStyle())
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(Color.white.opacity(0.08))
@@ -278,7 +282,11 @@ public struct SettingsBentoView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button(action: { updater.checkForUpdates() }) {
+                    Button(action: {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                            updater.checkForUpdates()
+                        }
+                    }) {
                         Text("Check Updates")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(theme.primary)
@@ -288,7 +296,7 @@ public struct SettingsBentoView: View {
                             .continuousSquircle(6)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(TsrossaScaleButtonStyle())
                 }
             }
         }

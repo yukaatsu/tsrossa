@@ -11,7 +11,7 @@ public struct FloatingTopToolbarView: View {
 
     public var body: some View {
         HStack(spacing: 12) {
-            // Omnibar Search Field
+            // Omnibar Search Field (Smoothly expands when focused)
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13))
@@ -24,7 +24,11 @@ public struct FloatingTopToolbarView: View {
                     .foregroundStyle(.primary)
 
                 if !vm.searchText.isEmpty {
-                    Button(action: { vm.searchText = "" }) {
+                    Button(action: {
+                        withAnimation(.spring(response: 0.24, dampingFraction: 0.80)) {
+                            vm.searchText = ""
+                        }
+                    }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
@@ -32,6 +36,7 @@ public struct FloatingTopToolbarView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .transition(.scale(scale: 0.7).combined(with: .opacity))
                 } else if !isSearchFocused {
                     Text("⌘F")
                         .font(.system(size: 10, design: .monospaced))
@@ -40,12 +45,20 @@ public struct FloatingTopToolbarView: View {
                         .padding(.vertical, 2)
                         .background(Color.white.opacity(0.06))
                         .continuousSquircle(4)
+                        .transition(.opacity)
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(Color.white.opacity(0.06))
+            .background(Color.white.opacity(isSearchFocused ? 0.09 : 0.06))
             .continuousSquircle(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(isSearchFocused ? theme.primary.opacity(0.40) : Color.clear, lineWidth: 1)
+            )
+            .frame(minWidth: 140, idealWidth: isSearchFocused ? 260 : 200, maxWidth: isSearchFocused ? 280 : 230)
+            .animation(.spring(response: 0.30, dampingFraction: 0.80), value: isSearchFocused)
+            .animation(.spring(response: 0.24, dampingFraction: 0.80), value: vm.searchText.isEmpty)
             .onChange(of: vm.searchFocusTrigger) { _ in
                 isSearchFocused = true
             }
@@ -64,23 +77,29 @@ public struct FloatingTopToolbarView: View {
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.06))
+                    .background(vm.hoveredToolbarBtn == "FOLDER" ? Color.white.opacity(0.10) : Color.white.opacity(0.06))
                     .continuousSquircle(10)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
+                .onHover { isH in withAnimation(.easeOut(duration: 0.12)) { vm.hoveredToolbarBtn = isH ? "FOLDER" : nil } }
                 .help("Open Music Directory (⌘O)")
 
-                Button(action: { vm.rescanCurrentFolder() }) {
+                Button(action: {
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.82)) {
+                        vm.rescanCurrentFolder()
+                    }
+                }) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.06))
+                        .background(vm.hoveredToolbarBtn == "RESCAN" ? Color.white.opacity(0.10) : Color.white.opacity(0.06))
                         .continuousSquircle(10)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
+                .onHover { isH in withAnimation(.easeOut(duration: 0.12)) { vm.hoveredToolbarBtn = isH ? "RESCAN" : nil } }
                 .help("Rescan current music folder (⌘R)")
 
                 Button(action: {
@@ -92,11 +111,12 @@ public struct FloatingTopToolbarView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.06))
+                        .background(vm.hoveredToolbarBtn == "INFO" ? Color.white.opacity(0.10) : Color.white.opacity(0.06))
                         .continuousSquircle(10)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
+                .onHover { isH in withAnimation(.easeOut(duration: 0.12)) { vm.hoveredToolbarBtn = isH ? "INFO" : nil } }
                 .help("Audio Track Info (⌘I)")
 
                 Button(action: {
@@ -108,11 +128,12 @@ public struct FloatingTopToolbarView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.06))
+                        .background(vm.hoveredToolbarBtn == "HELP" ? Color.white.opacity(0.10) : Color.white.opacity(0.06))
                         .continuousSquircle(10)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
+                .onHover { isH in withAnimation(.easeOut(duration: 0.12)) { vm.hoveredToolbarBtn = isH ? "HELP" : nil } }
                 .help("Keyboard Shortcuts (⌘/)")
             }
         }

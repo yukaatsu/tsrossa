@@ -157,6 +157,10 @@ public final class AudioTagReader {
         }
     }
 
+    public static func containsLrcTimestamp(_ text: String) -> Bool {
+        return text.range(of: "\\[\\d{1,2}:\\d{2}", options: .regularExpression) != nil
+    }
+
     private static func applyVorbisTag(_ tag: String, meta: inout ExtractedAudioMetadata) {
         let parts = tag.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2 else { return }
@@ -181,8 +185,19 @@ public final class AudioTagReader {
         case "TRACKNUMBER", "TRACK":
             let clean = val.components(separatedBy: "/").first ?? val
             if let t = Int(clean.trimmingCharacters(in: .whitespaces)) { meta.trackNumber = t }
-        case "LYRICS", "UNSYNCEDLYRICS", "SYNCEDLYRICS":
-            meta.lyrics = val
+        case "LYRICS", "SYNCEDLYRICS", "UNSYNCEDLYRICS":
+            guard !val.isEmpty else { break }
+            if let existing = meta.lyrics, !existing.isEmpty {
+                let existingIsSynced = containsLrcTimestamp(existing)
+                let newIsSynced = containsLrcTimestamp(val)
+                if newIsSynced && !existingIsSynced {
+                    meta.lyrics = val
+                } else if !existingIsSynced && key != "UNSYNCEDLYRICS" {
+                    meta.lyrics = val
+                }
+            } else {
+                meta.lyrics = val
+            }
         case "MQAENCODER", "ORIGINALSAMPLERATE":
             meta.isMqa = true
         default:
@@ -310,8 +325,18 @@ public final class AudioTagReader {
             if let str = decodeID3String(data: data), let y = Int(str.prefix(4)) {
                 meta.year = y
             }
-        } else if id == "USLT" || id == "ULT" {
-            meta.lyrics = decodeID3String(data: data.dropFirst(4)) // skip encoding + 3 lang bytes
+        } else if id == "USLT" || id == "ULT" || id == "SYLT" {
+            if let str = decodeID3String(data: data.dropFirst(4)), !str.isEmpty {
+                if let existing = meta.lyrics, !existing.isEmpty {
+                    let existingIsSynced = containsLrcTimestamp(existing)
+                    let newIsSynced = containsLrcTimestamp(str)
+                    if newIsSynced || !existingIsSynced {
+                        meta.lyrics = str
+                    }
+                } else {
+                    meta.lyrics = str
+                }
+            }
         } else if (id == "APIC" || id == "PIC") && extractArtwork {
             // APIC payload
             let b = [UInt8](data)

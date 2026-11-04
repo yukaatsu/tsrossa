@@ -20,12 +20,16 @@ public struct CreatePlaylistModalSheet: View {
                         .foregroundStyle(.primary)
                 }
                 Spacer()
-                Button(action: { vm.showNewPlaylistModal = false }) {
+                Button(action: {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        vm.showNewPlaylistModal = false
+                    }
+                }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 18))
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
             }
@@ -56,9 +60,11 @@ public struct CreatePlaylistModalSheet: View {
 
             HStack {
                 Button("Cancel") {
-                    vm.showNewPlaylistModal = false
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        vm.showNewPlaylistModal = false
+                    }
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
                 .background(Color.white.opacity(0.08))
@@ -68,9 +74,11 @@ public struct CreatePlaylistModalSheet: View {
                 Spacer()
 
                 Button("Create Playlist") {
-                    vm.createPlaylistFromModal()
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        vm.createPlaylistFromModal()
+                    }
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
                 .background(theme.primary)

@@ -5,23 +5,21 @@ public struct LibraryView: View {
     @ObservedObject var engine = AudioEngine.shared
     public var theme: LiquidGlassTheme
     public var playlistsOnlyMode: Bool = false
+    public var showAlbumColumn: Bool = true
 
-    public init(theme: LiquidGlassTheme, playlistsOnlyMode: Bool = false) {
+    public init(theme: LiquidGlassTheme, playlistsOnlyMode: Bool = false, showAlbumColumn: Bool = true) {
         self.theme = theme
         self.playlistsOnlyMode = playlistsOnlyMode
+        self.showAlbumColumn = showAlbumColumn
     }
 
     public var body: some View {
-        let tracks = vm.filteredTracks
-        let totalDuration = tracks.reduce(0.0) { $0 + $1.durationSeconds }
-        let durationText = formatTotalDuration(totalDuration)
+        let tracks = vm.cachedFilteredTracks.isEmpty ? vm.filteredTracks : vm.cachedFilteredTracks
+        let durationText = vm.cachedTotalDurationText.isEmpty ? formatTotalDuration(tracks.reduce(0.0) { $0 + $1.durationSeconds }) : vm.cachedTotalDurationText
 
-        GeometryReader { geo in
-            let availableWidth = geo.size.width
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
                         // Top Header: Title, Track count, and Sort Options
                         HStack(alignment: .firstTextBaseline) {
                             VStack(alignment: .leading, spacing: 2) {
@@ -101,10 +99,12 @@ public struct LibraryView: View {
 
                                 if vm.hasActiveFilters {
                                     Button("Reset Filters") {
-                                        vm.selectedFormatFilter = "ALL"
-                                        vm.selectedBitDepthFilter = 0
-                                        vm.selectedSampleRateFilter = 0
-                                        vm.searchText = ""
+                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                                            vm.selectedFormatFilter = "ALL"
+                                            vm.selectedBitDepthFilter = 0
+                                            vm.selectedSampleRateFilter = 0
+                                            vm.searchText = ""
+                                        }
                                     }
                                     .font(.system(size: 11))
                                     .foregroundStyle(theme.primary)
@@ -132,8 +132,9 @@ public struct LibraryView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 40)
                             } else {
-                                ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
-                                    trackRow(track: track, index: index + 1, width: availableWidth)
+                                ForEach(0..<tracks.count, id: \.self) { idx in
+                                    let track = tracks[idx]
+                                    trackRow(track: track, index: idx + 1, showAlbumColumn: showAlbumColumn)
                                         .id(track.path)
                                 }
                             }
@@ -150,7 +151,6 @@ public struct LibraryView: View {
                 }
             }
         }
-    }
 
     private var headerTitle: String {
         if let id = vm.selectedPlaylistId {
@@ -173,7 +173,11 @@ public struct LibraryView: View {
     }
 
     private func filterChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                action()
+            }
+        }) {
             Text(title)
                 .font(.system(size: 11, weight: isSelected ? .bold : .medium))
                 .foregroundStyle(isSelected ? theme.onPrimary : .primary)
@@ -183,10 +187,10 @@ public struct LibraryView: View {
                 .continuousSquircle(8)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(PlainButtonStyle())
+        .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.96))
     }
 
-    private func trackRow(track: TrackMetadata, index: Int, width: CGFloat) -> some View {
+    private func trackRow(track: TrackMetadata, index: Int, showAlbumColumn: Bool) -> some View {
         let isCurrent = engine.currentTrack?.path == track.path
         let isSelected = vm.selectedTrackPath == track.path
         let isLiked = vm.isLiked(track: track)
@@ -196,22 +200,26 @@ public struct LibraryView: View {
             trackArtworkView(track: track)
             trackInfoView(track: track, isCurrent: isCurrent, isSelected: isSelected)
             Spacer()
-            if width > 600 {
+            if showAlbumColumn {
                 Text(track.album)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .frame(maxWidth: min(180, width * 0.22), alignment: .leading)
+                    .frame(maxWidth: 160, alignment: .leading)
             }
             trackBadges(track: track)
-            Button(action: { vm.toggleLike(track: track) }) {
+            Button(action: {
+                withAnimation(.spring(response: 0.30, dampingFraction: 0.65)) {
+                    vm.toggleLike(track: track)
+                }
+            }) {
                 Image(systemName: isLiked ? "heart.fill" : "heart")
                     .font(.system(size: 12))
                     .foregroundStyle(isLiked ? Color.pink : Color.white.opacity(0.3))
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(PlainButtonStyle())
+            .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.80))
 
             Text(formatDuration(track.durationSeconds))
                 .font(.system(size: 11, design: .monospaced))
@@ -238,6 +246,8 @@ public struct LibraryView: View {
         }
         .continuousSquircle(10)
         .contentShape(Rectangle())
+        .animation(.easeOut(duration: 0.15), value: isSelected)
+        .animation(.easeOut(duration: 0.15), value: isCurrent)
         .onTapGesture {
             vm.handleTrackRowClick(track: track)
         }
@@ -281,7 +291,7 @@ public struct LibraryView: View {
 
     private func trackArtworkView(track: TrackMetadata) -> some View {
         Group {
-            if let img = track.artwork {
+            if let img = track.listThumbnail ?? track.artwork {
                 Image(nsImage: img)
                     .resizable()
                     .scaledToFill()

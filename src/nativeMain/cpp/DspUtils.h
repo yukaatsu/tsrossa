@@ -85,7 +85,7 @@ struct SampleProcessor {
         }
 
         const double stepGain = isRamping ? (targetGain - currentGain) / static_cast<double>(frames) : 0.0;
-        constexpr double kDitherLsbScale = 256.0;
+        constexpr double kDitherLsbScale = 1.0; // 1 LSB for 32-bit Integer domain (matching Android AudioStreamer.cpp)
         constexpr double kMaxInt32 = 2147483647.0;
         constexpr double kMinInt32 = -2147483648.0;
 
@@ -99,7 +99,7 @@ struct SampleProcessor {
             for (uint32_t ch = 0; ch < channels; ++ch) {
                 const size_t idx = static_cast<size_t>(f) * channels + ch;
                 double sample = static_cast<double>(src[idx]) * g;
-                if (applyDither && g > 0.0) {
+                if (applyDither && g > 0.0 && g < 0.99999) {
                     sample += dither.nextTpdf(static_cast<int>(ch)) * kDitherLsbScale;
                 }
                 sample = std::clamp(sample, kMinInt32, kMaxInt32);

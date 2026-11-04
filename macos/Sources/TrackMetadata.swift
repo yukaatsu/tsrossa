@@ -75,6 +75,14 @@ public struct TrackMetadata: Identifiable, Hashable, Codable {
         AlbumArtCache.shared.thumbnailImage(for: path, knownThumbPath: artworkThumbPath)
     }
 
+    public var listThumbnail: NSImage? {
+        AlbumArtCache.shared.fastMemoryThumbnail(for: path, knownThumbPath: artworkThumbPath)
+    }
+
+    public var blurredArtwork: NSImage? {
+        AlbumArtCache.shared.cachedBlurredCanvasImage(for: path, knownThumbPath: artworkThumbPath)
+    }
+
     public static func makeTestTrack(
         title: String,
         artist: String,

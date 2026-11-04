@@ -85,6 +85,10 @@ public class AudioEngine: ObservableObject {
     @Published public var volume: Double = 1.0 {
         didSet {
             setVolume(sliderValue: volume)
+            let computedDb = volume <= 0.001 ? -60 : Int(round(20.0 * log10(volume)))
+            if AppViewModel.shared.volumeDb != computedDb {
+                AppViewModel.shared.volumeDb = computedDb
+            }
         }
     }
     
@@ -93,6 +97,7 @@ public class AudioEngine: ObservableObject {
     private var isAdvancingTrack: Bool = false
     private var lastSeekTimestamp: TimeInterval = 0
     private var hasPreparedGaplessNext: Bool = false
+    private var preparedNextTrackPath: String = ""
     private var powerAssertionID: IOPMAssertionID = 0
     private var hasPowerAssertion: Bool = false
     
@@ -439,6 +444,12 @@ public class AudioEngine: ObservableObject {
             tsrossa_clear_next_track()
         }
     }
+
+    public func invalidatePreparedNextTrack() {
+        self.hasPreparedGaplessNext = false
+        self.preparedNextTrackPath = ""
+        self.clearNextTrack()
+    }
     
     public func updateTelemetry() {
         engineQueue.async { [weak self] in
@@ -549,7 +560,7 @@ public class AudioEngine: ObservableObject {
     
     private func startProgressTimer() {
         stopProgressTimer()
-        self.progressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        self.progressTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             if self.isPlaying && !self.isPaused && !self.isAdvancingTrack {
                 let t = tsrossa_get_current_time()
@@ -559,10 +570,13 @@ public class AudioEngine: ObservableObject {
                 }
                 AppViewModel.shared.updateLyricIndex(currentTime: t)
 
-                // Pre-buffer next track for gapless handover 5 seconds before EOF
-                if self.totalDuration > 10.0 && (self.totalDuration - t) < 5.0 && !self.hasPreparedGaplessNext {
-                    self.hasPreparedGaplessNext = true
+                // Pre-buffer next track for gapless handover 8 seconds before EOF (or > 1.5s in for short tracks)
+                let remaining = self.totalDuration - t
+                let shouldPrepare = (self.totalDuration > 12.0 && remaining < 8.0) || (self.totalDuration <= 12.0 && t > 1.5)
+                if shouldPrepare && !self.hasPreparedGaplessNext {
                     if let next = AppViewModel.shared.peekNextTrack() {
+                        self.hasPreparedGaplessNext = true
+                        self.preparedNextTrackPath = next.path
                         self.prepareNextTrack(path: next.path)
                     }
                 }
@@ -578,8 +592,22 @@ public class AudioEngine: ObservableObject {
     }
 
     private func handleSeamlessGaplessAdvance() {
+        self.hasPreparedGaplessNext = false
+        self.preparedNextTrackPath = ""
+        let realRate = tsrossa_get_track_sample_rate()
+        let realBits = tsrossa_get_track_bit_depth()
+        let realChannels = tsrossa_get_track_channels()
+        let realDuration = tsrossa_get_total_duration()
+        let json = String(cString: tsrossa_get_telemetry_json())
+
         DispatchQueue.main.async {
-            AppViewModel.shared.playNextTrack(userInitiated: false)
+            AppViewModel.shared.commitSeamlessGaplessTransition(
+                realRate: realRate,
+                realBits: realBits,
+                realChannels: realChannels,
+                realDuration: realDuration,
+                telemetryJson: json
+            )
         }
     }
     

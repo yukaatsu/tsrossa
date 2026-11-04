@@ -3,6 +3,9 @@ import SwiftUI
 public struct MainAppView: View {
     @ObservedObject var vm = AppViewModel.shared
     @ObservedObject var engine = AudioEngine.shared
+    @ObservedObject private var drawer = NowPlayingDrawerState.shared
+    @ObservedObject private var zoomManager = WindowZoomManager.shared
+    @ObservedObject private var canvasState = AmbientCanvasState.shared
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -38,79 +41,85 @@ public struct MainAppView: View {
         } else if vm.accentColorMode == "CYAN" {
             return LiquidGlassTheme(accentNSColor: NSColor(srgbRed: 0.0, green: 0.90, blue: 1.0, alpha: 1.0), isDark: isEffectiveDark, reduceTransparency: reduceTransparency)
         }
-        // Dynamic artwork seed
-        return LiquidGlassTheme(accentNSColor: vm.currentTheme.seedColor.toNSColor(), isDark: isEffectiveDark, reduceTransparency: reduceTransparency)
+        // Continuous interpolated artwork seed from AmbientCanvasState
+        return LiquidGlassTheme(accentNSColor: canvasState.interpolatedAccentNSColor, isDark: isEffectiveDark, reduceTransparency: reduceTransparency)
     }
 
     public var body: some View {
         let theme = activeTheme
 
         GeometryReader { geo in
-            let windowH = geo.size.height
-            let baseOffset: CGFloat = vm.isNowPlayingExpanded ? 0.0 : windowH
-            let drawerY = min(windowH, max(0.0, baseOffset + vm.nowPlayingDragOffset))
-            let openProgress: CGFloat = windowH > 0 ? min(1.0, max(0.0, 1.0 - (drawerY / windowH))) : 0.0
+            let windowW = max(880.0, geo.size.width)
+            let windowH = max(600.0, geo.size.height)
+            let progress = min(1.0, max(0.0, drawer.revealProgress))
+            let drawerY = windowH * (1.0 - progress)
 
-            ZStack {
+            let sidebarW: CGFloat = 212.0
+            let rightColumnW = max(400.0, windowW - sidebarW - 1.0)
+
+            ZStack(alignment: .topLeading) {
                 // Layer 1: Deterministic App Shell (HStack + VStack)
                 HStack(spacing: 0) {
                     SidebarView(theme: theme)
-                        .frame(minWidth: 200, idealWidth: 226, maxWidth: 236)
-                        .frame(maxHeight: .infinity)
-                        .layoutPriority(2)
+                        .frame(width: sidebarW, height: windowH)
 
                     Rectangle()
                         .fill(Color.white.opacity(isEffectiveDark ? 0.08 : 0.14))
-                        .frame(width: 1)
-                        .frame(maxHeight: .infinity)
+                        .frame(width: 1, height: windowH)
 
                     VStack(spacing: 0) {
                         FloatingTopToolbarView(theme: theme)
-                            .padding(.horizontal, 18)
+                            .padding(.horizontal, 14)
                             .padding(.top, 12)
                             .padding(.bottom, 8)
 
                         ZStack {
-                            workspaceContent(theme: theme)
+                            workspaceContent(theme: theme, rightColumnW: rightColumnW)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
 
                         LiquidTransportBarView(theme: theme)
-                            .padding(.horizontal, 18)
+                            .padding(.horizontal, 14)
                             .padding(.top, 6)
                             .padding(.bottom, 12)
-                            .opacity(1.0 - Double(openProgress))
-                            .scaleEffect(1.0 - (openProgress * 0.03))
-                            .offset(y: openProgress * 24)
-                            .allowsHitTesting(openProgress < 0.5)
+                            .opacity(1.0 - Double(progress))
+                            .scaleEffect(1.0 - (progress * 0.03))
+                            .offset(y: progress * 24)
+                            .allowsHitTesting(progress < 0.5)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(width: rightColumnW, height: windowH)
+                    .clipped()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .frame(width: windowW, height: windowH, alignment: .topLeading)
 
-                // Layer 1.5: Persistent Geometry-Driven Now Playing Stage Drawer
-                Color.black
-                    .opacity(0.60 * Double(openProgress))
-                    .ignoresSafeArea()
-                    .allowsHitTesting(openProgress > 0.1)
-                    .onTapGesture {
-                        vm.closeNowPlayingStage()
-                    }
+                // Layer 1.5: Geometry-Driven Now Playing Stage Drawer (Unmounted when closed to accelerate resize)
+                if progress > 0.001 {
+                    Color.black
+                        .opacity(0.60 * Double(progress))
+                        .ignoresSafeArea()
+                        .allowsHitTesting(progress > 0.05)
+                        .onTapGesture {
+                            vm.closeNowPlayingStage()
+                        }
 
-                NowPlayingSplitView(theme: theme)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .offset(y: drawerY)
-                    .opacity(openProgress > 0.01 ? 1.0 : 0.0)
-                    .allowsHitTesting(openProgress > 0.5)
-                    .zIndex(15)
+                    NowPlayingSplitView(theme: theme)
+                        .frame(width: windowW, height: windowH)
+                        .offset(y: drawerY)
+                        .allowsHitTesting(progress > 0.5)
+                        .zIndex(15)
+                }
 
                 // Layer 2: Modal Sheets & Overlays
                 if vm.showNewPlaylistModal {
                     Color.black.opacity(0.65)
                         .ignoresSafeArea()
-                        .onTapGesture { vm.showNewPlaylistModal = false }
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                vm.showNewPlaylistModal = false
+                            }
+                        }
 
                     CreatePlaylistModalSheet(theme: theme)
                         .transition(.scale(scale: 0.95).combined(with: .opacity))
@@ -119,7 +128,11 @@ public struct MainAppView: View {
                 if vm.showTrackDetailsModal {
                     Color.black.opacity(0.65)
                         .ignoresSafeArea()
-                        .onTapGesture { vm.showTrackDetailsModal = false }
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                vm.showTrackDetailsModal = false
+                            }
+                        }
 
                     TrackDetailsModalSheet(theme: theme)
                         .transition(.scale(scale: 0.95).combined(with: .opacity))
@@ -128,7 +141,11 @@ public struct MainAppView: View {
                 if vm.showTelemetry {
                     Color.black.opacity(0.65)
                         .ignoresSafeArea()
-                        .onTapGesture { vm.showTelemetry = false }
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                vm.showTelemetry = false
+                            }
+                        }
 
                     TelemetryModalView(theme: theme)
                         .transition(.scale(scale: 0.95).combined(with: .opacity))
@@ -137,7 +154,11 @@ public struct MainAppView: View {
                 if vm.showKeyboardShortcutsModal {
                     Color.black.opacity(0.65)
                         .ignoresSafeArea()
-                        .onTapGesture { vm.showKeyboardShortcutsModal = false }
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                vm.showKeyboardShortcutsModal = false
+                            }
+                        }
 
                     KeyboardShortcutsModalSheet(theme: theme)
                         .transition(.scale(scale: 0.95).combined(with: .opacity))
@@ -163,19 +184,31 @@ public struct MainAppView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .animation(.spring(response: 0.30, dampingFraction: 0.84), value: vm.showNewPlaylistModal)
+            .animation(.spring(response: 0.30, dampingFraction: 0.84), value: vm.showTrackDetailsModal)
+            .animation(.spring(response: 0.30, dampingFraction: 0.84), value: vm.showTelemetry)
+            .animation(.spring(response: 0.30, dampingFraction: 0.84), value: vm.showKeyboardShortcutsModal)
+            .animation(.spring(response: 0.34, dampingFraction: 0.82), value: vm.toastMessage.isEmpty)
             .coordinateSpace(name: "MainWindowCoordSpace")
-            .frame(width: geo.size.width, height: geo.size.height)
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         }
         .background {
             AmbientArtworkMeshBackground(
-                artwork: engine.currentTrack?.artwork,
+                artwork: engine.currentTrack?.blurredArtwork ?? engine.currentTrack?.artwork,
                 accentColor: theme.primary,
+                secondaryColor: theme.secondary,
+                surfaceColor: theme.surface,
                 canvasMode: currentCanvasMode,
                 isDark: isEffectiveDark
             )
         }
         .frame(minWidth: 880, minHeight: 600)
         .preferredColorScheme(isEffectiveDark ? .dark : .light)
+        .transaction { transaction in
+            if zoomManager.isZoomAnimating {
+                transaction.disablesAnimations = true
+            }
+        }
         .opacity(vm.hasAppeared ? 1 : 0)
         .scaleEffect(vm.hasAppeared ? 1 : 0.985)
         .tint(theme.primary)
@@ -188,19 +221,19 @@ public struct MainAppView: View {
     }
 
     @ViewBuilder
-    private func workspaceContent(theme: LiquidGlassTheme) -> some View {
+    private func workspaceContent(theme: LiquidGlassTheme, rightColumnW: CGFloat) -> some View {
         ZStack {
             switch vm.activeTab {
             case .library:
-                LibraryView(theme: theme)
+                LibraryView(theme: theme, showAlbumColumn: rightColumnW > 600)
                     .id(AppTab.library)
                     .transition(contextualTabTransition)
             case .playlist:
-                LibraryView(theme: theme, playlistsOnlyMode: true)
+                LibraryView(theme: theme, playlistsOnlyMode: true, showAlbumColumn: rightColumnW > 600)
                     .id(AppTab.playlist)
                     .transition(contextualTabTransition)
             case .settings:
-                SettingsBentoView(theme: theme)
+                SettingsBentoView(theme: theme, isWide: rightColumnW >= 680)
                     .id(AppTab.settings)
                     .transition(contextualTabTransition)
             }
@@ -214,11 +247,5 @@ public struct MainAppView: View {
             insertion: .move(edge: edge).combined(with: .opacity),
             removal: .move(edge: edge == .bottom ? .top : .bottom).combined(with: .opacity)
         )
-    }
-}
-
-fileprivate extension Color {
-    func toNSColor() -> NSColor {
-        NSColor(self)
     }
 }

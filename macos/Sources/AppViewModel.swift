@@ -102,6 +102,13 @@ public class AppViewModel: ObservableObject {
     @Published public var searchFocusTrigger: Int = 0
     @Published public var hasAppeared: Bool = false
 
+    // Interactive Hover States (Avoids Swift 6 @State external macro requirements in CLI builds)
+    @Published public var hoveredSidebarItemId: String? = nil
+    @Published public var hoveredTrackPath: String? = nil
+    @Published public var hoveredLyricIndex: Int? = nil
+    @Published public var hoveredQueueTrackId: String? = nil
+    @Published public var hoveredToolbarBtn: String? = nil
+
     public func switchTab(to newTab: AppTab) {
         guard activeTab != newTab else { return }
         tabTransitionDirection = newTab.index > activeTab.index ? 1 : -1
@@ -181,10 +188,15 @@ public class AppViewModel: ObservableObject {
             AudioEngine.shared.play(track: track)
         }
     }
-    @Published public var tracks: [TrackMetadata] = []
+    @Published public var tracks: [TrackMetadata] = [] {
+        didSet {
+            rebuildFilteredTracksCache()
+        }
+    }
     @Published public var searchText: String = "" {
         didSet {
             searchSelectedIndex = 0
+            rebuildFilteredTracksCache()
         }
     }
     @Published public var searchSelectedIndex: Int = 0
@@ -195,8 +207,16 @@ public class AppViewModel: ObservableObject {
     @Published public var telemetrySearchQuery: String = ""
     
     // Playlists & New Playlist Modal State
-    @Published public var playlists: [UserPlaylist] = []
-    @Published public var selectedPlaylistId: String? = nil
+    @Published public var playlists: [UserPlaylist] = [] {
+        didSet {
+            rebuildFilteredTracksCache()
+        }
+    }
+    @Published public var selectedPlaylistId: String? = nil {
+        didSet {
+            rebuildFilteredTracksCache()
+        }
+    }
     @Published public var showNewPlaylistModal: Bool = false
     @Published public var showTrackDetailsModal: Bool = false
     @Published public var newPlaylistName: String = ""
@@ -204,13 +224,23 @@ public class AppViewModel: ObservableObject {
     @Published public var newPlaylistSelectedPaths: Set<String> = []
     
     // Dynamic Play Queue & Up Next State (Google / Spotify style queue)
-    @Published public var upNextQueue: [TrackMetadata] = []
+    @Published public var upNextQueue: [TrackMetadata] = [] {
+        didSet {
+            AudioEngine.shared.invalidatePreparedNextTrack()
+        }
+    }
     @Published public var toastMessage: String = ""
     @Published public var showSaveQueueModal: Bool = false
     @Published public var saveQueuePlaylistName: String = ""
     
     // Liked Songs / Favorites State (YouTube Music style)
-    @Published public var likedTrackPaths: Set<String> = []
+    @Published public var likedTrackPaths: Set<String> = [] {
+        didSet {
+            if selectedPlaylistId == "LIKED_SONGS" {
+                rebuildFilteredTracksCache()
+            }
+        }
+    }
     
     public var likedTracksCount: Int {
         return tracks.filter { likedTrackPaths.contains($0.path) }.count
@@ -244,15 +274,23 @@ public class AppViewModel: ObservableObject {
     }
     
     // Audiophile Hardware Filter State (Format, Bit Depth, Sample Rate kHz)
-    @Published public var selectedFormatFilter: String = "ALL" // "ALL", "FLAC", "WAV"
-    @Published public var selectedBitDepthFilter: UInt32 = 0   // 0 = All, 24, 16, 8, 32
-    @Published public var selectedSampleRateFilter: UInt32 = 0 // 0 = All, 44100, 48000, 88200, 96000, 192000
+    @Published public var selectedFormatFilter: String = "ALL" { // "ALL", "FLAC", "WAV"
+        didSet { rebuildFilteredTracksCache() }
+    }
+    @Published public var selectedBitDepthFilter: UInt32 = 0 {   // 0 = All, 24, 16, 8, 32
+        didSet { rebuildFilteredTracksCache() }
+    }
+    @Published public var selectedSampleRateFilter: UInt32 = 0 { // 0 = All, 44100, 48000, 88200, 96000, 192000
+        didSet { rebuildFilteredTracksCache() }
+    }
     
     @Published public var volumeDb: Int = 0 { // 0 dBFS unity gain
         didSet {
-            let db = Int32(volumeDb)
-            AudioEngine.shared.engineQueue.async {
-                tsrossa_set_volume_db(db)
+            let linear = volumeDb <= -60 ? 0.0 : pow(10.0, Double(volumeDb) / 20.0)
+            if abs(AudioEngine.shared.volume - linear) > 0.005 {
+                AudioEngine.shared.volume = linear
+            } else {
+                AudioEngine.shared.setVolume(sliderValue: linear)
             }
         }
     }
@@ -262,11 +300,13 @@ public class AppViewModel: ObservableObject {
             if isShuffle {
                 rebuildShuffleDeck()
             }
+            AudioEngine.shared.invalidatePreparedNextTrack()
         }
     }
     @Published public var repeatMode: RepeatMode = .off {
         didSet {
             UserDefaults.standard.set(repeatMode.rawValue, forKey: "tsrossa.repeatMode")
+            AudioEngine.shared.invalidatePreparedNextTrack()
         }
     }
     public var isRepeat: Bool {
@@ -452,7 +492,26 @@ public class AppViewModel: ObservableObject {
                !searchText.isEmpty
     }
     
+    @Published public private(set) var cachedFilteredTracks: [TrackMetadata] = []
+    @Published public private(set) var cachedTotalDurationText: String = "0m"
+
+    public func rebuildFilteredTracksCache() {
+        let result = computeFilteredTracks()
+        self.cachedFilteredTracks = result
+        let totalDuration = result.reduce(0.0) { $0 + $1.durationSeconds }
+        let mins = Int(totalDuration / 60)
+        self.cachedTotalDurationText = "\(mins)m"
+        AlbumArtCache.shared.prewarmThumbnails(for: result.map { ($0.path, $0.artworkThumbPath) })
+    }
+
     public var filteredTracks: [TrackMetadata] {
+        if cachedFilteredTracks.isEmpty && !tracks.isEmpty {
+            return computeFilteredTracks()
+        }
+        return cachedFilteredTracks
+    }
+
+    private func computeFilteredTracks() -> [TrackMetadata] {
         var result = tracks
         
         // 1. Liked Songs or Playlist filter (Smart Keyword or Explicit Track Paths)
@@ -641,37 +700,78 @@ public class AppViewModel: ObservableObject {
     }
     
     public func updateThemeForTrack(track: TrackMetadata) {
-        ArtworkExtractor.loadArtworkAndTheme(for: track.path) { [weak self] artwork, theme in
+        ArtworkExtractor.loadArtworkAndTheme(
+            for: track.path,
+            knownThumbPath: track.artworkThumbPath,
+            dominantHex: track.dominantColorHex
+        ) { [weak self] artwork, blurred, theme in
             guard let self = self else { return }
-            withAnimation(.easeInOut(duration: 0.50)) {
-                self.currentArtwork = artwork
-                if self.accentColorMode == "DYNAMIC" {
-                    self.currentTheme = theme
-                }
+            self.currentArtwork = artwork
+            if self.accentColorMode == "DYNAMIC" {
+                self.currentTheme = theme
             }
+
+            var targetR = 1.0, targetG = 0.18, targetB = 0.33
+            if self.accentColorMode == "ROSE" {
+                targetR = 1.0; targetG = 0.18; targetB = 0.33
+            } else if self.accentColorMode == "MATCHA" {
+                targetR = 0.62; targetG = 0.82; targetB = 0.38
+            } else if self.accentColorMode == "GOLD" {
+                targetR = 1.0; targetG = 0.84; targetB = 0.0
+            } else if self.accentColorMode == "CYAN" {
+                targetR = 0.0; targetG = 0.90; targetB = 1.0
+            } else {
+                let ns = theme.seedColor.toNSColor().usingColorSpace(.sRGB) ?? NSColor(srgbRed: 1.0, green: 0.18, blue: 0.33, alpha: 1.0)
+                targetR = Double(ns.redComponent)
+                targetG = Double(ns.greenComponent)
+                targetB = Double(ns.blueComponent)
+            }
+
+            AmbientCanvasState.shared.transitionTo(
+                trackKey: track.path,
+                artwork: blurred ?? artwork,
+                targetR: targetR,
+                targetG: targetG,
+                targetB: targetB,
+                duration: 0.82
+            )
         }
     }
     
     public func setAccentColorMode(_ mode: String) {
         accentColorMode = mode
-        withAnimation(.easeInOut(duration: 0.35)) {
-            switch mode {
-            case "ROSE":
-                currentTheme = DynamicMaterialTheme(seedR: 1.0, seedG: 0.18, seedB: 0.33)
-            case "MATCHA":
-                currentTheme = DynamicMaterialTheme(seedR: 0.62, seedG: 0.82, seedB: 0.38)
-            case "GOLD":
-                currentTheme = DynamicMaterialTheme(seedR: 1.0, seedG: 0.84, seedB: 0.0)
-            case "CYAN":
-                currentTheme = DynamicMaterialTheme(seedR: 0.0, seedG: 0.90, seedB: 1.0)
-            default: // DYNAMIC
-                if let track = AudioEngine.shared.currentTrack {
-                    updateThemeForTrack(track: track)
-                } else {
-                    currentTheme = DynamicMaterialTheme.defaultTheme
-                }
+        var targetR = 1.0, targetG = 0.18, targetB = 0.33
+        switch mode {
+        case "ROSE":
+            currentTheme = DynamicMaterialTheme(seedR: 1.0, seedG: 0.18, seedB: 0.33)
+            targetR = 1.0; targetG = 0.18; targetB = 0.33
+        case "MATCHA":
+            currentTheme = DynamicMaterialTheme(seedR: 0.62, seedG: 0.82, seedB: 0.38)
+            targetR = 0.62; targetG = 0.82; targetB = 0.38
+        case "GOLD":
+            currentTheme = DynamicMaterialTheme(seedR: 1.0, seedG: 0.84, seedB: 0.0)
+            targetR = 1.0; targetG = 0.84; targetB = 0.0
+        case "CYAN":
+            currentTheme = DynamicMaterialTheme(seedR: 0.0, seedG: 0.90, seedB: 1.0)
+            targetR = 0.0; targetG = 0.90; targetB = 1.0
+        default: // DYNAMIC
+            if let track = AudioEngine.shared.currentTrack {
+                updateThemeForTrack(track: track)
+                return
+            } else {
+                currentTheme = DynamicMaterialTheme.defaultTheme
+                targetR = 1.0; targetG = 0.18; targetB = 0.33
             }
         }
+
+        AmbientCanvasState.shared.transitionTo(
+            trackKey: AudioEngine.shared.currentTrack?.path ?? "preset",
+            artwork: AmbientCanvasState.shared.currentArtwork,
+            targetR: targetR,
+            targetG: targetG,
+            targetB: targetB,
+            duration: 0.45
+        )
     }
     
     // =========================================================================
@@ -916,8 +1016,53 @@ public class AppViewModel: ObservableObject {
         if !upNextQueue.isEmpty {
             return upNextQueue.first
         }
+        if isShuffle && shuffleDeck.isEmpty {
+            rebuildShuffleDeck()
+        }
         var state = self.queueState
-        return QueueHelper.resolveNextTrack(state: &state, userInitiated: false)
+        let candidate = QueueHelper.resolveNextTrack(state: &state, userInitiated: false)
+        if isShuffle && self.shuffleDeck != state.shuffleDeck {
+            self.shuffleDeck = state.shuffleDeck
+        }
+        return candidate
+    }
+
+    public func commitSeamlessGaplessTransition(
+        realRate: UInt32,
+        realBits: UInt32,
+        realChannels: UInt32,
+        realDuration: Double,
+        telemetryJson: String
+    ) {
+        var state = self.queueState
+        guard let nextTrack = QueueHelper.resolveNextTrack(state: &state, userInitiated: false) else {
+            AudioEngine.shared.stop()
+            return
+        }
+        self.queueState = state
+
+        var updated = nextTrack
+        if realRate > 0 { updated.sampleRate = realRate }
+        if realBits > 0 { updated.bitDepth = realBits }
+        if realChannels > 0 { updated.channels = realChannels }
+        if realDuration > 0 { updated.durationSeconds = realDuration }
+
+        AudioEngine.shared.currentTrack = updated
+        AudioEngine.shared.currentTime = tsrossa_get_current_time()
+        AudioEngine.shared.totalDuration = realDuration > 0 ? realDuration : updated.durationSeconds
+        AudioEngine.shared.isPlaying = true
+        AudioEngine.shared.isPaused = false
+        AudioEngine.shared.telemetryJson = telemetryJson
+
+        if let idx = self.tracks.firstIndex(where: { $0.path == updated.path }) {
+            self.tracks[idx] = updated
+        }
+
+        self.updateThemeForTrack(track: updated)
+        self.loadLyrics(for: updated)
+        AudioEngine.shared.updateNowPlayingInfo()
+        AudioEngine.shared.updatePowerAssertion(keepAwake: self.keepScreenAwake)
+        AppLogger.shared.log(.audio, .info, "Gapless transition committed seamlessly to: \(updated.title) (\(updated.sampleRate) Hz, \(updated.bitDepth)-bit)")
     }
 
     public func playNextTrack(userInitiated: Bool = true) {
@@ -1269,21 +1414,19 @@ public class AppViewModel: ObservableObject {
     // NOW PLAYING STAGE ANIMATION & TRACKPAD TWO-FINGER GESTURE ENGINE
     // =========================================================================
     public func openNowPlayingStage() {
-        withAnimation(.spring(response: 0.44, dampingFraction: 0.86)) {
-            self.nowPlayingDragOffset = 0
-            self.isNowPlayingExpanded = true
-        }
+        self.nowPlayingDragOffset = 0
+        self.isNowPlayingExpanded = true
+        NowPlayingDrawerState.shared.animateTo(1.0, duration: 0.46)
     }
 
     public func closeNowPlayingStage() {
-        withAnimation(.spring(response: 0.44, dampingFraction: 0.86)) {
-            self.nowPlayingDragOffset = 0
-            self.isNowPlayingExpanded = false
-        }
+        self.nowPlayingDragOffset = 0
+        self.isNowPlayingExpanded = false
+        NowPlayingDrawerState.shared.animateTo(0.0, duration: 0.44)
     }
 
     public func toggleNowPlayingStage() {
-        if self.isNowPlayingExpanded {
+        if NowPlayingDrawerState.shared.revealProgress > 0.5 || self.isNowPlayingExpanded {
             self.closeNowPlayingStage()
         } else {
             self.openNowPlayingStage()
@@ -1291,16 +1434,61 @@ public class AppViewModel: ObservableObject {
     }
 
     private var trackpadMonitor: Any?
-    private var isTrackpadDraggingDrawer: Bool = false
-    private var accumulatedTrackpadDeltaY: CGFloat = 0
-    private var lastTrackpadDeltaY: CGFloat = 0
+    private enum TrackpadInteractionMode {
+        case undecided
+        case passThroughScroll       // Native ScrollView for playlists, library, lyrics, queue
+        case drawerVerticalDrag      // Drawer open/close drag
+        case horizontalTabSwipe      // Swipe between Up Next and Lyrics
+    }
+    private var trackpadMode: TrackpadInteractionMode = .undecided
+    private var trackpadAccumulatedDeltaX: CGFloat = 0
+    private var trackpadAccumulatedDeltaY: CGFloat = 0
+    private var trackpadLastVelocityY: CGFloat = 0
+    private var horizontalSwipeTriggered: Bool = false
+    private var consumeRemainingMomentum: Bool = false
+    private var drawerWasOpenAtGestureStart: Bool = false
+
+    private func finishDrawerVerticalDrag() {
+        self.consumeRemainingMomentum = true
+        let finalProgress = NowPlayingDrawerState.shared.revealProgress
+        let totalDeltaY = self.trackpadAccumulatedDeltaY
+        let velocityY = self.trackpadLastVelocityY
+        let startedOpen = self.drawerWasOpenAtGestureStart
+
+        let shouldOpen: Bool
+        if startedOpen {
+            // User was in Now Playing; close if pulled down by distance or flick velocity
+            let shouldClose = (finalProgress < 0.86) || (totalDeltaY < -24.0) || (velocityY < -4.5)
+            shouldOpen = !shouldClose
+        } else {
+            // User was in Mini Player; open if pushed up by distance or flick velocity
+            shouldOpen = (finalProgress > 0.14) || (totalDeltaY > 22.0) || (velocityY > 4.5)
+        }
+
+        if shouldOpen {
+            self.openNowPlayingStage()
+        } else {
+            self.closeNowPlayingStage()
+        }
+        self.trackpadMode = .undecided
+    }
 
     public func setupTrackpadGestureMonitor() {
         guard trackpadMonitor == nil else { return }
         trackpadMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
             guard let self = self else { return event }
             guard event.hasPreciseScrollingDeltas else { return event }
-            if event.momentumPhase != [] { return event }
+
+            if event.momentumPhase != [] {
+                if self.trackpadMode == .drawerVerticalDrag || NowPlayingDrawerState.shared.isDragging {
+                    self.finishDrawerVerticalDrag()
+                    return nil
+                }
+                if self.consumeRemainingMomentum {
+                    return nil
+                }
+                return event
+            }
 
             guard let window = event.window,
                   let contentView = window.contentView else { return event }
@@ -1314,73 +1502,150 @@ public class AppViewModel: ObservableObject {
             let winW = contentView.bounds.width
             let winH = contentView.bounds.height
 
-            // When natural scrolling is on, moving fingers UP produces negative scrollingDeltaY
-            // We normalize so fingerUpDelta > 0 means physical fingers moved UPWARD
+            let dx = event.scrollingDeltaX
+            let dy = event.scrollingDeltaY
+            // fingerUpDelta > 0 means physical fingers pushed UPWARD
             let fingerUpDelta: CGFloat = event.isDirectionInvertedFromDevice
-                ? -event.scrollingDeltaY
-                : event.scrollingDeltaY
+                ? -dy
+                : dy
 
             if event.phase == .began {
-                if !self.isNowPlayingExpanded {
-                    // Mini player is at bottom: Y <= 115 pt in window coordinates
-                    if loc.y >= 0 && loc.y <= 115 {
-                        self.isTrackpadDraggingDrawer = true
-                        self.accumulatedTrackpadDeltaY = 0
-                        self.lastTrackpadDeltaY = 0
-                    }
-                } else {
-                    // When Now Playing is open:
-                    // Header area: loc.y >= winH - 95 pt
-                    // OR Left stage: loc.x <= winW * 0.48
-                    let isInHeader = loc.y >= (winH - 95)
-                    let isInLeftStage = loc.x <= (winW * 0.48)
-                    if isInHeader || isInLeftStage {
-                        self.isTrackpadDraggingDrawer = true
-                        self.accumulatedTrackpadDeltaY = 0
-                        self.lastTrackpadDeltaY = 0
-                    }
-                }
-            }
-
-            guard self.isTrackpadDraggingDrawer else { return event }
-
-            if event.phase == .changed || event.phase == .began {
-                self.lastTrackpadDeltaY = fingerUpDelta
-                self.accumulatedTrackpadDeltaY += fingerUpDelta
-
-                if !self.isNowPlayingExpanded {
-                    let upwardPull = max(0, self.accumulatedTrackpadDeltaY)
-                    self.nowPlayingDragOffset = -upwardPull
-                } else {
-                    let downwardPull = max(0, -self.accumulatedTrackpadDeltaY)
-                    self.nowPlayingDragOffset = downwardPull
-                }
-                return nil
+                self.trackpadMode = .undecided
+                self.trackpadAccumulatedDeltaX = 0
+                self.trackpadAccumulatedDeltaY = 0
+                self.trackpadLastVelocityY = 0
+                self.horizontalSwipeTriggered = false
+                self.consumeRemainingMomentum = false
+                self.drawerWasOpenAtGestureStart = (NowPlayingDrawerState.shared.revealProgress > 0.5) || self.isNowPlayingExpanded
             }
 
             if event.phase == .ended || event.phase == .cancelled {
-                self.isTrackpadDraggingDrawer = false
-                if !self.isNowPlayingExpanded {
-                    let pulledUpEnough = (-self.nowPlayingDragOffset > 36) || (self.lastTrackpadDeltaY > 8 && -self.nowPlayingDragOffset > 10)
-                    if pulledUpEnough {
-                        self.openNowPlayingStage()
-                    } else {
-                        self.closeNowPlayingStage()
-                    }
-                } else {
-                    let pulledDownEnough = (self.nowPlayingDragOffset > 42) || (self.lastTrackpadDeltaY < -8 && self.nowPlayingDragOffset > 12)
-                    if pulledDownEnough {
-                        self.closeNowPlayingStage()
-                    } else {
-                        self.openNowPlayingStage()
-                    }
+                if self.trackpadMode == .drawerVerticalDrag || NowPlayingDrawerState.shared.isDragging {
+                    self.finishDrawerVerticalDrag()
+                    return nil
                 }
-                self.accumulatedTrackpadDeltaY = 0
-                self.lastTrackpadDeltaY = 0
-                return nil
+                if self.trackpadMode == .horizontalTabSwipe {
+                    self.consumeRemainingMomentum = true
+                    self.trackpadMode = .undecided
+                    return nil
+                }
             }
 
-            return event
+            let isDrawerOpen = self.drawerWasOpenAtGestureStart
+
+            if self.trackpadMode == .undecided {
+                let dist = hypot(dx, dy)
+                if dist < 1.2 {
+                    return event
+                }
+
+                if isDrawerOpen {
+                    // Check horizontal swipe gesture between Up Next and Lyrics (#NOTE 1)
+                    if abs(dx) > abs(dy) * 1.25 {
+                        self.trackpadMode = .horizontalTabSwipe
+                    } else {
+                        // Check real frame of QueueLyricsView if available
+                        let queueFrame = NowPlayingDrawerState.shared.queuePanelFrameInWindow
+                        let swiftUIPoint = CGPoint(x: loc.x, y: winH - loc.y) // convert AppKit bottom-left to SwiftUI top-left
+
+                        // Calculate exact geometry according to NowPlayingSplitView layout
+                        let availW = max(300.0, winW - 32.0)
+                        let innerPad = max(16.0, min(28.0, availW * 0.025))
+                        let leftColW = max(280.0, min(460.0, availW * 0.45))
+                        let colSpacing = max(16.0, min(36.0, availW * 0.03))
+                        let exactRightPanelStartX = 16.0 + innerPad + leftColW + (colSpacing * 0.5)
+                        let exactHeaderTopHeight: CGFloat = 76.0 // 28pt top pad + 48pt drawerHeader
+
+                        let hitView = contentView.hitTest(loc)
+                        var isInsideScrollView = false
+                        var checkView: NSView? = hitView
+                        while let v = checkView {
+                            if v is NSScrollView {
+                                isInsideScrollView = true
+                                break
+                            }
+                            checkView = v.superview
+                        }
+
+                        let inQueueOrLyricsList: Bool
+                        if !queueFrame.isEmpty && queueFrame.contains(swiftUIPoint) {
+                            inQueueOrLyricsList = true
+                        } else if loc.x >= exactRightPanelStartX && loc.y <= (winH - exactHeaderTopHeight) {
+                            inQueueOrLyricsList = true
+                        } else if isInsideScrollView && loc.x > (exactRightPanelStartX - 24.0) {
+                            inQueueOrLyricsList = true
+                        } else {
+                            inQueueOrLyricsList = false
+                        }
+
+                        if inQueueOrLyricsList {
+                            // 100% pass through to scroll list of tracks or lyrics
+                            self.trackpadMode = .passThroughScroll
+                        } else {
+                            // Left Stage (Artwork & transport) or Header area
+                            self.trackpadMode = .drawerVerticalDrag
+                        }
+                    }
+                } else {
+                    // Drawer is currently closed
+                    // Mini player is at bottom: Y in [0, 96] and X > 200
+                    let inMiniPlayer = (loc.y >= 0 && loc.y <= 96 && loc.x > 200)
+                    if inMiniPlayer && (abs(dy) > abs(dx) * 1.1 || fingerUpDelta > 0) {
+                        self.trackpadMode = .drawerVerticalDrag
+                    } else {
+                        self.trackpadMode = .passThroughScroll
+                    }
+                }
+            }
+
+            switch self.trackpadMode {
+            case .passThroughScroll:
+                return event
+
+            case .horizontalTabSwipe:
+                self.trackpadAccumulatedDeltaX += dx
+                if !self.horizontalSwipeTriggered && abs(self.trackpadAccumulatedDeltaX) > 28 {
+                    self.horizontalSwipeTriggered = true
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                        self.queueTab = (self.queueTab == .upNext) ? .lyrics : .upNext
+                    }
+                }
+                if event.phase == .ended || event.phase == .cancelled {
+                    self.consumeRemainingMomentum = true
+                    self.trackpadMode = .undecided
+                }
+                return nil
+
+            case .drawerVerticalDrag:
+                self.trackpadAccumulatedDeltaY += fingerUpDelta
+                self.trackpadLastVelocityY = fingerUpDelta
+
+                // Clamped step and 520pt drag span so trackpad acceleration doesn't jump to 100% in 40ms
+                let clampedStep = max(-16.0, min(16.0, fingerUpDelta))
+                let dragSpan: CGFloat = 520.0
+                let deltaProgress = clampedStep / dragSpan
+                let current = NowPlayingDrawerState.shared.revealProgress
+                let next = min(1.0, max(0.0, current + deltaProgress))
+                let startedOpen = self.drawerWasOpenAtGestureStart
+
+                NowPlayingDrawerState.shared.setInteractiveProgress(next, wasOpenAtStart: startedOpen) { [weak self] shouldOpen in
+                    guard let self = self else { return }
+                    self.trackpadMode = .undecided
+                    if shouldOpen {
+                        self.openNowPlayingStage()
+                    } else {
+                        self.closeNowPlayingStage()
+                    }
+                }
+
+                if event.phase == .ended || event.phase == .cancelled {
+                    self.finishDrawerVerticalDrag()
+                }
+                return nil
+
+            case .undecided:
+                return event
+            }
         }
     }
 }

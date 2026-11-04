@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import QuartzCore
 
 public enum LiquidGlassRole: Sendable {
     case navigationSidebar
@@ -179,72 +180,223 @@ public struct LiquidGlassModifier: ViewModifier {
     }
 }
 
+public final class AmbientCanvasState: ObservableObject {
+    public static let shared = AmbientCanvasState()
+
+    @Published public var previousArtwork: NSImage? = nil
+    @Published public var currentArtwork: NSImage? = nil
+    @Published public var crossfadeProgress: CGFloat = 1.0
+
+    @Published public var seedR: Double = 1.0
+    @Published public var seedG: Double = 0.18
+    @Published public var seedB: Double = 0.33
+
+    private var startSeedR: Double = 1.0
+    private var startSeedG: Double = 0.18
+    private var startSeedB: Double = 0.33
+    private var targetSeedR: Double = 1.0
+    private var targetSeedG: Double = 0.18
+    private var targetSeedB: Double = 0.33
+
+    private var lastTrackKey: String = ""
+    private var fadeTimer: DispatchSourceTimer?
+
+    private init() {}
+
+    public var interpolatedAccentNSColor: NSColor {
+        NSColor(srgbRed: CGFloat(seedR), green: CGFloat(seedG), blue: CGFloat(seedB), alpha: 1.0)
+    }
+
+    public func transitionTo(
+        trackKey: String,
+        artwork: NSImage?,
+        targetR: Double,
+        targetG: Double,
+        targetB: Double,
+        duration: TimeInterval = 0.82
+    ) {
+        fadeTimer?.cancel()
+        fadeTimer = nil
+
+        let isNewTrack = (trackKey != lastTrackKey)
+        let isNewArt = (currentArtwork !== artwork)
+
+        if isNewTrack || isNewArt {
+            if crossfadeProgress > 0.4 || previousArtwork == nil {
+                previousArtwork = currentArtwork
+            }
+            currentArtwork = artwork
+            crossfadeProgress = (previousArtwork == nil && currentArtwork != nil) ? 1.0 : 0.0
+            lastTrackKey = trackKey
+        }
+
+        startSeedR = seedR
+        startSeedG = seedG
+        startSeedB = seedB
+        targetSeedR = targetR
+        targetSeedG = targetG
+        targetSeedB = targetB
+
+        let startTime = CACurrentMediaTime()
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
+        timer.schedule(deadline: .now(), repeating: .microseconds(16667), leeway: .microseconds(1000))
+
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let elapsed = CACurrentMediaTime() - startTime
+            let rawT = min(1.0, max(0.0, elapsed / duration))
+            // Smooth Cosine S-Curve for pure, buttery cross-dissolve
+            let eased = 0.5 - 0.5 * cos(Double.pi * rawT)
+
+            self.crossfadeProgress = CGFloat(eased)
+            self.seedR = self.startSeedR + (self.targetSeedR - self.startSeedR) * eased
+            self.seedG = self.startSeedG + (self.targetSeedG - self.startSeedG) * eased
+            self.seedB = self.startSeedB + (self.targetSeedB - self.startSeedB) * eased
+
+            if rawT >= 1.0 {
+                self.fadeTimer?.cancel()
+                self.fadeTimer = nil
+                self.crossfadeProgress = 1.0
+                self.previousArtwork = self.currentArtwork
+                self.seedR = self.targetSeedR
+                self.seedG = self.targetSeedG
+                self.seedB = self.targetSeedB
+            }
+        }
+
+        fadeTimer = timer
+        timer.resume()
+    }
+}
+
+public struct AmbientCrossfadeArtworkView: View {
+    @ObservedObject var canvas = AmbientCanvasState.shared
+    public var opacity: Double
+
+    public init(opacity: Double = 0.35) {
+        self.opacity = opacity
+    }
+
+    public var body: some View {
+        ZStack {
+            if let prev = canvas.previousArtwork {
+                let prevFactor = (canvas.currentArtwork == nil) ? (1.0 - canvas.crossfadeProgress) : (1.0 - canvas.crossfadeProgress * 0.70)
+                Image(nsImage: prev)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFill()
+                    .opacity(max(0.0, opacity * Double(prevFactor)))
+            }
+
+            if let curr = canvas.currentArtwork {
+                let currFactor = canvas.crossfadeProgress
+                Image(nsImage: curr)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFill()
+                    .opacity(max(0.0, opacity * Double(currFactor)))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .allowsHitTesting(false)
+    }
+}
+
 public struct AmbientArtworkMeshBackground: View {
+    @ObservedObject var canvas = AmbientCanvasState.shared
     public var artwork: NSImage?
     public var accentColor: Color
+    public var secondaryColor: Color
+    public var surfaceColor: Color
     public var canvasMode: BackgroundCanvasMode
     public var isDark: Bool
 
     public init(
         artwork: NSImage? = nil,
         accentColor: Color = .pink,
+        secondaryColor: Color = .indigo,
+        surfaceColor: Color = Color(red: 0.05, green: 0.05, blue: 0.07),
         canvasMode: BackgroundCanvasMode = .liquidRefraction,
         isDark: Bool = true
     ) {
         self.artwork = artwork
         self.accentColor = accentColor
+        self.secondaryColor = secondaryColor
+        self.surfaceColor = surfaceColor
         self.canvasMode = canvasMode
         self.isDark = isDark
     }
 
     public var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                // Base background
-                if isDark {
-                    Color(red: 0.05, green: 0.05, blue: 0.07)
-                } else {
-                    Color(red: 0.95, green: 0.96, blue: 0.98)
-                }
+        ZStack {
+            // Base Theme Surface
+            surfaceColor
 
-                if canvasMode == .liquidRefraction || canvasMode == .ambientMesh {
-                    if let img = artwork {
-                        Image(nsImage: img)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: geo.size.width, height: geo.size.height)
-                            .blur(radius: 80)
-                            .opacity(isDark ? 0.38 : 0.20)
-                            .clipped()
-                    } else {
-                        // Ambient gradient mesh fallback
-                        LinearGradient(
-                            colors: [
-                                accentColor.opacity(isDark ? 0.35 : 0.20),
-                                Color.indigo.opacity(isDark ? 0.20 : 0.10),
-                                Color.clear
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .blur(radius: 60)
-                    }
-                }
-
-                // Subtle dark/light vignette
-                RadialGradient(
-                    gradient: Gradient(colors: [
-                        Color.clear,
-                        isDark ? Color.black.opacity(0.45) : Color.white.opacity(0.25)
-                    ]),
-                    center: .center,
-                    startRadius: 180,
-                    endRadius: max(geo.size.width, geo.size.height) * 0.75
+            switch canvasMode {
+            case .pureGlass:
+                // Minimal Clean Studio Mode ("BLACK")
+                LinearGradient(
+                    colors: [
+                        accentColor.opacity(isDark ? 0.04 : 0.03),
+                        Color.clear
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
                 )
+
+            case .ambientMesh:
+                // Chromatic Mesh Aura Mode ("AURA"): Ambient multi-point light from active theme
+                ZStack {
+                    LinearGradient(
+                        colors: [
+                            accentColor.opacity(isDark ? 0.34 : 0.22),
+                            secondaryColor.opacity(isDark ? 0.22 : 0.14),
+                            surfaceColor.opacity(0.92)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    RadialGradient(
+                        colors: [
+                            accentColor.opacity(isDark ? 0.26 : 0.16),
+                            Color.clear
+                        ],
+                        center: .topLeading,
+                        startRadius: 20,
+                        endRadius: 520
+                    )
+                }
+
+            case .liquidRefraction:
+                // Liquid Artwork Refraction Mode ("DYNAMIC"): Refracted artwork glow + theme
+                ZStack {
+                    AmbientCrossfadeArtworkView(opacity: isDark ? 0.40 : 0.22)
+
+                    LinearGradient(
+                        colors: [
+                            accentColor.opacity(isDark ? 0.20 : 0.12),
+                            secondaryColor.opacity(isDark ? 0.12 : 0.08),
+                            surfaceColor.opacity(isDark ? 0.55 : 0.45)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
             }
-            .frame(width: geo.size.width, height: geo.size.height)
-            .clipped()
+
+            // Subtle dark/light vignette
+            LinearGradient(
+                colors: [
+                    Color.clear,
+                    isDark ? Color.black.opacity(0.32) : Color.white.opacity(0.18)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
         .ignoresSafeArea()
         .allowsHitTesting(false)
     }
@@ -254,10 +406,13 @@ public struct AmbientArtworkMeshBackground: View {
 // WINDOW ZOOM & FIT-TO-SCREEN MANAGER (macOS Double-Tap / Double-Click Zoom)
 // ==============================================================================
 
-public final class WindowZoomManager: NSObject, NSWindowDelegate {
+public final class WindowZoomManager: NSObject, NSWindowDelegate, ObservableObject {
     public static let shared = WindowZoomManager()
+    @Published public var isZoomAnimating: Bool = false
     private var savedRestoreFrames: [Int: NSRect] = [:]
     private var mouseMonitor: Any?
+    private var activeFrameTimer: DispatchSourceTimer?
+    private var configuredWindowNumbers = Set<Int>()
 
     public func configure(window: NSWindow) {
         window.delegate = self
@@ -265,10 +420,54 @@ public final class WindowZoomManager: NSObject, NSWindowDelegate {
         window.contentMinSize = NSSize(width: 880, height: 600)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+
+        let winNum = window.windowNumber
+        if !configuredWindowNumbers.contains(winNum) {
+            configuredWindowNumbers.insert(winNum)
+            let currentF = window.frame
+            if currentF.width <= 900 && currentF.height <= 620 {
+                let screen = window.screen ?? NSScreen.main
+                if let vf = screen?.visibleFrame {
+                    let defW = min(1200.0, vf.width * 0.80)
+                    let defH = min(760.0, vf.height * 0.80)
+                    let initRect = NSRect(
+                        x: round(vf.midX - defW / 2.0),
+                        y: round(vf.midY - defH / 2.0),
+                        width: defW,
+                        height: defH
+                    )
+                    window.setFrame(initRect, display: true, animate: false)
+                    savedRestoreFrames[winNum] = initRect
+                }
+            }
+        }
+
+        if let zoomBtn = window.standardWindowButton(.zoomButton) {
+            zoomBtn.target = self
+            zoomBtn.action = #selector(handleGreenZoomButton(_:))
+        }
+
         installTopBarDoubleTapMonitorIfNeeded()
     }
 
-    /// Toggles Fit-to-Screen (Zoom to NSScreen.visibleFrame or restores previous size)
+    public func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
+        return window.screen?.visibleFrame ?? newFrame
+    }
+
+    public func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool {
+        toggleFitToScreen(for: window)
+        return false
+    }
+
+    public func animationResizeTime(_ window: NSWindow, newFrame: NSRect) -> TimeInterval {
+        return 0.46
+    }
+
+    @objc private func handleGreenZoomButton(_ sender: Any?) {
+        toggleFitToScreen()
+    }
+
+    /// Toggles Fit-to-Screen (Zoom to NSScreen.visibleFrame or restores previous size) with 120Hz smooth interpolation
     public func toggleFitToScreen(for targetWindow: NSWindow? = nil) {
         guard let window = targetWindow ?? NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first,
               let screen = window.screen ?? NSScreen.main else { return }
@@ -283,28 +482,98 @@ public final class WindowZoomManager: NSObject, NSWindowDelegate {
             abs(currentFrame.width - visibleFrame.width) <= 8 &&
             abs(currentFrame.height - visibleFrame.height) <= 8
 
+        let targetFrame: NSRect
         if isAlreadyFitted {
-            if let restore = savedRestoreFrames[winNum] {
-                window.setFrame(restore, display: true, animate: true)
+            if let restore = savedRestoreFrames[winNum],
+               restore.width >= 880 && restore.height >= 600 {
+                targetFrame = restore
             } else {
-                let defaultWidth = min(1220.0, visibleFrame.width * 0.82)
-                let defaultHeight = min(780.0, visibleFrame.height * 0.82)
-                let centered = NSRect(
-                    x: visibleFrame.midX - defaultWidth / 2.0,
-                    y: visibleFrame.midY - defaultHeight / 2.0,
+                let defaultWidth = min(1200.0, visibleFrame.width * 0.80)
+                let defaultHeight = min(760.0, visibleFrame.height * 0.80)
+                targetFrame = NSRect(
+                    x: round(visibleFrame.midX - defaultWidth / 2.0),
+                    y: round(visibleFrame.midY - defaultHeight / 2.0),
                     width: defaultWidth,
                     height: defaultHeight
                 )
-                window.setFrame(centered, display: true, animate: true)
             }
         } else {
             savedRestoreFrames[winNum] = currentFrame
-            window.setFrame(visibleFrame, display: true, animate: true)
+            targetFrame = visibleFrame
         }
+
+        animateWindowFrame(window: window, to: targetFrame, duration: 0.46)
     }
 
-    public func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
-        return window.screen?.visibleFrame ?? newFrame
+    private func animateWindowFrame(window: NSWindow, to targetFrame: NSRect, duration: TimeInterval = 0.46) {
+        activeFrameTimer?.cancel()
+        activeFrameTimer = nil
+
+        let startFrame = window.frame
+        if abs(startFrame.origin.x - targetFrame.origin.x) < 1 &&
+           abs(startFrame.origin.y - targetFrame.origin.y) < 1 &&
+           abs(startFrame.width - targetFrame.width) < 1 &&
+           abs(startFrame.height - targetFrame.height) < 1 {
+            isZoomAnimating = false
+            window.setFrame(targetFrame, display: true, animate: false)
+            return
+        }
+
+        isZoomAnimating = true
+        let startTime = CACurrentMediaTime()
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
+        timer.schedule(deadline: .now(), repeating: .microseconds(8333), leeway: .microseconds(400))
+
+        let scale = max(1.0, window.screen?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0)
+        func snapToPixel(_ val: CGFloat) -> CGFloat {
+            (val * scale).rounded() / scale
+        }
+
+        timer.setEventHandler { [weak self, weak window] in
+            guard let self = self, let window = window else {
+                self?.isZoomAnimating = false
+                self?.activeFrameTimer?.cancel()
+                self?.activeFrameTimer = nil
+                return
+            }
+
+            let elapsed = CACurrentMediaTime() - startTime
+            let rawProgress = min(1.0, max(0.0, elapsed / duration))
+            // Blended Quintic-Cosine S-Curve: zero initial acceleration kick & silky smooth touchdown
+            let cosine = 0.5 - 0.5 * cos(Double.pi * rawProgress)
+            let quintic = rawProgress * rawProgress * rawProgress * (rawProgress * (rawProgress * 6.0 - 15.0) + 10.0)
+            let eased = CGFloat(0.40 * cosine + 0.60 * quintic)
+
+            let minX = snapToPixel(startFrame.minX + (targetFrame.minX - startFrame.minX) * eased)
+            let maxX = snapToPixel(startFrame.maxX + (targetFrame.maxX - startFrame.maxX) * eased)
+            let minY = snapToPixel(startFrame.minY + (targetFrame.minY - startFrame.minY) * eased)
+            let maxY = snapToPixel(startFrame.maxY + (targetFrame.maxY - startFrame.maxY) * eased)
+
+            let currentRect = NSRect(
+                x: minX,
+                y: minY,
+                width: max(880.0, maxX - minX),
+                height: max(600.0, maxY - minY)
+            )
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            window.setFrame(currentRect, display: true, animate: false)
+            CATransaction.commit()
+
+            if rawProgress >= 1.0 {
+                self.activeFrameTimer?.cancel()
+                self.activeFrameTimer = nil
+                self.isZoomAnimating = false
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                window.setFrame(targetFrame, display: true, animate: false)
+                CATransaction.commit()
+            }
+        }
+
+        activeFrameTimer = timer
+        timer.resume()
     }
 
     private func installTopBarDoubleTapMonitorIfNeeded() {
@@ -324,7 +593,12 @@ public final class WindowZoomManager: NSObject, NSWindowDelegate {
                 return event
             }
 
-            // Exclude text search fields or buttons
+            // Exclude traffic light controls (left 78pt, top 32pt)
+            if loc.x < 78 && topDistance < 32 {
+                return event
+            }
+
+            // Exclude text search fields, buttons, or controls
             if let hitView = contentView.hitTest(loc) {
                 if hitView is NSTextView || hitView is NSTextField || hitView is NSControl {
                     return event
@@ -334,7 +608,8 @@ public final class WindowZoomManager: NSObject, NSWindowDelegate {
             DispatchQueue.main.async {
                 self.toggleFitToScreen(for: window)
             }
-            return event
+            // CRITICAL: Consume the 2nd click event so NSTitlebarView doesn't double-trigger performZoom(nil)!
+            return nil
         }
     }
 }

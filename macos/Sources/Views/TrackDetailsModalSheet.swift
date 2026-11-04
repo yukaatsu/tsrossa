@@ -22,12 +22,16 @@ public struct TrackDetailsModalSheet: View {
                         .foregroundStyle(.primary)
                 }
                 Spacer()
-                Button(action: { vm.showTrackDetailsModal = false }) {
+                Button(action: {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        vm.showTrackDetailsModal = false
+                    }
+                }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 18))
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
             }

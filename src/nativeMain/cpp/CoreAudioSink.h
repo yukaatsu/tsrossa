@@ -102,8 +102,10 @@ private:
   void teardownAudioUnit();
 
   bool setDeviceSampleRate(AudioDeviceID deviceId, Float64 targetRate);
+  bool lockHardwarePhysicalStreamFormat(AudioDeviceID deviceId, Float64 targetRate, UInt32 channels, UInt32 preferredBitDepth);
   bool setHogMode(AudioDeviceID deviceId, bool enable);
   bool applyHardwareVolumeScalar(AudioDeviceID deviceId, double sliderValue, double& outResidualLinearGain);
+  void promoteCurrentThreadToRealtime();
 
   void stopDecodeThread();
   void decodeThreadLoop(uint64_t generation);
@@ -140,10 +142,12 @@ private:
 
   // 64 MB Sliding-Window Ring Buffer
   std::vector<int32_t> m_pcmBuffer;
+  std::vector<int32_t> m_renderScratchBuffer;
+  std::atomic<bool> m_machPrioritySet{false};
   bool m_isMemoryLocked = false;
   std::string m_currentFilePath;
 
-  // Gapless Next Track State (32 MB pre-buffer)
+  // Gapless Next Track State (64 MB pre-buffer for O(1) swap)
   std::vector<int32_t> m_pcmBufferNext;
   std::unique_ptr<MacAudioDecoder> m_activeDecoder;
   std::unique_ptr<MacAudioDecoder> m_nextDecoder;
@@ -157,6 +161,9 @@ private:
 
   std::atomic<bool> m_trackFinished{false};
   std::atomic<bool> m_gaplessTransitioned{false};
+  std::atomic<bool> m_needGaplessDecoderHandoff{false};
+  std::atomic<uint64_t> m_prepareNextGen{0};
+  std::mutex m_nextPrepMutex;
 
   // Background Streaming Thread
   std::thread m_decodeThread;

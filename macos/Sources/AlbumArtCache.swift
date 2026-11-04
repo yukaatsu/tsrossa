@@ -1,18 +1,25 @@
 import Foundation
 import AppKit
 import CommonCrypto
+import CoreImage
 
 public final class AlbumArtCache {
     public static let shared = AlbumArtCache()
 
     private let memoryCache = NSCache<NSString, NSImage>()
+    private let thumbnailMemoryCache = NSCache<NSString, NSImage>()
+    private let blurredMemoryCache = NSCache<NSString, NSImage>()
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
     private var missingPaths = Set<String>()
+    private var inFlightPaths = Set<String>()
     private let lock = NSLock()
+    private lazy var ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     private init() {
-        memoryCache.countLimit = 250
+        memoryCache.countLimit = 350
+        thumbnailMemoryCache.countLimit = 3000
+        blurredMemoryCache.countLimit = 150
         if let cachesURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first {
             cacheDirectory = cachesURL.appendingPathComponent("com.yuka.tsrossa.macos/art_thumbs", isDirectory: true)
         } else {
@@ -71,6 +78,105 @@ public final class AlbumArtCache {
         missingPaths.insert(trackPath)
         lock.unlock()
         return nil
+    }
+
+    /// O(1) in-memory non-blocking thumbnail accessor for 120Hz smooth scrolling.
+    /// Never hits the disk synchronously on the Main Thread.
+    public func fastMemoryThumbnail(for trackPath: String, knownThumbPath: String? = nil) -> NSImage? {
+        let key = NSString(string: trackPath)
+        if let thumb = thumbnailMemoryCache.object(forKey: key) {
+            return thumb
+        }
+        if let full = memoryCache.object(forKey: key) {
+            return full
+        }
+
+        lock.lock()
+        let isMissing = missingPaths.contains(trackPath)
+        let inFlight = inFlightPaths.contains(trackPath)
+        if !isMissing && !inFlight {
+            inFlightPaths.insert(trackPath)
+            lock.unlock()
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self = self else { return }
+                _ = self.thumbnailImage(for: trackPath, knownThumbPath: knownThumbPath)
+                self.lock.lock()
+                self.inFlightPaths.remove(trackPath)
+                self.lock.unlock()
+            }
+        } else {
+            lock.unlock()
+        }
+        return nil
+    }
+
+    /// Strictly non-blocking O(1) in-memory lookup for SwiftUI render loop.
+    /// If not in blurredMemoryCache, returns cached thumbnail while triggering background blur generation.
+    public func cachedBlurredCanvasImage(for trackPath: String, knownThumbPath: String? = nil) -> NSImage? {
+        let key = NSString(string: trackPath)
+        if let cached = blurredMemoryCache.object(forKey: key) {
+            return cached
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            _ = self?.blurredCanvasImage(for: trackPath, knownThumbPath: knownThumbPath)
+        }
+        return fastMemoryThumbnail(for: trackPath, knownThumbPath: knownThumbPath)
+    }
+
+    /// O(1) in-memory pre-blurred 64x64 artwork accessor for 120Hz smooth window resize & Fit-to-Screen.
+    /// Completely eliminates GPU blur shader cost and Metal texture re-allocations.
+    public func blurredCanvasImage(for trackPath: String, knownThumbPath: String? = nil) -> NSImage? {
+        let key = NSString(string: trackPath)
+        if let cached = blurredMemoryCache.object(forKey: key) {
+            return cached
+        }
+
+        guard let sourceImage = thumbnailImage(for: trackPath, knownThumbPath: knownThumbPath) else {
+            return nil
+        }
+
+        // 1. Draw source into small 64x64 bitmap rep
+        guard let smallRep = createThumbnailRep(from: sourceImage, targetSize: 64),
+              let cgSource = smallRep.cgImage else {
+            return nil
+        }
+
+        let ciInput = CIImage(cgImage: cgSource)
+        let clampFilter = CIFilter(name: "CIAffineClamp")
+        clampFilter?.setValue(ciInput, forKey: kCIInputImageKey)
+        clampFilter?.setValue(CGAffineTransform.identity, forKey: "inputTransform")
+        let clamped = clampFilter?.outputImage ?? ciInput
+
+        guard let blurFilter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        blurFilter.setValue(clamped, forKey: kCIInputImageKey)
+        blurFilter.setValue(10.0, forKey: kCIInputRadiusKey)
+
+        guard let blurredCI = blurFilter.outputImage,
+              let blurredCG = ciContext.createCGImage(blurredCI, from: CGRect(x: 0, y: 0, width: 64, height: 64)) else {
+            return nil
+        }
+
+        let finalImage = NSImage(cgImage: blurredCG, size: NSSize(width: 64, height: 64))
+        blurredMemoryCache.setObject(finalImage, forKey: key)
+        return finalImage
+    }
+
+    /// Background pre-warming of pre-decoded thumbnails and pre-blurred canvas into RAM when library is loaded.
+    public func prewarmThumbnails(for trackPaths: [(path: String, thumbPath: String?)]) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            for item in trackPaths {
+                let key = NSString(string: item.path)
+                if self.thumbnailMemoryCache.object(forKey: key) == nil {
+                    if let img = self.thumbnailImage(for: item.path, knownThumbPath: item.thumbPath) {
+                        self.thumbnailMemoryCache.setObject(img, forKey: key)
+                    }
+                }
+                if self.blurredMemoryCache.object(forKey: key) == nil {
+                    _ = self.blurredCanvasImage(for: item.path, knownThumbPath: item.thumbPath)
+                }
+            }
+        }
     }
 
     public func storeAndProcessArtwork(rawData: Data?, for trackURL: URL) -> (thumbnailPath: String?, dominantHex: String?) {

@@ -16,36 +16,41 @@ public class LyricsManager {
     
     private init() {}
     
-    /// Attempts to load lyrics for a track from local companion files (.lrc, .txt) or embedded metadata.
+    /// Attempts to load lyrics for a track from local companion files (.lrc, .txt) or embedded metadata (FLAC Vorbis, ID3 USLT, MP4).
     public func fetchLyrics(for track: TrackMetadata) -> [LyricLine] {
         let audioUrl = URL(fileURLWithPath: track.path)
         let directoryUrl = audioUrl.deletingLastPathComponent()
         let baseFilename = audioUrl.deletingPathExtension().lastPathComponent
         
-        // 1. Check for exact matching .lrc file in the same directory
-        let lrcUrl = directoryUrl.appendingPathComponent("\(baseFilename).lrc")
-        if FileManager.default.fileExists(atPath: lrcUrl.path),
-           let content = try? String(contentsOf: lrcUrl, encoding: .utf8) {
-            let parsed = parseLrcContent(content)
-            if !parsed.isEmpty { return parsed }
+        // 1. Check for exact or case-insensitive companion .lrc or .txt file in the same directory
+        let candidateExtensions = ["lrc", "LRC", "txt", "TXT"]
+        for ext in candidateExtensions {
+            let fileUrl = directoryUrl.appendingPathComponent("\(baseFilename).\(ext)")
+            if FileManager.default.fileExists(atPath: fileUrl.path) {
+                if let content = (try? String(contentsOf: fileUrl, encoding: .utf8)) ??
+                                 (try? String(contentsOf: fileUrl, encoding: .utf16)) ??
+                                 (try? String(contentsOf: fileUrl, encoding: .isoLatin1)) ??
+                                 (try? String(contentsOf: fileUrl, encoding: .ascii)) {
+                    let parsed = parseLrcContent(content)
+                    if !parsed.isEmpty { return parsed }
+                }
+            }
         }
         
-        // Also check with common case-insensitive variants or fallback encodings
-        if FileManager.default.fileExists(atPath: lrcUrl.path),
-           let content = try? String(contentsOf: lrcUrl, encoding: .ascii) {
-            let parsed = parseLrcContent(content)
+        // 2. Native Binary Tag Extraction (FLAC Vorbis Comment LYRICS/SYNCEDLYRICS/UNSYNCEDLYRICS & ID3v2 USLT)
+        let freshMeta = AudioTagReader.readMetadata(from: audioUrl, extractArtworkData: false)
+        if let embeddedLyrics = freshMeta.lyrics, !embeddedLyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let parsed = parseLrcContent(embeddedLyrics)
             if !parsed.isEmpty { return parsed }
         }
-        
-        // 2. Check for exact matching .txt file in the same directory
-        let txtUrl = directoryUrl.appendingPathComponent("\(baseFilename).txt")
-        if FileManager.default.fileExists(atPath: txtUrl.path),
-           let content = try? String(contentsOf: txtUrl, encoding: .utf8) {
-            let parsed = parseLrcContent(content)
+
+        // 3. Cached TrackMetadata.lyrics (if already populated in SQLite DB)
+        if let cachedLyrics = track.lyrics, !cachedLyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let parsed = parseLrcContent(cachedLyrics)
             if !parsed.isEmpty { return parsed }
         }
-        
-        // 3. Fallback: Parse embedded lyrics tag via AVFoundation
+
+        // 4. Fallback: Parse embedded lyrics tag via AVFoundation (for .m4a / MP4 / QuickTime atoms)
         let asset = AVURLAsset(url: audioUrl)
         for item in asset.metadata {
             if let key = item.commonKey, key.rawValue.lowercased().contains("lyrics") {
@@ -54,7 +59,7 @@ public class LyricsManager {
                     if !parsed.isEmpty { return parsed }
                 }
             }
-            if let idKey = item.identifier?.rawValue.lowercased(), idKey.contains("uslt") || idKey.contains("lyrics") {
+            if let idKey = item.identifier?.rawValue.lowercased(), idKey.contains("uslt") || idKey.contains("lyrics") || idKey.contains("lyr") {
                 if let val = item.stringValue, !val.isEmpty {
                     let parsed = parseLrcContent(val)
                     if !parsed.isEmpty { return parsed }
@@ -70,8 +75,8 @@ public class LyricsManager {
         var lines: [LyricLine] = []
         let rawLines = content.components(separatedBy: .newlines)
         
-        // Regex pattern matching [mm:ss.xx] or [mm:ss] or [mm:ss.xxx]
-        let pattern = "\\[(\\d{1,2}):(\\d{1,2})(?:\\.(\\d{1,3}))?\\]"
+        // Regex pattern matching [mm:ss.xx] or [mm:ss:xx] or [mm:ss] or [mm:ss.xxx]
+        let pattern = "\\[(\\d{1,2}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
             return fallbackPlainLines(rawLines)
         }

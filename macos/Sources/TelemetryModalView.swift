@@ -49,7 +49,11 @@ public struct TelemetryModalView: View {
 
                 Spacer()
 
-                Button(action: { vm.showTelemetry = false }) {
+                Button(action: {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        vm.showTelemetry = false
+                    }
+                }) {
                     ZStack {
                         Circle()
                             .fill(Color.white.opacity(0.12))
@@ -59,7 +63,7 @@ public struct TelemetryModalView: View {
                             .foregroundColor(TsrossaColors.textPrimary)
                     }
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
             }
@@ -106,7 +110,7 @@ public struct TelemetryModalView: View {
                     .continuousSquircle(18)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
 
                 Button(action: exportLogFile) {
                     HStack(spacing: 6) {
@@ -121,9 +125,13 @@ public struct TelemetryModalView: View {
                     .continuousSquircle(18)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
 
-                Button(action: { logger.clear() }) {
+                Button(action: {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                        logger.clear()
+                    }
+                }) {
                     HStack(spacing: 6) {
                         Image(systemName: "trash")
                         Text("Clear")
@@ -135,7 +143,7 @@ public struct TelemetryModalView: View {
                     .continuousSquircle(18)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
@@ -222,7 +230,11 @@ public struct TelemetryModalView: View {
     }
 
     private func categoryPill(title: String, category: LogCategory?) -> some View {
-        Button(action: { vm.telemetrySelectedCategory = category }) {
+        Button(action: {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                vm.telemetrySelectedCategory = category
+            }
+        }) {
             Text(title)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundColor(vm.telemetrySelectedCategory == category ? Color.white : Color.white.opacity(0.5))
@@ -232,7 +244,7 @@ public struct TelemetryModalView: View {
                 .continuousSquircle(6)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(PlainButtonStyle())
+        .buttonStyle(TsrossaScaleButtonStyle())
     }
 
     private func logRow(_ entry: LogEntry) -> some View {

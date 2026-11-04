@@ -261,33 +261,56 @@ public typealias DynamicMaterialTheme = LiquidGlassTheme
 // ARTWORK & COLOR EXTRACTION UTILITIES
 // ==============================================================================
 
+public extension Color {
+    func toNSColor() -> NSColor {
+        NSColor(self)
+    }
+}
+
 public class ArtworkExtractor {
     private static let imageCache = NSCache<NSString, NSImage>()
     private static var themeCache: [String: LiquidGlassTheme] = [:]
     
-    public static func loadArtworkAndTheme(for path: String, completion: @escaping (NSImage?, LiquidGlassTheme) -> Void) {
+    public static func loadArtworkAndTheme(
+        for path: String,
+        knownThumbPath: String? = nil,
+        dominantHex: String? = nil,
+        completion: @escaping (_ artwork: NSImage?, _ blurred: NSImage?, _ theme: LiquidGlassTheme) -> Void
+    ) {
         if let cachedImage = imageCache.object(forKey: path as NSString),
            let cachedTheme = themeCache[path] {
-            completion(cachedImage, cachedTheme)
+            let blurred = AlbumArtCache.shared.cachedBlurredCanvasImage(for: path, knownThumbPath: knownThumbPath)
+            completion(cachedImage, blurred, cachedTheme)
             return
         }
         
         DispatchQueue.global(qos: .userInitiated).async {
             // First check fast disk thumbnail cache
-            let cachedImage = AlbumArtCache.shared.thumbnailImage(for: path)
+            let cachedImage = AlbumArtCache.shared.thumbnailImage(for: path, knownThumbPath: knownThumbPath)
             let artwork = cachedImage ?? extractArtwork(from: path)
+            let blurred = AlbumArtCache.shared.blurredCanvasImage(for: path, knownThumbPath: knownThumbPath)
             var theme: LiquidGlassTheme = .defaultTheme
             
-            if let artwork = artwork {
-                imageCache.setObject(artwork, forKey: path as NSString)
+            if let hex = dominantHex, let c = ColorContrastHelper.parseHexToNSColor(hex) {
+                theme = LiquidGlassTheme(accentNSColor: c, isDark: true, reduceTransparency: false)
+            } else if let artwork = artwork {
                 let accent = ColorContrastHelper.extractDominantAccent(from: artwork)
                 theme = LiquidGlassTheme(accentNSColor: accent.nsColor, isDark: true, reduceTransparency: false)
+            }
+            if let artwork = artwork {
+                imageCache.setObject(artwork, forKey: path as NSString)
             }
             themeCache[path] = theme
             
             DispatchQueue.main.async {
-                completion(artwork, theme)
+                completion(artwork, blurred, theme)
             }
+        }
+    }
+
+    public static func loadArtworkAndTheme(for path: String, completion: @escaping (NSImage?, LiquidGlassTheme) -> Void) {
+        loadArtworkAndTheme(for: path, knownThumbPath: nil, dominantHex: nil) { art, _, theme in
+            completion(art, theme)
         }
     }
     

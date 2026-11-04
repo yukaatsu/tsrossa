@@ -26,12 +26,16 @@ public struct KeyboardShortcutsModalSheet: View {
                     }
                 }
                 Spacer()
-                Button(action: { vm.showKeyboardShortcutsModal = false }) {
+                Button(action: {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        vm.showKeyboardShortcutsModal = false
+                    }
+                }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 18))
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
             }
@@ -82,9 +86,11 @@ public struct KeyboardShortcutsModalSheet: View {
             HStack {
                 Spacer()
                 Button("Done") {
-                    vm.showKeyboardShortcutsModal = false
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        vm.showKeyboardShortcutsModal = false
+                    }
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
                 .padding(.horizontal, 18)
                 .padding(.vertical, 7)
                 .background(theme.primary)

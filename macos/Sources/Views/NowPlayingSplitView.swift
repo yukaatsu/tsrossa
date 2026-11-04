@@ -18,12 +18,12 @@ public struct NowPlayingSplitView: View {
             GeometryReader { geo in
                 let availableH = geo.size.height
                 let availableW = geo.size.width
-                let artSize = min(320.0, max(140.0, min(availableW * 0.40, availableH - 240.0)))
+                let artSize = min(440.0, max(135.0, min(availableW * 0.38, availableH - 285.0)))
 
                 HStack(alignment: .top, spacing: max(16, min(36, availableW * 0.03))) {
-                    // Left: Hero Artwork & Audio Attributes & Studio Transport
+                    // Left: Hero Artwork & Audio Attributes & Studio Transport (Full Height — Flush with Right Column!)
                     leftStageView(availableW: availableW, availableH: availableH, artSize: artSize)
-                        .frame(maxWidth: max(260, min(440, availableW * 0.45)))
+                        .frame(maxWidth: max(280, min(460, availableW * 0.45)), maxHeight: .infinity)
 
                     // Right: Integrated Queue & Lyrics View
                     QueueLyricsView(theme: theme)
@@ -37,15 +37,8 @@ public struct NowPlayingSplitView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             ZStack {
-                // Layer 1: Ambient Blurred Artwork Glow
-                if let track = engine.currentTrack, let art = track.artwork {
-                    Image(nsImage: art)
-                        .resizable()
-                        .scaledToFill()
-                        .blur(radius: 80)
-                        .opacity(0.32)
-                        .clipped()
-                }
+                // Layer 1: Ambient Blurred Artwork Glow (Dual-layer smooth 820ms crossfade)
+                AmbientCrossfadeArtworkView(opacity: 0.32)
 
                 // Layer 2: macOS Ultra Thin Glass Material
                 Rectangle()
@@ -87,79 +80,72 @@ public struct NowPlayingSplitView: View {
 
     // MARK: - Drawer Header
     private var drawerHeader: some View {
-        VStack(spacing: 6) {
-            // Pull-down Grabber Handle
-            Capsule()
-                .fill(Color.white.opacity(0.35))
-                .frame(width: 44, height: 5)
-                .padding(.top, 8)
-                .contentShape(Rectangle())
+        HStack(spacing: 12) {
+            // Minimize Button
+            Button(action: {
+                vm.closeNowPlayingStage()
+            }) {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 12, weight: .bold))
+                    Text("Hide")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.white.opacity(0.08))
+                .continuousSquircle(8)
+            }
+            .buttonStyle(TsrossaScaleButtonStyle())
+            .help("Hide Now Playing (Esc / ⌘P)")
 
-            // Studio Top Bar
-            HStack(spacing: 12) {
-                // Minimize Button
-                Button(action: {
-                    vm.closeNowPlayingStage()
-                }) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 12, weight: .bold))
-                        Text("Hide")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
+            Spacer()
+
+            // Track Details Modal Trigger
+            Button(action: {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                    vm.showTrackDetailsModal = true
+                }
+            }) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
+                    .padding(6)
                     .background(Color.white.opacity(0.08))
                     .continuousSquircle(8)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Hide Now Playing (Esc / ⌘P)")
-
-                Spacer()
-
-                // Center Live Signal Path Pill
-                signalPathPill
-
-                Spacer()
-
-                // Track Details Modal Trigger
-                Button(action: {
-                    vm.showTrackDetailsModal = true
-                }) {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .padding(6)
-                        .background(Color.white.opacity(0.08))
-                        .continuousSquircle(8)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Track Details (⌘I)")
-
-                // Shortcuts Modal Trigger
-                Button(action: {
-                    vm.showKeyboardShortcutsModal = true
-                }) {
-                    Image(systemName: "keyboard")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .padding(6)
-                        .background(Color.white.opacity(0.08))
-                        .continuousSquircle(8)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Keyboard Shortcuts (⌘/)")
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 6)
+            .buttonStyle(TsrossaScaleButtonStyle())
+            .help("Track Details (⌘I)")
+
+            // Shortcuts Modal Trigger
+            Button(action: {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                    vm.showKeyboardShortcutsModal = true
+                }
+            }) {
+                Image(systemName: "keyboard")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .padding(6)
+                    .background(Color.white.opacity(0.08))
+                    .continuousSquircle(8)
+            }
+            .buttonStyle(TsrossaScaleButtonStyle())
+            .help("Keyboard Shortcuts (⌘/)")
         }
+        .padding(.horizontal, 18)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 6, coordinateSpace: .named("MainWindowCoordSpace"))
                 .onChanged { val in
                     if val.translation.height > 0 {
-                        vm.nowPlayingDragOffset = val.translation.height
+                        let prog = min(1.0, max(0.0, 1.0 - (val.translation.height / 380.0)))
+                        NowPlayingDrawerState.shared.setInteractiveProgress(prog, wasOpenAtStart: true) { shouldOpen in
+                            if shouldOpen { vm.openNowPlayingStage() } else { vm.closeNowPlayingStage() }
+                        }
                     }
                 }
                 .onEnded { val in
@@ -173,88 +159,64 @@ public struct NowPlayingSplitView: View {
         )
     }
 
-    // MARK: - Live Signal Path Pill
-    private var signalPathPill: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(engine.telemetrySnapshot.hogModeStatus == "EXCLUSIVE_HOG" ? Color.green : (engine.telemetrySnapshot.streamIsInteger ? Color.mint : theme.primary))
-                .frame(width: 7, height: 7)
-
-            Text(engine.telemetrySnapshot.hogModeStatus == "EXCLUSIVE_HOG" ? "EXCLUSIVE HOG • BIT-PERFECT" : "SHARED MIXER HAL")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(.primary)
-
-            if let track = engine.currentTrack {
-                Text("•")
-                    .foregroundStyle(.secondary)
-                Text("\(track.sampleRate / 1000) kHz / \(track.bitDepth)-BIT")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(Color.white.opacity(0.07))
-        .continuousSquircle(12)
-    }
-
     // MARK: - Left Stage View
     private func leftStageView(availableW: CGFloat, availableH: CGFloat, artSize: CGFloat) -> some View {
-        VStack(spacing: max(8, min(14, availableH * 0.02))) {
-            // Hero Artwork (Clickable to Play/Pause)
-            Button(action: {
-                if engine.currentTrack == nil {
-                    vm.playSelectedOrHighlightedTrack()
-                } else {
-                    engine.togglePlayPause()
-                }
-            }) {
-                ZStack {
-                    Group {
-                        if let track = engine.currentTrack, let art = track.artwork {
-                            Image(nsImage: art)
-                                .resizable()
-                                .scaledToFit()
-                        } else {
-                            ZStack {
-                                Color.white.opacity(0.06)
-                                TsrossaBrandIcon(size: max(50, artSize * 0.4), cornerRadius: 18)
-                            }
+        VStack(spacing: max(6, min(12, availableH * 0.016))) {
+            Spacer(minLength: 4)
+
+            // Hero Artwork (Non-interactive visual display)
+            let isPlayingActive = engine.isPlaying && !engine.isPaused
+            let cornerRad = max(14, artSize * 0.08)
+
+            ZStack {
+                // Soft theme-colored ambient glow behind artwork
+                RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
+                    .fill(theme.primary.opacity(isPlayingActive ? 0.22 : 0.06))
+                    .frame(width: artSize * 0.88, height: artSize * 0.88)
+                    .blur(radius: isPlayingActive ? 32 : 16)
+                    .offset(y: isPlayingActive ? 12 : 6)
+                    .animation(.spring(response: 0.48, dampingFraction: 0.78), value: isPlayingActive)
+
+                Group {
+                    if let track = engine.currentTrack, let art = track.artwork {
+                        Image(nsImage: art)
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        ZStack {
+                            Color.white.opacity(0.06)
+                            TsrossaBrandIcon(size: max(50, artSize * 0.4), cornerRadius: 18)
                         }
                     }
-                    .frame(width: artSize, height: artSize)
-                    .scaleEffect(engine.isPlaying && !engine.isPaused ? 1.0 : 0.94)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.75), value: engine.isPlaying && !engine.isPaused)
-                    .continuousSquircle(max(14, artSize * 0.08))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: max(14, artSize * 0.08), style: .continuous)
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: [Color.white.opacity(0.40), Color.white.opacity(0.05), theme.primary.opacity(0.3)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1.5
-                            )
-                    )
-                    .shadow(color: Color.black.opacity(engine.isPlaying && !engine.isPaused ? 0.45 : 0.20), radius: 24, x: 0, y: 12)
-
-                    // Paused overlay badge if paused while track loaded
-                    if engine.currentTrack != nil && (!engine.isPlaying || engine.isPaused) {
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 48, height: 48)
-                            .overlay(
-                                Image(systemName: "play.fill")
-                                    .font(.system(size: 20))
-                                    .foregroundStyle(.white)
-                                    .offset(x: 2)
-                            )
-                    }
                 }
+                .id(engine.currentTrack?.path ?? "empty-art")
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                .frame(width: artSize, height: artSize)
+                .continuousSquircle(cornerRad)
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.40), Color.white.opacity(0.06), theme.primary.opacity(0.25)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.25
+                        )
+                )
+                .shadow(
+                    color: Color.black.opacity(isPlayingActive ? 0.45 : 0.22),
+                    radius: isPlayingActive ? 28 : 14,
+                    x: 0,
+                    y: isPlayingActive ? 14 : 7
+                )
+                // Scale effect applied LAST - whole physical object scales together without ghost outline!
+                .scaleEffect(isPlayingActive ? 1.0 : 0.91)
+                .animation(.spring(response: 0.45, dampingFraction: 0.76), value: isPlayingActive)
+                .animation(.spring(response: 0.42, dampingFraction: 0.84), value: engine.currentTrack?.path)
             }
-            .buttonStyle(PlainButtonStyle())
-            .help("Click to Play / Pause")
+
+            Spacer(minLength: 4)
 
             // Track Identity & Favorite Button
             HStack(alignment: .center, spacing: 8) {
@@ -278,12 +240,16 @@ public struct NowPlayingSplitView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                .id(engine.currentTrack?.path ?? "no-track-info")
+                .animation(.spring(response: 0.38, dampingFraction: 0.84), value: engine.currentTrack?.path)
 
                 Spacer(minLength: 4)
 
                 if let track = engine.currentTrack {
                     Button(action: {
-                        vm.toggleLike(track: track)
+                        withAnimation(.spring(response: 0.30, dampingFraction: 0.65)) {
+                            vm.toggleLike(track: track)
+                        }
                     }) {
                         Image(systemName: vm.isLiked(track: track) ? "heart.fill" : "heart")
                             .font(.system(size: 17, weight: .semibold))
@@ -291,36 +257,11 @@ public struct NowPlayingSplitView: View {
                             .frame(width: 30, height: 30)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.85))
                     .help("Favorite / Like Track")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            // Audiophile Badges
-            if let track = engine.currentTrack {
-                HStack(spacing: 5) {
-                    let snap = engine.telemetrySnapshot
-                    badgeView(
-                        text: snap.streamIsInteger ? "BIT-PERFECT" : "DSP ACTIVE",
-                        color: snap.streamIsInteger ? Color.green : Color.orange
-                    )
-                    badgeView(
-                        text: "\(track.sampleRate / 1000) kHz",
-                        color: theme.primary
-                    )
-                    badgeView(
-                        text: "\(track.bitDepth)-BIT",
-                        color: theme.primary
-                    )
-                    if track.isMqa {
-                        badgeView(text: "MQA", color: Color.purple)
-                    }
-                    let ext = track.path.split(separator: ".").last?.uppercased() ?? "AUDIO"
-                    badgeView(text: String(ext), color: Color.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
 
             // Scrubber Bar
             PlaybackScrubberView(accentColor: theme.primary)
@@ -329,9 +270,10 @@ public struct NowPlayingSplitView: View {
             // 5-Button Studio Transport Deck
             transportDeckView
 
-            // Volume & Hardware DAC Bar
+            // Volume, DAC & Live Signal Footer Card
             volumeAndDacDeckView
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - 5-Button Studio Transport Deck
@@ -348,7 +290,7 @@ public struct NowPlayingSplitView: View {
                     .background(vm.isShuffle ? theme.primary.opacity(0.15) : Color.white.opacity(0.04))
                     .clipShape(Circle())
             }
-            .buttonStyle(PlainButtonStyle())
+            .buttonStyle(TsrossaScaleButtonStyle())
             .help("Shuffle Mode (⌘S)")
 
             // Previous
@@ -360,7 +302,7 @@ public struct NowPlayingSplitView: View {
                     .foregroundStyle(.primary)
                     .frame(width: 36, height: 36)
             }
-            .buttonStyle(PlainButtonStyle())
+            .buttonStyle(TsrossaScaleButtonStyle())
             .help("Previous Track (⌘←)")
 
             // Hero Play / Pause Circle Button
@@ -383,7 +325,7 @@ public struct NowPlayingSplitView: View {
                         .offset(x: engine.isPlaying && !engine.isPaused ? 0 : 2)
                 }
             }
-            .buttonStyle(PlainButtonStyle())
+            .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.92))
             .help("Play / Pause (Space)")
 
             // Next
@@ -395,7 +337,7 @@ public struct NowPlayingSplitView: View {
                     .foregroundStyle(.primary)
                     .frame(width: 36, height: 36)
             }
-            .buttonStyle(PlainButtonStyle())
+            .buttonStyle(TsrossaScaleButtonStyle())
             .help("Next Track (⌘→)")
 
             // Repeat
@@ -415,77 +357,148 @@ public struct NowPlayingSplitView: View {
                     .background(vm.repeatMode != .off ? theme.primary.opacity(0.15) : Color.white.opacity(0.04))
                     .clipShape(Circle())
             }
-            .buttonStyle(PlainButtonStyle())
+            .buttonStyle(TsrossaScaleButtonStyle())
             .help("Repeat Mode (⌘R)")
         }
     }
 
-    // MARK: - Volume & DAC Deck
+    // MARK: - Volume, DAC & Live Signal Footer Card
     private var volumeAndDacDeckView: some View {
-        HStack(spacing: 10) {
-            // Speaker Icon
-            Image(systemName: engine.volume <= 0.01 ? "speaker.slash.fill" : (engine.volume < 0.5 ? "speaker.wave.1.fill" : "speaker.wave.2.fill"))
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
-                .onTapGesture {
+        VStack(spacing: 8) {
+            // Row 1: Volume Slider + Percentage + DAC Device Selector
+            HStack(spacing: 10) {
+                Button(action: {
                     if engine.volume > 0 {
                         engine.volume = 0.0
                     } else {
                         engine.volume = 0.7
                     }
+                }) {
+                    Image(systemName: engine.volume <= 0.01 ? "speaker.slash.fill" : (engine.volume < 0.5 ? "speaker.wave.1.fill" : "speaker.wave.2.fill"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(engine.volume <= 0.01 ? Color.red.opacity(0.85) : .secondary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(PlainButtonStyle())
+                .help("Mute / Unmute Volume")
 
-            // Volume Slider
-            Slider(value: $engine.volume, in: 0.0...1.0)
-                .accentColor(theme.primary)
-                .frame(maxWidth: 140)
+                Slider(value: $engine.volume, in: 0.0...1.0)
+                    .accentColor(theme.primary)
+                    .frame(minWidth: 80, maxWidth: .infinity)
 
-            Spacer()
+                Text("\(Int((engine.volume * 100).rounded()))%")
+                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, alignment: .trailing)
 
-            // DAC Output Device Menu
-            Menu {
-                ForEach(engine.devices) { device in
-                    Button(action: {
-                        engine.selectDevice(id: device.id)
-                    }) {
-                        HStack {
-                            Text(device.name)
-                            if device.id == engine.selectedDeviceId {
-                                Image(systemName: "checkmark")
+                // DAC Output Device Menu
+                Menu {
+                    ForEach(engine.devices) { device in
+                        Button(action: {
+                            engine.selectDevice(id: device.id)
+                        }) {
+                            HStack {
+                                Text(device.name)
+                                if device.id == engine.selectedDeviceId {
+                                    Image(systemName: "checkmark")
+                                }
                             }
                         }
                     }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "hifispeaker.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(theme.primary)
+                        Text(engine.devices.first(where: { $0.id == engine.selectedDeviceId })?.name ?? "Default Output")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Color.white.opacity(0.08))
+                    .continuousSquircle(8)
                 }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "hifispeaker.fill")
-                        .font(.system(size: 10))
-                    Text(engine.devices.first(where: { $0.id == engine.selectedDeviceId })?.name ?? "Default Audio")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .lineLimit(1)
+                .menuStyle(BorderlessButtonMenuStyle())
+                .frame(maxWidth: 145, alignment: .trailing)
+            }
+
+            Divider()
+                .background(Color.white.opacity(0.08))
+
+            // Row 2: Dense Audiophile Signal & Format Strip (Eliminates Empty Bottom Space!)
+            HStack(spacing: 8) {
+                let ext = engine.currentTrack.map { URL(fileURLWithPath: $0.path).pathExtension.uppercased() } ?? "IDLE"
+                let srText = engine.currentTrack.map { String(format: "%.1f kHz", Double($0.sampleRate) / 1000.0) } ?? "—"
+                let bitText = engine.currentTrack.map { "\($0.bitDepth)-bit" } ?? "—"
+                let chText = engine.currentTrack.map { $0.channels == 1 ? "Mono" : ($0.channels == 2 ? "Stereo" : "\($0.channels)ch") } ?? "Stereo"
+
+                // Codec Badge
+                HStack(spacing: 4) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(theme.primary)
+                    Text(ext.isEmpty ? "AUDIO" : ext)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.primary)
                 }
-                .foregroundStyle(.secondary)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3.5)
-                .background(Color.white.opacity(0.06))
+                .background(theme.primary.opacity(0.14))
                 .continuousSquircle(6)
-            }
-            .menuStyle(BorderlessButtonMenuStyle())
-            .fixedSize()
-        }
-        .padding(.horizontal, 2)
-    }
 
-    private func badgeView(text: String, color: Color) -> some View {
-        Text(text)
-            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-            .foregroundStyle(color)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2.5)
-            .background(color.opacity(0.12))
-            .continuousSquircle(5)
+                // Sample Rate & Bit Depth
+                Text("\(srText) • \(bitText) • \(chText)")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                // Bit-Perfect / Telemetry Trigger Pill
+                Button(action: {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        vm.showTelemetry = true
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(engine.telemetrySnapshot.hogModeStatus == "EXCLUSIVE_HOG" ? Color.green : Color.mint)
+                            .frame(width: 5.5, height: 5.5)
+                        Text(engine.telemetrySnapshot.streamIsInteger ? "INT MODE" : "FLOAT32")
+                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3.5)
+                    .background(Color.white.opacity(0.05))
+                    .continuousSquircle(6)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Inspect CoreAudio Hardware Telemetry")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(theme.surfaceContainer.opacity(0.55))
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.40)
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(
+                    theme.outlineVariant.opacity(0.45),
+                    lineWidth: 1
+                )
+        )
+        .continuousSquircle(16)
     }
 }

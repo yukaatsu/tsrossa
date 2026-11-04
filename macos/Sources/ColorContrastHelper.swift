@@ -25,6 +25,16 @@ public struct RGBColor: Equatable {
 }
 
 public enum ColorContrastHelper {
+    public static func parseHexToNSColor(_ hex: String) -> NSColor? {
+        var clean = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if clean.hasPrefix("#") { clean.removeFirst() }
+        guard clean.count == 6, let val = UInt32(clean, radix: 16) else { return nil }
+        let r = CGFloat((val >> 16) & 0xFF) / 255.0
+        let g = CGFloat((val >> 8) & 0xFF) / 255.0
+        let b = CGFloat(val & 0xFF) / 255.0
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: 1.0)
+    }
+
     public static func calculateLuminance(_ color: RGBColor) -> Double {
         func channelLum(_ c: Double) -> Double {
             return c <= 0.03928 ? (c / 12.92) : pow((c + 0.055) / 1.055, 2.4)

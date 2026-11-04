@@ -1,6 +1,46 @@
+# ==========================================
+# Dokumen Internal, Audit & Perencanaan
+# ==========================================
+AUDIT-ANALISA/
+PLANNING-PERBAIKAN/
+bug-note.md
+bug-note*.md
+test-bug*.md
+
+# ==========================================
+# Tool AI, Brain & Graphify Cache
+# ==========================================
+graphify-out/
+.graphifyignore
+.superpowers/
+
+# ==========================================
+# macOS Build Artifacts, Cache & Binaries
+# ==========================================
 build/
-.DS_Store
-*.swp
+.build/
+DerivedData/
 *.o
 *.a
 *.dylib
+*.dmg
+*.zip
+*.app
+
+# ==========================================
+# Xcode, Editor & IDE Cache
+# ==========================================
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ==========================================
+# Sampah Sistem Operasi
+# ==========================================
+.DS_Store
+**/.DS_Store
+Thumbs.db

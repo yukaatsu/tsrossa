@@ -3,6 +3,12 @@ set -euo pipefail
 
 echo "==> Memulai proses uninstall TSRossa Audio Player..."
 
+# 0. Hentikan proses aplikasi jika sedang berjalan di memori
+echo "  [x] Menghentikan proses TSRossa..."
+killall tsrossa 2>/dev/null || true
+pkill -f "TSRossa.app" 2>/dev/null || true
+sleep 0.5
+
 # 1. Hapus bundle aplikasi dari /Applications
 if [ -d "/Applications/TSRossa.app" ]; then
     echo "  [x] Menghapus /Applications/TSRossa.app"

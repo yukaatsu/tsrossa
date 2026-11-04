@@ -15,12 +15,14 @@ public struct SidebarView: View {
             HStack(spacing: 12) {
                 TsrossaBrandIcon(size: 32, cornerRadius: 8)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("TSRossa")
+                    Text("tsrossa")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.primary)
+                        .lineLimit(1)
                     Text("Hi-Res Studio Player")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 Spacer()
             }
@@ -30,7 +32,7 @@ public struct SidebarView: View {
             .padding(.bottom, 18)
             .fixedSize(horizontal: false, vertical: true)
 
-            // Primary Navigation Items (Now Playing moved to expandable bottom stage)
+            // Primary Navigation Items
             VStack(spacing: 4) {
                 sidebarNavItem(tab: .library, title: "Music Library", icon: "music.note.house.fill", shortcut: "⌘1")
                 sidebarNavItem(tab: .playlist, title: "Playlists", icon: "music.note.list", shortcut: "⌘2")
@@ -49,14 +51,18 @@ public struct SidebarView: View {
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(action: { vm.openCreatePlaylistModal() }) {
+                Button(action: {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        vm.openCreatePlaylistModal()
+                    }
+                }) {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.secondary)
                         .frame(width: 22, height: 22)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle())
                 .help("New Playlist (⌘N)")
             }
             .padding(.horizontal, 16)
@@ -68,9 +74,14 @@ public struct SidebarView: View {
                 VStack(spacing: 2) {
                     // Liked Songs Smart Playlist
                     Button(action: {
-                        vm.selectedPlaylistId = "LIKED_SONGS"
-                        vm.switchTab(to: .library)
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                            vm.selectedPlaylistId = "LIKED_SONGS"
+                            vm.switchTab(to: .library)
+                        }
                     }) {
+                        let isSelected = vm.selectedPlaylistId == "LIKED_SONGS" && vm.activeTab == .library
+                        let isHovered = vm.hoveredSidebarItemId == "LIKED_SONGS"
+
                         HStack(spacing: 8) {
                             Image(systemName: "heart.fill")
                                 .font(.system(size: 12))
@@ -78,6 +89,7 @@ public struct SidebarView: View {
                             Text("Liked Songs")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.primary)
+                                .lineLimit(1)
                             Spacer()
                             Text("\(vm.likedTrackPaths.count)")
                                 .font(.system(size: 10, design: .monospaced))
@@ -85,17 +97,26 @@ public struct SidebarView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
-                        .background(vm.selectedPlaylistId == "LIKED_SONGS" && vm.activeTab == .library ? theme.primary.opacity(0.18) : Color.clear)
+                        .background(
+                            isSelected ? theme.primary.opacity(0.18) :
+                            (isHovered ? Color.white.opacity(0.06) : Color.clear)
+                        )
                         .continuousSquircle(8)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.98))
+                    .onHover { isH in
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            vm.hoveredSidebarItemId = isH ? "LIKED_SONGS" : nil
+                        }
+                    }
 
                     ForEach(vm.playlists) { pl in
                         playlistRow(pl)
                     }
                 }
                 .padding(.horizontal, 10)
+                .animation(.spring(response: 0.35, dampingFraction: 0.82), value: vm.playlists.count)
             }
 
             // Footer Quick Actions
@@ -106,6 +127,7 @@ public struct SidebarView: View {
                         vm.showKeyboardShortcutsModal.toggle()
                     }
                 }) {
+                    let isHovered = vm.hoveredSidebarItemId == "FOOTER_SHORTCUTS"
                     HStack(spacing: 8) {
                         Image(systemName: "keyboard")
                             .font(.system(size: 12))
@@ -113,6 +135,7 @@ public struct SidebarView: View {
                         Text("Shortcuts Guide")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.primary)
+                            .lineLimit(1)
                         Spacer()
                         Text("⌘/")
                             .font(.system(size: 10, design: .monospaced))
@@ -120,11 +143,16 @@ public struct SidebarView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.05))
+                    .background(isHovered ? Color.white.opacity(0.09) : Color.white.opacity(0.05))
                     .continuousSquircle(8)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.98))
+                .onHover { isH in
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        vm.hoveredSidebarItemId = isH ? "FOOTER_SHORTCUTS" : nil
+                    }
+                }
 
                 // Diagnostics Bar
                 Button(action: {
@@ -132,6 +160,7 @@ public struct SidebarView: View {
                         vm.showTelemetry.toggle()
                     }
                 }) {
+                    let isHovered = vm.hoveredSidebarItemId == "FOOTER_DIAGNOSTICS"
                     HStack(spacing: 8) {
                         Image(systemName: "waveform.path.ecg")
                             .font(.system(size: 12))
@@ -139,6 +168,7 @@ public struct SidebarView: View {
                         Text("Audio Diagnostics")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.primary)
+                            .lineLimit(1)
                         Spacer()
                         Text("⌘U")
                             .font(.system(size: 10, design: .monospaced))
@@ -146,33 +176,34 @@ public struct SidebarView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.05))
+                    .background(isHovered ? Color.white.opacity(0.09) : Color.white.opacity(0.05))
                     .continuousSquircle(8)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.98))
+                .onHover { isH in
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        vm.hoveredSidebarItemId = isH ? "FOOTER_DIAGNOSTICS" : nil
+                    }
+                }
             }
             .padding(12)
             .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(minWidth: 200, idealWidth: 226, maxWidth: 236)
-        .frame(maxHeight: .infinity)
-        .layoutPriority(2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background {
+            // Harmonized In-Window Canvas Surface (adapts to Background Canvas & Active Theme)
             ZStack {
-                // Native Mac Optical Blur
-                MacVisualEffectView(material: .sidebar, blendingMode: .behindWindow)
-
-                // Chromatic Theme Tint Overlay (Follows Active Theme Palette & Light/Dark)
-                LinearGradient(
-                    colors: [
-                        theme.primary.opacity(theme.isDark ? 0.22 : 0.16),
-                        theme.primaryContainer.opacity(theme.isDark ? 0.35 : 0.20),
-                        theme.surface.opacity(theme.isDark ? 0.65 : 0.75)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                if vm.bgCanvasMode == "BLACK" || vm.bgCanvasMode == "Pure Minimal Glass" {
+                    // Minimal Mode: Uniform matte surface seamlessly matching main workspace
+                    theme.surfaceContainerLowest.opacity(theme.isDark ? 0.35 : 0.45)
+                } else if vm.bgCanvasMode == "AURA" || vm.bgCanvasMode == "Ambient Artwork Mesh" {
+                    // Mesh Aura Mode: Transparent veil letting chromatic aura shine through consistently
+                    theme.surface.opacity(theme.isDark ? 0.18 : 0.25)
+                } else {
+                    // Liquid Refraction Mode: Subtle translucent glass tint harmonized with artwork/theme
+                    theme.surface.opacity(theme.isDark ? 0.22 : 0.28)
+                }
             }
             .ignoresSafeArea()
         }
@@ -180,8 +211,11 @@ public struct SidebarView: View {
 
     private func sidebarNavItem(tab: AppTab, title: String, icon: String, shortcut: String) -> some View {
         let isSelected = vm.activeTab == tab
+        let isHovered = vm.hoveredSidebarItemId == tab.rawValue
         return Button(action: {
-            vm.switchTab(to: tab)
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                vm.switchTab(to: tab)
+            }
         }) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
@@ -192,6 +226,7 @@ public struct SidebarView: View {
                 Text(title)
                     .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? .primary : .secondary)
+                    .lineLimit(1)
 
                 Spacer()
 
@@ -206,19 +241,30 @@ public struct SidebarView: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(theme.primary.opacity(0.18))
                         .matchedGeometryEffect(id: "activeNavPill", in: sidebarNamespace)
+                } else if isHovered {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
                 }
             }
             .continuousSquircle(10)
             .contentShape(Rectangle())
         }
-        .buttonStyle(PlainButtonStyle())
+        .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.98))
+        .onHover { isH in
+            withAnimation(.easeOut(duration: 0.12)) {
+                vm.hoveredSidebarItemId = isH ? tab.rawValue : nil
+            }
+        }
     }
 
     private func playlistRow(_ pl: UserPlaylist) -> some View {
         let isSelected = vm.selectedPlaylistId == pl.id && vm.activeTab == .library
+        let isHovered = vm.hoveredSidebarItemId == pl.id
         return Button(action: {
-            vm.selectedPlaylistId = pl.id
-            vm.switchTab(to: .library)
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                vm.selectedPlaylistId = pl.id
+                vm.switchTab(to: .library)
+            }
         }) {
             HStack(spacing: 8) {
                 if pl.isPinned {
@@ -251,21 +297,35 @@ public struct SidebarView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(isSelected ? theme.primary.opacity(0.18) : Color.clear)
+            .background(
+                isSelected ? theme.primary.opacity(0.18) :
+                (isHovered ? Color.white.opacity(0.06) : Color.clear)
+            )
             .continuousSquircle(8)
             .contentShape(Rectangle())
         }
-        .buttonStyle(PlainButtonStyle())
+        .buttonStyle(TsrossaScaleButtonStyle(scaleAmount: 0.98))
+        .onHover { isH in
+            withAnimation(.easeOut(duration: 0.12)) {
+                vm.hoveredSidebarItemId = isH ? pl.id : nil
+            }
+        }
         .contextMenu {
             Button(pl.isPinned ? "Unpin Playlist" : "Pin to Top") {
-                vm.togglePinPlaylist(id: pl.id)
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                    vm.togglePinPlaylist(id: pl.id)
+                }
             }
             Button("Clear Tracks") {
-                vm.clearPlaylistTracks(id: pl.id)
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                    vm.clearPlaylistTracks(id: pl.id)
+                }
             }
             Divider()
             Button("Delete Playlist", role: .destructive) {
-                vm.deletePlaylist(id: pl.id)
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                    vm.deletePlaylist(id: pl.id)
+                }
             }
         }
     }
