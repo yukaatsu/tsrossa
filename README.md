@@ -1,127 +1,154 @@
-# tsrossa for macOS
+<p align="center">
+  <img src="tsrossa.png" alt="tsrossa macOS Banner" width="100%"/>
+</p>
 
-Bit-perfect audiophile music player for macOS (macOS 12.0 Monterey through macOS 15+ Sequoia) on Apple Silicon (arm64) and Intel (x86_64).
+<h1 align="center">tsrossa for macOS</h1>
 
-> 💡 **Looking for the Android version?** Switch to the default [`android` branch](https://github.com/yukaatsu/tsrossa/tree/android).  
-> To clone only the Android app:  
+<p align="center">
+  <strong>Direct-to-DAC, Bit-Perfect Audiophile Player for Apple Silicon & Intel</strong><br/>
+  Native C++17 CoreAudio HAL engine with Exclusive Hog Mode and dynamic hardware crystal clock switching.
+</p>
+
+<p align="center">
+  <a href="https://github.com/yukaatsu/tsrossa/releases"><img src="https://img.shields.io/badge/Release-v1.6.0--BETA-orange.svg" alt="Release"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Platform-macOS%2012.0%2B%20(Monterey%20--%20Sequoia)-2ea44f.svg" alt="Platform"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Arch-Apple%20Silicon%20%7C%20Intel-0052cc.svg" alt="Architecture"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Audio-Exclusive%20Hog%20Mode-success.svg" alt="Audio Mode"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg" alt="License"></a>
+  <a href="https://bagibagi.co/Yukaatsu"><img src="https://img.shields.io/badge/Support-BagiBagi-FFDD00.svg?logo=buy-me-a-coffee&logoColor=black" alt="Support"></a>
+</p>
+
+> 💡 **Looking for the Android version?**  
+> We keep each platform in its own dedicated branch. Switch to the default [`android` branch](https://github.com/yukaatsu/tsrossa/tree/android) or run:  
 > `git clone -b android --single-branch https://github.com/yukaatsu/tsrossa.git tsrossa-android`
 
 ---
 
-## Key Features
+## Why tsrossa on macOS?
 
-- **Exclusive Hog Mode**: Takes direct ownership of the DAC hardware device (`kAudioDevicePropertyHogMode`), locking out other applications and eliminating system mixer interference.
-- **Dynamic Clock Rate Switching**: Dynamically negotiates the physical DAC clock rate (44.1 kHz, 48 kHz, 88.2 kHz, 96 kHz, 176.4 kHz, 192 kHz, up to 384 kHz) without software resampling.
-- **Native C++17 Audio Engine**: Standalone CoreAudio HAL driver with POSIX `mlock()` memory pinning for jitter-free, zero-copy PCM playback.
-- **Hardware Master Scalar & Unity Gain**: Preserves genuine 0 dBFS dynamic range when set to 100%.
-- **SwiftUI Desktop Interface**:
-  - Split widescreen layout with Now Playing (Cmd + 1), Audiophile Library (Cmd + 2), and Settings (Cmd + 4).
-  - Synchronized `.lrc` and embedded lyrics viewer with Theater Mode (Cmd + F) and click-to-seek support.
-  - Typeahead fuzzy search and format/sampling rate filter chips.
-  - Real-time signal path inspector showing source bitrate/kHz vs. active hardware DAC clock frequency.
-  - Automatic hotplug handling for USB DACs, Thunderbolt interfaces, and 3.5mm headphone jacks.
-- **No Heavy IDE Required**: Builds directly via standard `clang++` and `swiftc` toolchains without requiring full Xcode project overhead.
-- **DMG Installer Packaging**: Includes automated disk image packaging with custom drag-and-drop Applications symlink.
+By default, macOS routes all sound through its system CoreAudio mixer (`AUHAL`). If your DAC is configured in *Audio MIDI Setup* to 96 kHz and you play a 44.1 kHz CD rip, macOS silently resamples it. If you play a 192 kHz high-res track, macOS downsamples it. On top of that, system notifications, Slack beeps, and browser audio get mixed directly into your music stream.
 
----
+**tsrossa takes direct, bit-transparent control of your DAC.**
 
-## Directory Structure
-
-```text
-mac/
-├── macos/
-│   ├── Info.plist                     # Application bundle metadata and permissions
-│   └── Sources/                       # Native SwiftUI Application
-│       ├── main.swift                 # Entry point (`@main NSApplication`)
-│       ├── MainAppView.swift          # Main window layout, sidebar, player bar
-│       ├── AppViewModel.swift         # Reactive application state & queue controller
-│       ├── AudioEngine.swift          # Swift bridge to native CoreAudio HAL
-│       ├── LyricsManager.swift        # Synchronized LRC and lyrics parser
-│       ├── MetadataScanner.swift      # Multi-threaded lossless track scanner
-│       ├── TelemetryModalView.swift   # Real-time hardware telemetry inspector
-│       ├── Theme.swift                # Audiophile color schemes and tokens
-│       └── UpdateManager.swift        # In-app update checker via GitHub Releases
-├── src/nativeMain/cpp/                # Native C++ CoreAudio HAL Engine
-│   ├── CoreAudioSink.cpp / .h         # Hardware HAL driver & Exclusive Hog Mode
-│   ├── TsrossaAudioBridge.cpp / .h    # C / Objective-C bridge for Swift runtime
-│   ├── MacAudioCommon.h               # Shared audio formats and ring buffer structs
-│   ├── MacAudioDecoder.h              # Decoder abstractions
-│   └── dr_impl.c                      # Single-compilation-unit dr_flac & dr_wav
-├── build/                             # Compiled binaries, dylibs, and app bundle (git-ignored)
-├── build_mac.sh                       # Shell script compiling dylib and bundling tsrossa.app
-├── package_dmg.sh                     # Shell script creating distributable DMG installer
-├── .gitignore                         # Subproject-specific ignore rules
-└── README.md                          # Dedicated macOS documentation
-```
+- **Exclusive Hog Mode (`kAudioDevicePropertyHogMode`)**  
+  tsrossa takes physical ownership of your output device. All other apps, browser tabs, and system notification sounds are locked out from reaching the DAC.
+- **Dynamic Hardware Sample Rate Switching**  
+  Whenever you start a track, tsrossa queries your DAC's crystal oscillators and switches the physical hardware clock on the fly (44.1 kHz, 48 kHz, 88.2 kHz, 96 kHz, 176.4 kHz, 192 kHz, up to 384 kHz). No software interpolation, no resampling.
+- **In-Memory Pre-Caching with POSIX `mlock()`**  
+  Decodes audio files into raw 32-bit linear PCM in RAM and locks the memory pages to physical RAM. The macOS kernel is prevented from swapping memory to disk, eliminating SSD read latency and micro-stutters during heavy multitasking.
+- **True Bit-Perfect Unity Gain (0.0 dBFS)**  
+  Volume control interfaces directly with the hardware master scalar on supported DACs. Setting volume to 100% delivers pure, uncompromised bit-for-bit dynamic range without digital math attenuation.
 
 ---
 
-## Prerequisites
+## The Studio Stage
 
-- **Operating System**: macOS 12.0 (Monterey) or newer (tested up to macOS 15+ Sequoia).
-- **Architecture**: Apple Silicon (`arm64`) or Intel (`x86_64`).
-- **Toolchain**: Xcode Command Line Tools. Install if not already available:
-  ```bash
-  xcode-select --install
-  ```
+<p align="center">
+  <img src="screenshots/desktop_01_studio_stage.png" alt="tsrossa macOS Studio Stage" width="100%"/>
+  <br/>
+  <em>Studio Stage: 3-column workspace with live mastering banner, animated equalizer bars, spinning vinyl record player, collapsible right inspector (lyrics, FFT spectrum, queue), and floating mini-player.</em>
+</p>
+
+---
+
+## Desktop Navigation & Views
+
+<table align="center">
+  <tr>
+    <td align="center" width="33%">
+      <img src="screenshots/desktop_01_now_playing.png" alt="macOS Now Playing Screen" width="100%"/>
+      <br/><b>Now Playing (Cmd + 1)</b><br/>
+      <sub>Split widescreen layout with album artwork canvas, live lossless signal path inspector, and queue continuation</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="screenshots/desktop_02_library.png" alt="macOS Music Library" width="100%"/>
+      <br/><b>Audiophile Library (Cmd + 2)</b><br/>
+      <sub>Fast cached browser with smart playlists, 1-click format/kHz filter chips, and typeahead fuzzy search</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="screenshots/desktop_03_settings.png" alt="macOS DAC & Settings" width="100%"/>
+      <br/><b>DAC & Settings (Cmd + 4)</b><br/>
+      <sub>Exclusive Hog Mode toggle, hardware sample rate inspector, RAM mlock, and built-in update engine</sub>
+    </td>
+  </tr>
+</table>
+
+---
+
+## Highlights
+
+- **3-Column Responsive Studio Workspace**  
+  - **Left Sidebar:** Instant navigation for Now Playing, Hi-Res Masters (24-bit filter), FLAC/WAV archives, custom playlists, and active DAC device indicators.
+  - **Center Stage:** Hero album showcase with mastering metadata, audiophile filter chips, and animated equalizer bars on the playing track.
+  - **Collapsible Right Inspector:** 3-tab drawer for synchronized `.lrc` lyrics, live 32-band FFT spectrum visualizer & signal path audit, and queue management.
+- **Spinning Vinyl Transport**  
+  Smoothly animated vinyl disc with concentric grooves and center spindle that spins in real-time during playback.
+- **Floating Mini-Player**  
+  A clean 360x480 floating desktop card featuring ambient artwork glow, live synchronized lyric preview, mini scrubber, and transport controls.
+- **Synchronized Lyrics Engine**  
+  Discovers companion `.lrc` and `.txt` files alongside your tracks with millisecond timestamp synchronization, plus fallback parsing for embedded ID3 and Vorbis lyrics tags.
+- **Full-Screen Theater Mode (`Cmd + F`)**  
+  Distraction-free large-format view with animated canvas designed for 4K and 5K displays.
+- **No Bulky Xcode IDE Required to Build**  
+  Compiles cleanly from the command line using standard `clang++` and `swiftc` toolchains in just a few seconds.
+
+---
+
+## Technical Specifications
+
+| Parameter | Supported Range / Specification |
+| :--- | :--- |
+| **Supported Formats** | • **FLAC** (`.flac`): 16-bit, 24-bit, 32-bit integer PCM (44.1 kHz to 384 kHz)<br/>• **WAV** (`.wav`, `.wave`): 16-bit, 24-bit, 32-bit Linear PCM, and 32-bit IEEE Float |
+| **Output Target** | External USB DACs, Thunderbolt audio interfaces, and built-in 3.5mm headphone jacks |
+| **Operating System** | macOS 12.0 (Monterey), macOS 13 (Ventura), macOS 14 (Sonoma), and macOS 15+ (Sequoia) |
+| **Hardware Architecture** | Universal: Apple Silicon (M1/M2/M3/M4, arm64) and Intel (x86_64) |
+| **Engine Core** | Native C++17 CoreAudio HAL driver with POSIX `mlock()` memory pinning |
+| **Interface** | SwiftUI with Liquid Glass aesthetic and macOS Human Interface Guidelines (HIG) |
+
+---
+
+## Quick Start
+
+### 1. Installation
+1. Download the latest **`tsrossa-mac.dmg`** from the [GitHub Releases](https://github.com/yukaatsu/tsrossa/releases).
+2. Open the disk image and drag **tsrossa.app** into your **Applications** folder.
+3. Launch tsrossa from Applications or Spotlight (`Cmd + Space`).
+
+### 2. Connect Your DAC
+1. Connect your USB or Thunderbolt DAC.
+2. Go to **Settings (`Cmd + 4`)** and verify that **Exclusive Hog Mode** is enabled.
+3. Select your FLAC or WAV library folder in the Library tab (`Cmd + 2`) to start bit-perfect listening.
 
 ---
 
 ## Building from Source
 
-All commands are executed from the `mac/` directory:
+You do not need full Xcode installed to compile tsrossa — just the standard macOS Command Line Tools (`xcode-select --install`):
 
-### 1. Build Native Engine and macOS App Bundle
 ```bash
-chmod +x build_mac.sh package_dmg.sh
+# 1. Compile the C++ CoreAudio dylib and bundle tsrossa.app
 ./build_mac.sh
-```
 
-This compiles:
-1. `libtsrossa-mac.dylib` via `clang++` with `-O2 -std=c++17` linking CoreAudio, AudioToolbox, and CoreFoundation.
-2. The SwiftUI frontend using `swiftc` with module caching.
-3. Assembles the standalone `build/tsrossa.app` bundle containing executable binaries, dynamic libraries, and application icon resources.
-
-### 2. Package as a Disk Image (.dmg)
-```bash
+# 2. Package into a distributable DMG installer
 ./package_dmg.sh
-```
-Output: `build/tsrossa-1.6.0.dmg`
+# Output: build/tsrossa-mac-installer.dmg
 
-### 3. Deploy to `/Applications`
-```bash
-rm -rf /Applications/tsrossa.app
-cp -R build/tsrossa.app /Applications/tsrossa.app
-xattr -cr /Applications/tsrossa.app
-codesign --force --deep -s - /Applications/tsrossa.app
-open /Applications/tsrossa.app
+# 3. Run unit tests
+./run_tests.sh
 ```
 
 ---
 
-## Keyboard Shortcuts
+## Community & Support
 
-| Shortcut | Action |
-| :--- | :--- |
-| `Space` | Play / Pause |
-| `Cmd + 1` | Switch to Now Playing Screen |
-| `Cmd + 2` | Switch to Music Library |
-| `Cmd + 4` | Open Settings & CoreAudio Configuration |
-| `Cmd + F` | Toggle Theater Mode (Immersive Lyrics & Album Art) |
-| `Cmd + U` | Check for App Updates |
-| `Cmd + [` / `Cmd + ]` | Previous / Next Track |
-| `Cmd + Up` / `Cmd + Down` | Volume Up / Down (Scalar Control) |
+tsrossa for macOS is an independent open-source project. If it enhances your desktop listening setup, support is warmly appreciated:
+
+[![Donate via BagiBagi](https://img.shields.io/badge/Donate-BagiBagi-FFDD00.svg?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://bagibagi.co/Yukaatsu)
+
+Found an issue or want to report hardware DAC compatibility? Please open an issue on [GitHub Issues](https://github.com/yukaatsu/tsrossa/issues) with your system details!
 
 ---
 
-## Troubleshooting
+## License
 
-### LaunchServices Error -54 ("The application cannot be opened")
-macOS quarantine attributes flag downloaded or locally built unsigned binaries. Strip the quarantine attribute and ad-hoc sign the bundle:
-```bash
-xattr -cr /Applications/tsrossa.app
-codesign --force --deep -s - /Applications/tsrossa.app
-```
-
-### Exclusive Hog Mode Denied
-If another application (such as Apple Music, Tidal, or a DAW like Logic Pro) currently has exclusive ownership of your DAC, close that application or toggle Hog Mode in tsrossa settings (`Cmd + 4`).
+tsrossa for macOS is distributed under the [Apache License 2.0](LICENSE).
