@@ -1,18 +1,51 @@
-*.iml
-.gradle
-/local.properties
-/.idea
-.DS_Store
-/build
-/app/build
-.cxx
-/app/.cxx
-captures
-.externalNativeBuild
+# ==========================================
+# Dokumen Internal, Audit & Catatan Pengembang
+# ==========================================
+AUDIT-PLANNING/
+test-bug.md
+bug-note*.md
+*.tmp
+
+# ==========================================
+# Tool AI, Brain & Graphify Cache
+# ==========================================
+graphify-out/
+.graphifyignore
+.superpowers/
+
+# ==========================================
+# File Konfigurasi Lokal & Kredensial Pribadi
+# ==========================================
+local.properties
+*.keystore
+*.jks
+
+# ==========================================
+# Android & CMake Build Artifacts (Biner)
+# ==========================================
+build/
+app/build/
+app/src/main/cpp/build/
 .cxx/
+app/.cxx/
+.externalNativeBuild/
+captures/
+release/
 *.apk
 *.aab
+compile_commands.json
 
-# Graphify Local Brain & Artifacts
-graphify-out/
-.superpowers/
+# ==========================================
+# Android Studio, Gradle & IDE Cache
+# ==========================================
+.gradle/
+*.iml
+.idea/
+.vscode/
+
+# ==========================================
+# Sampah Sistem Operasi
+# ==========================================
+.DS_Store
+**/.DS_Store
+Thumbs.db

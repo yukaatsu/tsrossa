@@ -1,3 +1,0 @@
-/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/CMakeFiles/kewmobile.dir
-/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/CMakeFiles/edit_cache.dir
-/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/CMakeFiles/rebuild_cache.dir

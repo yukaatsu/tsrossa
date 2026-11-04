@@ -1,3 +1,0 @@
-/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/CMakeFiles/libusb-populate.dir
-/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/CMakeFiles/edit_cache.dir
-/home/yuka/Documents/Project/Music Player Mobile/app/src/main/cpp/build/_deps/libusb-subbuild/CMakeFiles/rebuild_cache.dir
