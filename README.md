@@ -52,7 +52,7 @@ By default, macOS routes all sound through its system CoreAudio mixer (`AUHAL`).
 
 ### Audiophile Music Library (Cmd + 1)
 <p align="center">
-  <img src="screenshots/desktop_02_library.png" alt="tsrossa macOS Music Library" width="100%"/>
+  <img src="https://raw.githubusercontent.com/yukaatsu/tsrossa/macos/screenshots/macos_01_library.png" alt="tsrossa macOS Music Library" width="100%"/>
   <br/>
   <em>Audiophile Library: Clean Liquid Glass widescreen interface with dynamic sidebar, typeahead search, format & sampling rate filter chips (FLAC, WAV, 24-bit Hi-Res, 192kHz, 96kHz), and floating transport bar.</em>
 </p>
@@ -62,24 +62,24 @@ By default, macOS routes all sound through its system CoreAudio mixer (`AUHAL`).
 <table align="center">
   <tr>
     <td align="center" width="50%">
-      <img src="screenshots/desktop_01_now_playing.png" alt="Now Playing with Queue" width="100%"/>
+      <img src="https://raw.githubusercontent.com/yukaatsu/tsrossa/macos/screenshots/macos_02_now_playing.png" alt="Now Playing with Queue" width="100%"/>
       <br/><b>Now Playing & Up Next Queue</b><br/>
       <sub>Expandable drawer with high-res album art, hardware volume slider, bit-perfect format badge, and interactive queue</sub>
     </td>
     <td align="center" width="50%">
-      <img src="screenshots/desktop_01_lyrics.png" alt="Synchronized Lyrics" width="100%"/>
+      <img src="https://raw.githubusercontent.com/yukaatsu/tsrossa/macos/screenshots/macos_03_lyrics.png" alt="Synchronized Lyrics" width="100%"/>
       <br/><b>Time-Synced Lyrics Engine</b><br/>
       <sub>Real-time synchronized lyrics display with active vocal line glow, blurred surrounding context, and click-to-seek</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="screenshots/desktop_03_settings.png" alt="Settings & DAC Configuration" width="100%"/>
+      <img src="https://raw.githubusercontent.com/yukaatsu/tsrossa/macos/screenshots/macos_04_settings.png" alt="Settings & DAC Configuration" width="100%"/>
       <br/><b>Settings & Audio Configuration (Cmd + 3)</b><br/>
       <sub>Bento grid for Exclusive Hog Mode, clock switching, POSIX mlock memory defense, buffer latency, and Liquid Glass theme picker</sub>
     </td>
     <td align="center" width="50%">
-      <img src="screenshots/desktop_04_playlists.png" alt="Smart Playlists" width="100%"/>
+      <img src="https://raw.githubusercontent.com/yukaatsu/tsrossa/macos/screenshots/macos_05_playlists.png" alt="Smart Playlists" width="100%"/>
       <br/><b>Playlists & Organization (Cmd + 2)</b><br/>
       <sub>Instant playlist switching, favorite track curation (Liked Songs), and live search filtering</sub>
     </td>
