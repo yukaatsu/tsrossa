@@ -50,11 +50,11 @@ By default, macOS routes all sound through its system CoreAudio mixer (`AUHAL`).
 
 ## Interface & Navigation
 
-### Audiophile Music Library
+### Audiophile Music Library (Cmd + 1)
 <p align="center">
   <img src="screenshots/desktop_02_library.png" alt="tsrossa macOS Music Library" width="100%"/>
   <br/>
-  <em>Audiophile Library: Clean Liquid Glass widescreen interface with dynamic sidebar, typeahead search, format & sampling rate filter chips, and floating transport player bar.</em>
+  <em>Audiophile Library: Clean Liquid Glass widescreen interface with dynamic sidebar, typeahead search, format & sampling rate filter chips (FLAC, WAV, 24-bit Hi-Res, 192kHz, 96kHz), and floating transport bar.</em>
 </p>
 
 ### Dedicated Views & Audio Engine Controls
@@ -64,24 +64,24 @@ By default, macOS routes all sound through its system CoreAudio mixer (`AUHAL`).
     <td align="center" width="50%">
       <img src="screenshots/desktop_01_now_playing.png" alt="Now Playing with Queue" width="100%"/>
       <br/><b>Now Playing & Up Next Queue</b><br/>
-      <sub>Album artwork showcase, track metadata, bit-perfect sample rate badge, and drag-and-drop queue</sub>
+      <sub>Expandable drawer with high-res album art, hardware volume slider, bit-perfect format badge, and interactive queue</sub>
     </td>
     <td align="center" width="50%">
       <img src="screenshots/desktop_01_lyrics.png" alt="Synchronized Lyrics" width="100%"/>
-      <br/><b>Time-Synced Lyrics</b><br/>
-      <sub>Real-time synchronized lyrics engine with active line focus and millisecond seek support</sub>
+      <br/><b>Time-Synced Lyrics Engine</b><br/>
+      <sub>Real-time synchronized lyrics display with active vocal line glow, blurred surrounding context, and click-to-seek</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
       <img src="screenshots/desktop_03_settings.png" alt="Settings & DAC Configuration" width="100%"/>
-      <br/><b>Settings & Audio Configuration</b><br/>
-      <sub>Exclusive Hog Mode, hardware clock switcher, POSIX mlock memory defense, and Liquid Glass theme picker</sub>
+      <br/><b>Settings & Audio Configuration (Cmd + 3)</b><br/>
+      <sub>Bento grid for Exclusive Hog Mode, clock switching, POSIX mlock memory defense, buffer latency, and Liquid Glass theme picker</sub>
     </td>
     <td align="center" width="50%">
       <img src="screenshots/desktop_04_playlists.png" alt="Smart Playlists" width="100%"/>
-      <br/><b>Smart Playlists & Organization</b><br/>
-      <sub>Instant playlist filtering, favorite track curation, and library search</sub>
+      <br/><b>Playlists & Organization (Cmd + 2)</b><br/>
+      <sub>Instant playlist switching, favorite track curation (Liked Songs), and live search filtering</sub>
     </td>
   </tr>
 </table>
@@ -90,18 +90,21 @@ By default, macOS routes all sound through its system CoreAudio mixer (`AUHAL`).
 
 ## Highlights
 
-- **3-Column Responsive Studio Workspace**  
-  - **Left Sidebar:** Instant navigation for Now Playing, Hi-Res Masters (24-bit filter), FLAC/WAV archives, custom playlists, and active DAC device indicators.
-  - **Center Stage:** Hero album showcase with mastering metadata, audiophile filter chips, and animated equalizer bars on the playing track.
-  - **Collapsible Right Inspector:** 3-tab drawer for synchronized `.lrc` lyrics, live 32-band FFT spectrum visualizer & signal path audit, and queue management.
-- **Spinning Vinyl Transport**  
-  Smoothly animated vinyl disc with concentric grooves and center spindle that spins in real-time during playback.
-- **Floating Mini-Player**  
-  A clean 360x480 floating desktop card featuring ambient artwork glow, live synchronized lyric preview, mini scrubber, and transport controls.
-- **Synchronized Lyrics Engine**  
+- **Liquid Glass Interface & Chromatic Palettes**  
+  Modern macOS SwiftUI design featuring Dark Glass and Light Glass modes, dynamic background mesh aura, and custom accent chromatic palettes (Dynamic, Rose, Matcha, Studio, Audiophile).
+- **Expandable Now Playing Drawer**  
+  One-tap drawer expansion displaying full-resolution album artwork, hardware output selector, transport controls, and dual tabs for **Up Next Queue** and **Synchronized Lyrics**.
+- **Time-Synced Lyrics Engine**  
   Discovers companion `.lrc` and `.txt` files alongside your tracks with millisecond timestamp synchronization, plus fallback parsing for embedded ID3 and Vorbis lyrics tags.
-- **Full-Screen Theater Mode (`Cmd + F`)**  
-  Distraction-free large-format view with animated canvas designed for 4K and 5K displays.
+- **Bento Audio Configuration (Cmd + 3)**  
+  Complete control over DAC Exclusive Hog Mode, automatic crystal clock switching, POSIX `mlock()` RAM locking, and selectable ring buffer latency profiles (64ms Ultra Low Latency, 160ms Balanced, 192ms Studio Jitter Safe).
+- **Fast Keyboard Navigation & Shortcuts**  
+  - `Cmd + 1`: Music Library
+  - `Cmd + 2`: Playlists
+  - `Cmd + 3`: Settings & DAC Configuration
+  - `Cmd + F`: Typeahead search
+  - `Cmd + /`: Shortcuts Guide
+  - `Cmd + U`: Hardware Audio Diagnostics
 - **No Bulky Xcode IDE Required to Build**  
   Compiles cleanly from the command line using standard `clang++` and `swiftc` toolchains in just a few seconds.
 
@@ -124,14 +127,14 @@ By default, macOS routes all sound through its system CoreAudio mixer (`AUHAL`).
 ## Quick Start
 
 ### 1. Installation
-1. Download the latest **`tsrossa-mac.dmg`** from the [GitHub Releases](https://github.com/yukaatsu/tsrossa/releases).
+1. Download the latest **`tsrossa-v1.0.0-BETA-macos.dmg`** from the [GitHub Releases](https://github.com/yukaatsu/tsrossa/releases).
 2. Open the disk image and drag **tsrossa.app** into your **Applications** folder.
 3. Launch tsrossa from Applications or Spotlight (`Cmd + Space`).
 
 ### 2. Connect Your DAC
 1. Connect your USB or Thunderbolt DAC.
-2. Go to **Settings (`Cmd + 4`)** and verify that **Exclusive Hog Mode** is enabled.
-3. Select your FLAC or WAV library folder in the Library tab (`Cmd + 2`) to start bit-perfect listening.
+2. Go to **Settings (`Cmd + 3`)** and verify that **Exclusive Hog Mode** is enabled.
+3. Select your FLAC or WAV library folder in the Music Library tab (`Cmd + 1`) to start bit-perfect listening.
 
 ---
 
@@ -145,7 +148,7 @@ You do not need full Xcode installed to compile tsrossa — just the standard ma
 
 # 2. Package into a distributable DMG installer
 ./package_dmg.sh
-# Output: build/tsrossa-mac-installer.dmg
+# Output: tsrossa-v1.0.0-BETA-macos.dmg
 
 # 3. Run unit tests
 ./run_tests.sh
