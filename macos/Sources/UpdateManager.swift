@@ -127,7 +127,7 @@ public class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelega
     private var downloadTask: URLSessionDownloadTask?
 
     public var currentVersion: String {
-        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "5.4"
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0-BETA"
         return ver.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

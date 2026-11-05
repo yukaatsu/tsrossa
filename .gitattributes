@@ -1,0 +1,5 @@
+# GitHub Linguist language overrides
+src/nativeMain/cpp/dr_flac.h linguist-vendored
+src/nativeMain/cpp/dr_wav.h linguist-vendored
+src/nativeMain/cpp/dr_impl.c linguist-vendored
+*.swift linguist-detectable=true

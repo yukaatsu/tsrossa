@@ -10,12 +10,19 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/yukaatsu/tsrossa/releases"><img src="https://img.shields.io/badge/Release-v1.6.0--BETA-orange.svg" alt="Release"></a>
+  <a href="https://github.com/yukaatsu/tsrossa/releases"><img src="https://img.shields.io/badge/Release-v1.0.0--BETA-orange.svg" alt="Release"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-macOS%2012.0%2B%20(Monterey%20--%20Sequoia)-2ea44f.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Arch-Apple%20Silicon%20%7C%20Intel-0052cc.svg" alt="Architecture"></a>
   <a href="#"><img src="https://img.shields.io/badge/Audio-Exclusive%20Hog%20Mode-success.svg" alt="Audio Mode"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg" alt="License"></a>
   <a href="https://bagibagi.co/Yukaatsu"><img src="https://img.shields.io/badge/Support-BagiBagi-FFDD00.svg?logo=buy-me-a-coffee&logoColor=black" alt="Support"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Language-Swift%206-FA7343.svg?logo=swift&logoColor=white" alt="Swift">
+  <img src="https://img.shields.io/badge/Audio%20Core-C%2B%2B17-00599C.svg?logo=c%2B%2B&logoColor=white" alt="C++17">
+  <img src="https://img.shields.io/badge/UI-SwiftUI%20Liquid%20Glass-0071e3.svg?logo=apple&logoColor=white" alt="SwiftUI">
+  <img src="https://img.shields.io/badge/Driver-CoreAudio%20HAL-333333.svg?logo=apple&logoColor=white" alt="CoreAudio">
 </p>
 
 > 💡 **Looking for the Android version?**  
@@ -102,8 +109,9 @@ By default, macOS routes all sound through its system CoreAudio mixer (`AUHAL`).
 | **Output Target** | External USB DACs, Thunderbolt audio interfaces, and built-in 3.5mm headphone jacks |
 | **Operating System** | macOS 12.0 (Monterey), macOS 13 (Ventura), macOS 14 (Sonoma), and macOS 15+ (Sequoia) |
 | **Hardware Architecture** | Universal: Apple Silicon (M1/M2/M3/M4, arm64) and Intel (x86_64) |
-| **Engine Core** | Native C++17 CoreAudio HAL driver with POSIX `mlock()` memory pinning |
-| **Interface** | SwiftUI with Liquid Glass aesthetic and macOS Human Interface Guidelines (HIG) |
+| **Primary Language** | **Swift 6** (SwiftUI, reactive state, lyrics parser, visualizers) |
+| **Audio Engine Core** | **C++17** (Direct CoreAudio HAL driver, Exclusive Hog Mode, POSIX `mlock`) |
+| **Interface Style** | SwiftUI with Liquid Glass aesthetic and macOS HIG |
 
 ---
 
