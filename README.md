@@ -48,34 +48,40 @@ By default, macOS routes all sound through its system CoreAudio mixer (`AUHAL`).
 
 ---
 
-## The Studio Stage
+## Interface & Navigation
 
+### Audiophile Music Library
 <p align="center">
-  <img src="screenshots/desktop_01_studio_stage.png" alt="tsrossa macOS Studio Stage" width="100%"/>
+  <img src="screenshots/desktop_02_library.png" alt="tsrossa macOS Music Library" width="100%"/>
   <br/>
-  <em>Studio Stage: 3-column workspace with live mastering banner, animated equalizer bars, spinning vinyl record player, collapsible right inspector (lyrics, FFT spectrum, queue), and floating mini-player.</em>
+  <em>Audiophile Library: Clean Liquid Glass widescreen interface with dynamic sidebar, typeahead search, format & sampling rate filter chips, and floating transport player bar.</em>
 </p>
 
----
-
-## Desktop Navigation & Views
+### Dedicated Views & Audio Engine Controls
 
 <table align="center">
   <tr>
-    <td align="center" width="33%">
-      <img src="screenshots/desktop_01_now_playing.png" alt="macOS Now Playing Screen" width="100%"/>
-      <br/><b>Now Playing (Cmd + 1)</b><br/>
-      <sub>Split widescreen layout with album artwork canvas, live lossless signal path inspector, and queue continuation</sub>
+    <td align="center" width="50%">
+      <img src="screenshots/desktop_01_now_playing.png" alt="Now Playing with Queue" width="100%"/>
+      <br/><b>Now Playing & Up Next Queue</b><br/>
+      <sub>Album artwork showcase, track metadata, bit-perfect sample rate badge, and drag-and-drop queue</sub>
     </td>
-    <td align="center" width="33%">
-      <img src="screenshots/desktop_02_library.png" alt="macOS Music Library" width="100%"/>
-      <br/><b>Audiophile Library (Cmd + 2)</b><br/>
-      <sub>Fast cached browser with smart playlists, 1-click format/kHz filter chips, and typeahead fuzzy search</sub>
+    <td align="center" width="50%">
+      <img src="screenshots/desktop_01_lyrics.png" alt="Synchronized Lyrics" width="100%"/>
+      <br/><b>Time-Synced Lyrics</b><br/>
+      <sub>Real-time synchronized lyrics engine with active line focus and millisecond seek support</sub>
     </td>
-    <td align="center" width="33%">
-      <img src="screenshots/desktop_03_settings.png" alt="macOS DAC & Settings" width="100%"/>
-      <br/><b>DAC & Settings (Cmd + 4)</b><br/>
-      <sub>Exclusive Hog Mode toggle, hardware sample rate inspector, RAM mlock, and built-in update engine</sub>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="screenshots/desktop_03_settings.png" alt="Settings & DAC Configuration" width="100%"/>
+      <br/><b>Settings & Audio Configuration</b><br/>
+      <sub>Exclusive Hog Mode, hardware clock switcher, POSIX mlock memory defense, and Liquid Glass theme picker</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="screenshots/desktop_04_playlists.png" alt="Smart Playlists" width="100%"/>
+      <br/><b>Smart Playlists & Organization</b><br/>
+      <sub>Instant playlist filtering, favorite track curation, and library search</sub>
     </td>
   </tr>
 </table>
