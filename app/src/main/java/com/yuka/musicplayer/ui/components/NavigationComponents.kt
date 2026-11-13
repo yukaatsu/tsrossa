@@ -72,6 +72,7 @@ fun AppHeader(
     onToggleLogs: () -> Unit,
     onToggleUpdate: () -> Unit,
     hasUpdateAvailable: Boolean = false,
+    onDonationClick: () -> Unit = {},
     onAboutClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
     connectedDacName: String? = null,
@@ -121,14 +122,23 @@ fun AppHeader(
                     onClick = onAboutClick,
                     pressedScale = 0.94f
                 ) {
-                    Text(
-                        text = "tsrossa",
-                        fontFamily = ModernSansFont,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 19.sp,
-                        letterSpacing = (-0.3).sp,
-                        color = m3OnSurface()
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        GlyphTsrossaLogoSilhouette(
+                            color = m3OnSurface(),
+                            modifier = Modifier.size(21.dp)
+                        )
+                        Text(
+                            text = "tsrossa",
+                            fontFamily = ModernSansFont,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 19.sp,
+                            letterSpacing = (-0.3).sp,
+                            color = m3OnSurface()
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.width(10.dp))
@@ -173,11 +183,26 @@ fun AppHeader(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Right: M3 Glassmorphic Action Cluster (Settings far right, Update left of it)
+            // Right: M3 Glassmorphic Action Cluster (Donation, Update, Settings)
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // DONATION & SUPPORTER WALL
+                TactileBox(
+                    onClick = onDonationClick,
+                    pressedScale = 0.90f,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(accent.copy(alpha = 0.12f))
+                ) {
+                    GlyphBagiBagi(
+                        color = accent,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+
                 // UPDATES (always visible directly to the left of Settings)
                 val updateTransition = rememberInfiniteTransition(label = "updateIconAnim")
                 val pulseScale by updateTransition.animateFloat(

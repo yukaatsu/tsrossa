@@ -14,6 +14,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.ui.components.GlyphBolt
+import com.yuka.musicplayer.ui.components.GlyphEqualizer
 import com.yuka.musicplayer.ui.components.GlyphWarning
 import com.yuka.musicplayer.ui.components.TactileBox
 import com.yuka.musicplayer.ui.theme.ModernSansFont
@@ -28,7 +29,9 @@ fun PlaybackLaunchSection(
     defaultScreen: String,
     onDefaultScreenChange: (String) -> Unit,
     usbBufferProfile: Int = 1,
-    onUsbBufferProfileChange: (Int) -> Unit = {}
+    onUsbBufferProfileChange: (Int) -> Unit = {},
+    isPeqActive: Boolean = false,
+    onOpenPeq: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val isSamsung = remember { com.yuka.musicplayer.util.SamsungAudioEffectHelper.isSamsungDevice() }
@@ -93,6 +96,65 @@ fun PlaybackLaunchSection(
                 com.yuka.musicplayer.audio.AudioEngine.applyBufferProfile(profile)
             }
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "HARDWARE PARAMETRIC EQUALIZER",
+            color = com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
+            fontFamily = ModernSansFont,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(com.yuka.musicplayer.ui.theme.m3SubtleFill(alpha = 0.08f))
+                .padding(14.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    GlyphEqualizer(
+                        color = if (isPeqActive) Color(0xFF00E676) else com.yuka.musicplayer.ui.theme.m3OnSurface(),
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(7.dp))
+                    Text(
+                        text = "10-Band Parametric EQ",
+                        color = com.yuka.musicplayer.ui.theme.m3OnSurface(),
+                        fontFamily = ModernSansFont,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = if (isPeqActive) "Active (TDF-II 64-bit Direct Native)" else "Bypass (100% Bit-Perfect Audio)",
+                    color = if (isPeqActive) Color(0xFF00E676) else com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
+                    fontFamily = ModernSansFont,
+                    fontSize = 11.sp
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            TactileBox(
+                onClick = onOpenPeq,
+                pressedScale = 0.92f,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(com.yuka.musicplayer.ui.theme.LocalAccentColor.current.copy(alpha = 0.15f))
+                    .padding(horizontal = 14.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    text = "OPEN EQ",
+                    color = com.yuka.musicplayer.ui.theme.LocalAccentColor.current,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp
+                )
+            }
+        }
 
         if (isSamsung) {
             Spacer(modifier = Modifier.height(14.dp))

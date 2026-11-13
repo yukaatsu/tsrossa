@@ -197,6 +197,29 @@ object PlaylistStorageHelper {
     fun removeTrackFromPlaylist(context: Context, playlistId: String, trackPath: String): List<Playlist>? = removeTrackFromPlaylist(context.filesDir, playlistId, trackPath)
 
     @Synchronized
+    fun removeTracksFromAllPlaylists(baseDir: File, trackPaths: Set<String>): List<Playlist>? {
+        if (trackPaths.isEmpty()) return null
+        val current = loadAllPlaylists(baseDir).toMutableList()
+        var changed = false
+        for (i in current.indices) {
+            val pl = current[i]
+            val filtered = pl.trackPaths.filter { it !in trackPaths }
+            if (filtered.size != pl.trackPaths.size) {
+                current[i] = pl.copy(trackPaths = filtered)
+                changed = true
+            }
+        }
+        if (changed) {
+            val saved = saveAllPlaylists(baseDir, current)
+            return if (saved) current else null
+        }
+        return current
+    }
+
+    fun removeTracksFromAllPlaylists(context: Context, trackPaths: Set<String>): List<Playlist>? =
+        removeTracksFromAllPlaylists(context.filesDir, trackPaths)
+
+    @Synchronized
     fun clearPlaylistTracks(baseDir: File, playlistId: String): List<Playlist>? {
         val current = loadAllPlaylists(baseDir).toMutableList()
         val index = current.indexOfFirst { it.id == playlistId }

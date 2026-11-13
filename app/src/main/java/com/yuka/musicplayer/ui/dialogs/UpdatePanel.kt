@@ -17,8 +17,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.ui.components.GlyphClose
-import com.yuka.musicplayer.ui.components.ModalCloseButton
 import com.yuka.musicplayer.ui.components.GlyphRefresh
+import com.yuka.musicplayer.ui.components.GlyphSparkle
+import com.yuka.musicplayer.ui.components.ModalCloseButton
 import com.yuka.musicplayer.ui.components.TactileBox
 import com.yuka.musicplayer.ui.theme.LocalAccentColor
 import com.yuka.musicplayer.ui.theme.m3OnSurface
@@ -119,24 +120,41 @@ fun UpdatePanel(
                         }
                         is UpdateCheckState.UpdateAvailable -> {
                             val rel = updateCheckState.release
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Status: ", color = m3OnSurfaceVariant(), fontFamily = ModernSansFont, fontSize = 13.sp)
-                                Text("New version available!", color = Color(0xFF00E676), fontFamily = ModernSansFont, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            androidx.compose.foundation.layout.Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFF00E676).copy(alpha = 0.15f))
+                                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    GlyphSparkle(color = Color(0xFF00E676), modifier = Modifier.size(15.dp))
+                                    Text(
+                                        text = "UPDATE TERSEDIA: ${rel.tagName}",
+                                        color = Color(0xFF00E676),
+                                        fontFamily = ModernSansFont,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("Latest Release", color = m3OnSurfaceVariant(), fontFamily = ModernSansFont, fontSize = 12.sp)
-                                Text(rel.tagName, color = Color(0xFF00E676), fontFamily = ModernSansFont, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Versi Pembaruan", color = m3OnSurfaceVariant(), fontFamily = ModernSansFont, fontSize = 12.sp)
+                                Text("v$currentVersion → ${rel.tagName}", color = Color(0xFF00E676), fontFamily = ModernSansFont, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("Package Size", color = m3OnSurfaceVariant(), fontFamily = ModernSansFont, fontSize = 12.sp)
+                                Text("Ukuran Paket", color = m3OnSurfaceVariant(), fontFamily = ModernSansFont, fontSize = 12.sp)
                                 Text(String.format("%.1f MB", rel.apkSize / (1024.0 * 1024.0)), color = m3OnSurface(), fontFamily = ModernSansFont, fontSize = 12.sp)
                             }
                         }

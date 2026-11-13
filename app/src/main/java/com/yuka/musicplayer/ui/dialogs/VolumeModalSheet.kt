@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.audio.AudioEngine
 import com.yuka.musicplayer.ui.components.CyberBottomSheet
 import com.yuka.musicplayer.ui.components.GlyphVolume
+import com.yuka.musicplayer.ui.components.GlyphVolumeMute
 import com.yuka.musicplayer.ui.theme.LocalAccentColor
 import com.yuka.musicplayer.ui.theme.ModernSansFont
 import com.yuka.musicplayer.ui.theme.TerminalFont
@@ -112,7 +113,11 @@ fun VolumeModalSheet(
                     modifier = Modifier.weight(1f, fill = false),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    GlyphVolume(color = accent, modifier = Modifier.size(20.dp))
+                    if (volPercent <= 0) {
+                        GlyphVolumeMute(color = accent, modifier = Modifier.size(20.dp))
+                    } else {
+                        GlyphVolume(color = accent, modifier = Modifier.size(20.dp))
+                    }
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
                         Text(

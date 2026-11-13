@@ -5,7 +5,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,7 +16,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -29,6 +32,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.ui.theme.TerminalWhite
+import com.yuka.musicplayer.ui.theme.m3OnSurface
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -72,11 +76,104 @@ fun TactileBox(
 }
 
 /**
- * Reusable, high-performance Eva Icons vector canvas.
- * Parses 24x24 SVG path strings once and caches the geometry in memory.
+ * Reusable, high-performance Phosphor Icons vector canvas.
+ * Built on the official Phosphor 256x256 viewBox grid.
+ * https://github.com/phosphor-icons/homepage#phosphor-icons
  */
-private val evaPathCache = ConcurrentHashMap<String, Path>()
+private val phosphorPathCache = ConcurrentHashMap<String, Path>()
 
+@Composable
+fun PhosphorIconCanvas(
+    vararg svgPathsData: String,
+    color: Color,
+    contentDescription: String,
+    modifier: Modifier = Modifier.size(20.dp),
+    filled: Boolean = true,
+    strokeWidth: Float = 0f
+) {
+    val basePaths = remember(svgPathsData) {
+        svgPathsData.map { data ->
+            phosphorPathCache.getOrPut(data) {
+                PathParser().parsePathString(data).toPath()
+            }
+        }
+    }
+    val scaledPath = remember { Path() }
+    val matrix = remember { Matrix() }
+
+    Canvas(modifier = modifier.semantics { this.contentDescription = contentDescription }) {
+        val minDim = size.minDimension
+        val strokeStyle = if (strokeWidth > 0f) {
+            Stroke(
+                width = (strokeWidth / 256f) * minDim,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        } else null
+
+        for (basePath in basePaths) {
+            scaledPath.reset()
+            scaledPath.addPath(basePath)
+            matrix.reset()
+            matrix.scale(size.width / 256f, size.height / 256f)
+            scaledPath.transform(matrix)
+            if (filled) {
+                drawPath(path = scaledPath, color = color, style = Fill)
+            }
+            if (strokeStyle != null) {
+                drawPath(path = scaledPath, color = color, style = strokeStyle)
+            }
+        }
+    }
+}
+
+/**
+ * Backward compatibility alias for any legacy 24x24 callers.
+ */
+@Composable
+fun LucideIconCanvas(
+    vararg svgPathsData: String,
+    color: Color,
+    contentDescription: String,
+    modifier: Modifier = Modifier.size(20.dp),
+    strokeWidth: Float = 2.0f,
+    filled: Boolean = false
+) {
+    val basePaths = remember(svgPathsData) {
+        svgPathsData.map { data ->
+            phosphorPathCache.getOrPut("legacy_24_" + data) {
+                PathParser().parsePathString(data).toPath()
+            }
+        }
+    }
+    val scaledPath = remember { Path() }
+    val matrix = remember { Matrix() }
+
+    Canvas(modifier = modifier.semantics { this.contentDescription = contentDescription }) {
+        val minDim = size.minDimension
+        val strokeStyle = Stroke(
+            width = (strokeWidth / 24f) * minDim,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round
+        )
+
+        for (basePath in basePaths) {
+            scaledPath.reset()
+            scaledPath.addPath(basePath)
+            matrix.reset()
+            matrix.scale(size.width / 24f, size.height / 24f)
+            scaledPath.transform(matrix)
+            if (filled) {
+                drawPath(path = scaledPath, color = color, style = Fill)
+            }
+            drawPath(path = scaledPath, color = color, style = strokeStyle)
+        }
+    }
+}
+
+/**
+ * Backward compatibility alias for Eva icon callers.
+ */
 @Composable
 fun EvaIconCanvas(
     svgPathData: String,
@@ -84,457 +181,750 @@ fun EvaIconCanvas(
     contentDescription: String,
     modifier: Modifier = Modifier.size(20.dp)
 ) {
-    val basePath = remember(svgPathData) {
-        evaPathCache.getOrPut(svgPathData) {
-            PathParser().parsePathString(svgPathData).toPath()
-        }
-    }
-    val scaledPath = remember { Path() }
-    val matrix = remember { Matrix() }
-
-    Canvas(modifier = modifier.semantics { this.contentDescription = contentDescription }) {
-        scaledPath.reset()
-        scaledPath.addPath(basePath)
-        matrix.reset()
-        matrix.scale(size.width / 24f, size.height / 24f)
-        scaledPath.transform(matrix)
-        drawPath(path = scaledPath, color = color, style = Fill)
-    }
-}
-
-// ==========================================
-// OFFICIAL EVA ICONS (24x24 Vector Paths)
-// https://akveo.github.io/eva-icons
-// ==========================================
-
-@Composable
-fun GlyphPlay(color: Color, modifier: Modifier = Modifier.size(24.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M18.54 9L8.88 3.46a3.42 3.42 0 0 0-5.13 3v11.12A3.42 3.42 0 0 0 7.17 21a3.43 3.43 0 0 0 1.71-.46L18.54 15a3.42 3.42 0 0 0 0-6z",
+    PhosphorIconCanvas(
+        svgPathData,
         color = color,
-        contentDescription = "Play",
+        contentDescription = contentDescription,
         modifier = modifier
     )
 }
 
+// ==========================================
+// OFFICIAL PHOSPHOR ICONS (256x256 Vector Paths)
+// https://github.com/phosphor-icons/homepage#phosphor-icons
+// ==========================================
+
 @Composable
-fun GlyphPause(color: Color, modifier: Modifier = Modifier.size(24.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M8.5 5A2.5 2.5 0 0 0 6 7.5v9A2.5 2.5 0 0 0 8.5 19h.5a2.5 2.5 0 0 0 2.5-2.5v-9A2.5 2.5 0 0 0 9 5zm6.5 0a2.5 2.5 0 0 0-2.5 2.5v9a2.5 2.5 0 0 0 2.5 2.5h.5a2.5 2.5 0 0 0 2.5-2.5v-9A2.5 2.5 0 0 0 15.5 5z",
+fun GlyphPlay(color: Color, modifier: Modifier = Modifier.size(24.dp), filled: Boolean = false) {
+    val path = if (filled) {
+        // phosphor: play-fill
+        "M240,128a15.74,15.74,0,0,1-7.6,13.51L88.32,229.65a16,16,0,0,1-16.2.3A15.86,15.86,0,0,1,64,216.13V39.87a15.86,15.86,0,0,1,8.12-13.82,16,16,0,0,1,16.2.3L232.4,114.49A15.74,15.74,0,0,1,240,128Z"
+    } else {
+        // phosphor: play (regular)
+        "M232.4,114.49,88.32,26.35a16,16,0,0,0-16.2-.3A15.86,15.86,0,0,0,64,39.87V216.13A15.94,15.94,0,0,0,80,232a16.07,16.07,0,0,0,8.36-2.35L232.4,141.51a15.81,15.81,0,0,0,0-27ZM80,215.94V40l143.83,88Z"
+    }
+    PhosphorIconCanvas(
+        path,
+        color = color,
+        contentDescription = "Play",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphPause(color: Color, modifier: Modifier = Modifier.size(24.dp), filled: Boolean = false) {
+    val path = if (filled) {
+        // phosphor: pause-fill
+        "M216,48V208a16,16,0,0,1-16,16H160a16,16,0,0,1-16-16V48a16,16,0,0,1,16-16h40A16,16,0,0,1,216,48ZM96,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16H96a16,16,0,0,0,16-16V48A16,16,0,0,0,96,32Z"
+    } else {
+        // phosphor: pause (regular)
+        "M200,32H160a16,16,0,0,0-16,16V208a16,16,0,0,0,16,16h40a16,16,0,0,0,16-16V48A16,16,0,0,0,200,32Zm0,176H160V48h40ZM96,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16H96a16,16,0,0,0,16-16V48A16,16,0,0,0,96,32Zm0,176H56V48H96Z"
+    }
+    PhosphorIconCanvas(
+        path,
         color = color,
         contentDescription = "Pause",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphPrev(color: Color, modifier: Modifier = Modifier.size(22.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M16.66 5.25a2.77 2.77 0 0 0-2.92.26L9 9.18V7a1 1 0 0 0-2 0v10a1 1 0 0 0 2 0v-2.18l4.74 3.67a2.78 2.78 0 0 0 1.7.58a2.88 2.88 0 0 0 1.22-.28A2.77 2.77 0 0 0 18 16.31V7.69a2.77 2.77 0 0 0-1.34-2.44z",
+    // phosphor: skip-back
+    PhosphorIconCanvas(
+        "M199.81,34a16,16,0,0,0-16.24.43L64,109.23V40a8,8,0,0,0-16,0V216a8,8,0,0,0,16,0V146.77l119.57,74.78A15.95,15.95,0,0,0,208,208.12V47.88A15.86,15.86,0,0,0,199.81,34ZM192,208,64.16,128,192,48.07Z",
         color = color,
         contentDescription = "Previous Track",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphNext(color: Color, modifier: Modifier = Modifier.size(22.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M16 6a1 1 0 0 0-1 1v2.18l-4.74-3.67a2.77 2.77 0 0 0-2.92-.26A2.77 2.77 0 0 0 6 7.69v8.62a2.77 2.77 0 0 0 1.34 2.44a2.88 2.88 0 0 0 1.22.28a2.78 2.78 0 0 0 1.7-.58L15 14.82V17a1 1 0 0 0 2 0V7a1 1 0 0 0-1-1z",
+    // phosphor: skip-forward
+    PhosphorIconCanvas(
+        "M200,32a8,8,0,0,0-8,8v69.23L72.43,34.45A15.95,15.95,0,0,0,48,47.88V208.12a16,16,0,0,0,24.43,13.43L192,146.77V216a8,8,0,0,0,16,0V40A8,8,0,0,0,200,32ZM64,207.93V48.07L191.84,128Z",
         color = color,
         contentDescription = "Next Track",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphShuffle(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M18.71 14.29a1 1 0 0 0-1.42 1.42l.29.29H16a4 4 0 0 1-3.1-1.46L14.12 13l-1.24-1.54L11.65 13A6 6 0 0 1 7 15H4a1 1 0 0 0 0 2h3a8 8 0 0 0 6-2.7l.28-.33l.28.33A6 6 0 0 0 18 17h-.42l-.29.29a1 1 0 0 0 0 1.42a1 1 0 0 0 1.42 0l2-2a1 1 0 0 0 0-1.42zM18.71 5.29l-2-2a1 1 0 0 0-1.42 1.42l.29.29H16a6 6 0 0 0-4.65 2.2L10.12 8.7A6 6 0 0 0 5.5 7H4a1 1 0 0 0 0 2h1.5a4 4 0 0 1 3.1 1.46l3 3.74a1 1 0 0 0 1.56-1.25L10.88 10l1.24-1.54A4 4 0 0 1 15.22 7h2.36l-.29.29a1 1 0 0 0 1.42 1.42l2-2a1 1 0 0 0 0-1.42z",
+    // phosphor: shuffle
+    PhosphorIconCanvas(
+        "M237.66,178.34a8,8,0,0,1,0,11.32l-24,24a8,8,0,0,1-11.32-11.32L212.69,192H200.94a72.12,72.12,0,0,1-58.59-30.15l-41.72-58.4A56.1,56.1,0,0,0,55.06,80H32a8,8,0,0,1,0-16H55.06a72.12,72.12,0,0,1,58.59,30.15l41.72,58.4A56.1,56.1,0,0,0,200.94,176h11.75l-10.35-10.34a8,8,0,0,1,11.32-11.32ZM143,107a8,8,0,0,0,11.16-1.86l1.2-1.67A56.1,56.1,0,0,1,200.94,80h11.75L202.34,90.34a8,8,0,0,0,11.32,11.32l24-24a8,8,0,0,0,0-11.32l-24-24a8,8,0,0,0-11.32,11.32L212.69,64H200.94a72.12,72.12,0,0,0-58.59,30.15l-1.2,1.67A8,8,0,0,0,143,107Zm-30,42a8,8,0,0,0-11.16,1.86l-1.2,1.67A56.1,56.1,0,0,1,55.06,176H32a8,8,0,0,0,0,16H55.06a72.12,72.12,0,0,0,58.59-30.15l1.2-1.67A8,8,0,0,0,113,149Z",
         color = color,
         contentDescription = "Shuffle",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphRepeat(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M17.91 5.21l-2.25-2a1 1 0 0 0-1.32 1.5l.6.54H7a4 4 0 0 0-4 4v2a1 1 0 0 0 2 0v-2a2 2 0 0 1 2-2h7.86l-.52.46a1 1 0 0 0-.08 1.42a1 1 0 0 0 .75.34a1 1 0 0 0 .67-.26l2.25-2a1 1 0 0 0-.02-1.5zM20 11.75a1 1 0 0 0-1 1v2a2 2 0 0 1-2 2H9.14l.52-.46a1 1 0 0 0-1.32-1.5l-2.25 2a1 1 0 0 0 0 1.5l2.25 2a1 1 0 0 0 .66.25a1 1 0 0 0 .75-.34a1 1 0 0 0-.09-1.41l-.6-.54H17a4 4 0 0 0 4-4v-2a1 1 0 0 0-1-1z",
+    // phosphor: repeat
+    PhosphorIconCanvas(
+        "M24,128A72.08,72.08,0,0,1,96,56H204.69L194.34,45.66a8,8,0,0,1,11.32-11.32l24,24a8,8,0,0,1,0,11.32l-24,24a8,8,0,0,1-11.32-11.32L204.69,72H96a56.06,56.06,0,0,0-56,56,8,8,0,0,1-16,0Zm200-8a8,8,0,0,0-8,8,56.06,56.06,0,0,1-56,56H51.31l10.35-10.34a8,8,0,0,0-11.32-11.32l-24,24a8,8,0,0,0,0,11.32l24,24a8,8,0,0,0,11.32-11.32L51.31,200H160a72.08,72.08,0,0,0,72-72A8,8,0,0,0,224,120Z",
         color = color,
         contentDescription = "Toggle Repeat",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphRepeatOne(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: repeat-once
+    PhosphorIconCanvas(
+        "M24,128A72.08,72.08,0,0,1,96,56H204.69L194.34,45.66a8,8,0,0,1,11.32-11.32l24,24a8,8,0,0,1,0,11.32l-24,24a8,8,0,0,1-11.32-11.32L204.69,72H96a56.06,56.06,0,0,0-56,56,8,8,0,0,1-16,0Zm200-8a8,8,0,0,0-8,8,56.06,56.06,0,0,1-56,56H51.31l10.35-10.34a8,8,0,0,0-11.32-11.32l-24,24a8,8,0,0,0,0,11.32l24,24a8,8,0,0,0,11.32-11.32L51.31,200H160a72.08,72.08,0,0,0,72-72A8,8,0,0,0,224,120Zm-80,32V104a8,8,0,0,0-11.58-7.16l-16,8a8,8,0,0,0,7.16,14.32L128,116.94V152a8,8,0,0,0,16,0Z",
+        color = color,
+        contentDescription = "Repeat One",
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphBolt(color: Color, modifier: Modifier = Modifier.size(16.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M11.11 23a1 1 0 0 1-.34-.06a1 1 0 0 1-.65-1.05l.77-7.09H5a1 1 0 0 1-.83-1.56l7.89-11.8a1 1 0 0 1 1.17-.38a1 1 0 0 1 .65 1l-.77 7.14H19a1 1 0 0 1 .83 1.56l-7.89 11.8a1 1 0 0 1-.83.44z",
+    // phosphor: lightning
+    PhosphorIconCanvas(
+        "M215.79,118.17a8,8,0,0,0-5-5.66L153.18,90.9l14.66-73.33a8,8,0,0,0-13.69-7l-112,120a8,8,0,0,0,3,13l57.63,21.61L88.16,238.43a8,8,0,0,0,13.69,7l112-120A8,8,0,0,0,215.79,118.17ZM109.37,214l10.47-52.38a8,8,0,0,0-5-9.06L62,132.71l84.62-90.66L136.16,94.43a8,8,0,0,0,5,9.06l52.8,19.8Z",
         color = color,
         contentDescription = "Bolt",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphLock(color: Color, modifier: Modifier = Modifier.size(16.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M17 8h-1V6.11a4 4 0 1 0-8 0V8H7a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-8a3 3 0 0 0-3-3zm-7-1.89A2.06 2.06 0 0 1 12 4a2.06 2.06 0 0 1 2 2.11V8h-4zM18 19a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1zm-6-5a2 2 0 1 0 2 2a2 2 0 0 0-2-2z",
+    // phosphor: lock
+    PhosphorIconCanvas(
+        "M208,80H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96ZM208,208H48V96H208V208Zm-68-56a12,12,0,1,1-12-12A12,12,0,0,1,140,152Z",
         color = color,
         contentDescription = "Hardware Volume Locked",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphUnlock(color: Color, modifier: Modifier = Modifier.size(16.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M17 8h-7V6.11a2 2 0 0 1 4 0a1 1 0 0 0 2 0a4 4 0 1 0-8 0V8H7a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-8a3 3 0 0 0-3-3zm1 11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1zm-6-5a2 2 0 1 0 2 2a2 2 0 0 0-2-2z",
+    // phosphor: lock-open
+    PhosphorIconCanvas(
+        "M208,80H96V56a32,32,0,0,1,32-32c15.37,0,29.2,11,32.16,25.59a8,8,0,0,0,15.68-3.18C171.32,24.15,151.2,8,128,8A48.05,48.05,0,0,0,80,56V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80Zm0,128H48V96H208V208Zm-68-56a12,12,0,1,1-12-12A12,12,0,0,1,140,152Z",
         color = color,
         contentDescription = "Hardware Volume Unlocked",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphClipboard(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M19 4h-1.18A3 3 0 0 0 15 2H9a3 3 0 0 0-2.82 2H5a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3zM9 4h6a1 1 0 0 1 0 2H9a1 1 0 0 1 0-2zm11 15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h1.18A3 3 0 0 0 9 8h6a3 3 0 0 0 2.82-2H19a1 1 0 0 1 1 1z",
+    // phosphor: clipboard-text
+    PhosphorIconCanvas(
+        "M200,32H163.74a47.92,47.92,0,0,0-71.48,0H56A16,16,0,0,0,40,48V216a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V48A16,16,0,0,0,200,32Zm-72,0a32,32,0,0,1,32,32H96A32,32,0,0,1,128,32Zm72,184H56V48H82.75A47.93,47.93,0,0,0,80,64v8a8,8,0,0,0,8,8h80a8,8,0,0,0,8-8V64a47.93,47.93,0,0,0-2.75-16H200ZM160,152a8,8,0,0,1-8,8H104a8,8,0,0,1,0-16h48A8,8,0,0,1,160,152Zm0-32a8,8,0,0,1-8,8H104a8,8,0,0,1,0-16h48A8,8,0,0,1,160,120Z",
         color = color,
         contentDescription = "Clipboard",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphWarning(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M22.56 16.3L14.89 3.58a3.43 3.43 0 0 0-5.78 0L1.44 16.3a3 3 0 0 0-.05 3A3.37 3.37 0 0 0 4.33 21h15.34a3.37 3.37 0 0 0 2.94-1.7a3 3 0 0 0-.05-3zM12 17a1 1 0 1 1 1-1a1 1 0 0 1-1 1zm1-4a1 1 0 0 1-2 0V9a1 1 0 0 1 2 0z",
+    // phosphor: warning
+    PhosphorIconCanvas(
+        "M236.8,188.09,149.35,36.22h0a24.76,24.76,0,0,0-42.7,0L19.2,188.09a23.51,23.51,0,0,0,0,23.72A24.35,24.35,0,0,0,40.55,224h174.9a24.35,24.35,0,0,0,21.33-12.19A23.51,23.51,0,0,0,236.8,188.09ZM222.93,203.8a8.5,8.5,0,0,1-7.48,4.2H40.55a8.5,8.5,0,0,1-7.48-4.2,7.59,7.59,0,0,1,0-7.72L120.52,44.21a8.75,8.75,0,0,1,15,0l87.45,151.87A7.59,7.59,0,0,1,222.93,203.8ZM120,144V104a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,180Z",
         color = color,
         contentDescription = "Warning",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphSearch(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M20.71 19.29l-3.4-3.39A7.92 7.92 0 0 0 19 11a8 8 0 1 0-8 8a7.92 7.92 0 0 0 4.9-1.69l3.39 3.4a1 1 0 0 0 1.42 0a1 1 0 0 0 0-1.42zM5 11a6 6 0 1 1 6 6a6 6 0 0 1-6-6z",
+    // phosphor: magnifying-glass
+    PhosphorIconCanvas(
+        "M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z",
         color = color,
         contentDescription = "Search",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphMoreVert(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M12 7a2 2 0 1 0-2-2a2 2 0 0 0 2 2zm0 10a2 2 0 1 0 2 2a2 2 0 0 0-2-2zm0-5a2 2 0 1 0 2 2a2 2 0 0 0-2-2z",
+    // phosphor: dots-three-vertical
+    PhosphorIconCanvas(
+        "M112,60a16,16,0,1,1,16,16A16,16,0,0,1,112,60Zm16,52a16,16,0,1,0,16,16A16,16,0,0,0,128,112Zm0,68a16,16,0,1,0,16,16A16,16,0,0,0,128,180Z",
         color = color,
         contentDescription = "Options",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphFolder(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M19.5 7.05h-7L9.87 3.87a1 1 0 0 0-.77-.37H4.5A2.47 2.47 0 0 0 2 5.93v12.14A2.47 2.47 0 0 0 4.5 20.5h15a2.47 2.47 0 0 0 2.5-2.43V9.48a2.47 2.47 0 0 0-2.5-2.43zM20 18.07a.46.46 0 0 1-.5.43h-15a.46.46 0 0 1-.5-.43V5.93a.46.46 0 0 1 .5-.43h4.13l2.63 3.18a1 1 0 0 0 .77.37h7.47a.46.46 0 0 1 .5.43z",
+    // phosphor: folder
+    PhosphorIconCanvas(
+        "M216,72H131.31L104,44.69A15.86,15.86,0,0,0,92.69,40H40A16,16,0,0,0,24,56V200.62A15.4,15.4,0,0,0,39.38,216H216.89A15.13,15.13,0,0,0,232,200.89V88A16,16,0,0,0,216,72ZM40,56H92.69l16,16H40ZM216,200H40V88H216Z",
         color = color,
         contentDescription = "Folder",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphFolderOpen(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
+    // phosphor: folder-open
+    PhosphorIconCanvas(
+        "M245,110.64A16,16,0,0,0,232,104H216V88a16,16,0,0,0-16-16H130.67L102.94,51.2a16.14,16.14,0,0,0-9.6-3.2H40A16,16,0,0,0,24,64V208h0a8,8,0,0,0,8,8H211.1a8,8,0,0,0,7.59-5.47l28.49-85.47A16.05,16.05,0,0,0,245,110.64ZM93.34,64,123.2,86.4A8,8,0,0,0,128,88h72v16H69.77a16,16,0,0,0-15.18,10.94L40,158.7V64Zm112,136H43.1l26.67-80H232Z",
+        color = color,
+        contentDescription = "Open Folder",
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphRefresh(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M20.3 13.43a1 1 0 0 0-1.25.65A7.14 7.14 0 0 1 12.18 19A7.1 7.1 0 0 1 5 12a7.1 7.1 0 0 1 7.18-7a7.26 7.26 0 0 1 4.65 1.67l-2.17-.36a1 1 0 0 0-1.15.83a1 1 0 0 0 .83 1.15l4.24.7h.17a1 1 0 0 0 .34-.06a.33.33 0 0 0 .1-.06a.78.78 0 0 0 .2-.11l.09-.11c0-.05.09-.09.13-.15s0-.1.05-.14a1.34 1.34 0 0 0 .07-.18l.75-4a1 1 0 0 0-2-.38l-.27 1.45A9.21 9.21 0 0 0 12.18 3A9.1 9.1 0 0 0 3 12a9.1 9.1 0 0 0 9.18 9A9.12 9.12 0 0 0 21 14.68a1 1 0 0 0-.7-1.25z",
+    // phosphor: arrows-clockwise
+    PhosphorIconCanvas(
+        "M224,48V96a8,8,0,0,1-8,8H168a8,8,0,0,1,0-16h28.69L182.06,73.37a79.56,79.56,0,0,0-56.13-22.43h-.45A79.52,79.52,0,0,0,69.59,72.71,8,8,0,0,1,58.41,61.27a96,96,0,0,1,135,.79L208,76.69V48a8,8,0,0,1,16,0ZM186.41,183.29a80,80,0,0,1-112.47-.66L59.31,168H88a8,8,0,0,0,0-16H40a8,8,0,0,0-8,8v48a8,8,0,0,0,16,0V179.31l14.63,14.63A95.43,95.43,0,0,0,130,222.06h.53a95.36,95.36,0,0,0,67.07-27.33,8,8,0,0,0-11.18-11.44Z",
         color = color,
         contentDescription = "Refresh",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphSort(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M17.71 15.29a1 1 0 0 0-1.42 0L15 16.59V6a1 1 0 0 0-2 0v10.59l-1.29-1.3a1 1 0 0 0-1.42 1.42l3 3a1 1 0 0 0 1.42 0l3-3a1 1 0 0 0 0-1.42zm-6-8l-3-3a1 1 0 0 0-1.42 0l-3 3a1 1 0 0 0 1.42 1.42L7 7.41V18a1 1 0 0 0 2 0V7.41l1.29 1.3a1 1 0 0 0 1.42 0a1 1 0 0 0 0-1.42z",
+    // phosphor: arrows-down-up
+    PhosphorIconCanvas(
+        "M117.66,170.34a8,8,0,0,1,0,11.32l-32,32a8,8,0,0,1-11.32,0l-32-32a8,8,0,0,1,11.32-11.32L72,188.69V48a8,8,0,0,1,16,0V188.69l18.34-18.35A8,8,0,0,1,117.66,170.34Zm96-96-32-32a8,8,0,0,0-11.32,0l-32,32a8,8,0,0,0,11.32,11.32L168,67.31V208a8,8,0,0,0,16,0V67.31l18.34,18.35a8,8,0,0,0,11.32-11.32Z",
         color = color,
         contentDescription = "Sort",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphQueue(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M7 7a1 1 0 1 0 1 1a1 1 0 0 0-1-1zm0 4a1 1 0 1 0 1 1a1 1 0 0 0-1-1zm0 4a1 1 0 1 0 1 1a1 1 0 0 0-1-1zm13-8h-9a1 1 0 0 0 0 2h9a1 1 0 0 0 0-2zm0 4h-9a1 1 0 0 0 0 2h9a1 1 0 0 0 0-2zm0 4h-9a1 1 0 0 0 0 2h9a1 1 0 0 0 0-2z",
+    // phosphor: queue
+    PhosphorIconCanvas(
+        "M32,64a8,8,0,0,1,8-8H216a8,8,0,0,1,0,16H40A8,8,0,0,1,32,64ZM136,120H40a8,8,0,0,0,0,16h96a8,8,0,0,0,0-16Zm0,64H40a8,8,0,0,0,0,16h96a8,8,0,0,0,0-16Zm107.66-29.34-48-32A8,8,0,0,0,184,128v64a8,8,0,0,0,11.66,7.11l48-32a8,8,0,0,0,0-14.22ZM200,177.23V142.77L225.85,160Z",
         color = color,
         contentDescription = "Queue",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphAdd(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M19 11h-6V5a1 1 0 0 0-2 0v6H5a1 1 0 0 0 0 2h6v6a1 1 0 0 0 2 0v-6h6a1 1 0 0 0 0-2z",
+    // phosphor: plus
+    PhosphorIconCanvas(
+        "M224,128a8,8,0,0,1-8,8H136v80a8,8,0,0,1-16,0V136H40a8,8,0,0,1,0-16h80V40a8,8,0,0,1,16,0v80h80A8,8,0,0,1,224,128Z",
         color = color,
         contentDescription = "Add",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphMinus(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M19 13H5a1 1 0 0 1 0-2h14a1 1 0 0 1 0 2z",
+    // phosphor: minus
+    PhosphorIconCanvas(
+        "M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128Z",
         color = color,
         contentDescription = "Minus",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphChevronDown(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M12 15.5a1 1 0 0 1-.71-.29l-4-4a1 1 0 1 1 1.42-1.42L12 13.1l3.3-3.18a1 1 0 1 1 1.38 1.44l-4 3.86a1 1 0 0 1-.68.28z",
+    // phosphor: caret-down
+    PhosphorIconCanvas(
+        "M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z",
         color = color,
         contentDescription = "Collapse",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphChevronRight(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M10.5 17a1 1 0 0 1-.71-.29 1 1 0 0 1 0-1.42L13.1 12 9.92 8.69a1 1 0 0 1 0-1.41 1 1 0 0 1 1.42 0l3.86 4a1 1 0 0 1 0 1.4l-4 4a1 1 0 0 1-.7.32z",
+    // phosphor: caret-right
+    PhosphorIconCanvas(
+        "M181.66,133.66l-80,80a8,8,0,0,1-11.32-11.32L164.69,128,90.34,53.66a8,8,0,0,1,11.32-11.32l80,80A8,8,0,0,1,181.66,133.66Z",
         color = color,
         contentDescription = "Next",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphDelete(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M21 6h-5V4.33A2.42 2.42 0 0 0 13.5 2h-3A2.42 2.42 0 0 0 8 4.33V6H3a1 1 0 0 0 0 2h1v11a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V8h1a1 1 0 0 0 0-2zM10 4.33c0-.16.21-.33.5-.33h3c.29 0 .5.17.5.33V6h-4zM18 19a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V8h12zm-8-7a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0v-4a1 1 0 0 0-1-1zm4 0a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0v-4a1 1 0 0 0-1-1z",
+    // phosphor: trash
+    PhosphorIconCanvas(
+        "M216,48H176V40a24,24,0,0,0-24-24H104A24,24,0,0,0,80,40v8H40a8,8,0,0,0,0,16h8V208a16,16,0,0,0,16,16H192a16,16,0,0,0,16-16V64h8a8,8,0,0,0,0-16ZM96,40a8,8,0,0,1,8-8h48a8,8,0,0,1,8,8v8H96Zm96,168H64V64H192ZM112,104v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm48,0v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Z",
         color = color,
         contentDescription = "Delete",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphClose(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M13.41 12l4.3-4.29a1 1 0 1 0-1.42-1.42L12 10.59l-4.29-4.3a1 1 0 0 0-1.42 1.42l4.3 4.29l-4.3 4.29a1 1 0 0 0 0 1.42a1 1 0 0 0 1.42 0l4.29-4.3l4.29 4.3a1 1 0 0 0 1.42 0a1 1 0 0 0 0-1.42z",
+    // phosphor: x
+    PhosphorIconCanvas(
+        "M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z",
         color = color,
         contentDescription = "Close",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphMusicNote(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M19 15V4a1 1 0 0 0-.38-.78a1 1 0 0 0-.84-.2l-9 2A1 1 0 0 0 8 6v8.34a3.49 3.49 0 1 0 2 3.18a4.36 4.36 0 0 0 0-.52V6.8l7-1.55v7.09a3.49 3.49 0 1 0 2 3.17a4.57 4.57 0 0 0 0-.51z",
+    // phosphor: music-note
+    PhosphorIconCanvas(
+        "M210.3,56.34l-80-24A8,8,0,0,0,120,40V148.26A47.92,47.92,0,1,0,136,184V98.75l69.7,20.91A8,8,0,0,0,216,112V64A8,8,0,0,0,210.3,56.34ZM88,216a32,32,0,1,1,32-32A32,32,0,0,1,88,216ZM200,101.25l-64-19.2V50.75l64,19.2Z",
         color = color,
         contentDescription = "Music",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphAlbum(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8a8 8 0 0 1-8 8zm0-11a3 3 0 1 0 3 3a3 3 0 0 0-3-3z",
+    // phosphor: vinyl-record
+    PhosphorIconCanvas(
+        "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm0-152a64.07,64.07,0,0,0-64,64,8,8,0,0,0,16,0,48.05,48.05,0,0,1,48-48,8,8,0,0,0,0-16Zm64,64a8,8,0,0,0-16,0,48.05,48.05,0,0,1-48,48,8,8,0,0,0,0,16A64.07,64.07,0,0,0,192,128Zm-64-24a24,24,0,1,0,24,24A24,24,0,0,0,128,104Zm0,32a8,8,0,1,1,8-8A8,8,0,0,1,128,136Z",
         color = color,
         contentDescription = "Album",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphLibrary(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M21 4.34a1.24 1.24 0 0 0-1.08-.23L13 5.89v14.27l7.56-1.94A1.25 1.25 0 0 0 21.5 17V5.32a1.25 1.25 0 0 0-.5-.98zM11 5.89L4.08 4.11A1.24 1.24 0 0 0 3 4.34a1.25 1.25 0 0 0-.5.98V17a1.25 1.25 0 0 0 .94 1.22L11 20.16z",
+    // phosphor: books
+    PhosphorIconCanvas(
+        "M231.65,194.55,198.46,36.75a16,16,0,0,0-19-12.39L132.65,34.42a16.08,16.08,0,0,0-12.3,19l33.19,157.8A16,16,0,0,0,169.16,224a16.25,16.25,0,0,0,3.38-.36l46.81-10.06A16.09,16.09,0,0,0,231.65,194.55ZM136,50.15l46.82-10.06,3.34,15.9L139.33,66Zm10,47.69,46.81-10.06,13.38,63.58L159.35,161.42Zm23.2,110.22-6.51-30.94,46.81-10.06,6.51,30.94ZM104,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V48A16,16,0,0,0,104,32ZM56,48h48V64H56Zm0,32h48v96H56Zm48,128H56V192h48v16Z",
         color = color,
         contentDescription = "Library",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphPlaylists(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M12 2.25a1 1 0 0 0-.47.12l-8 4.3a1 1 0 0 0 0 1.76l8 4.3a1 1 0 0 0 .94 0l8-4.3a1 1 0 0 0 0-1.76l-8-4.3A1 1 0 0 0 12 2.25zm7.53 9.87L12 16.16l-7.53-4.04a1 1 0 1 0-.94 1.76l8 4.3a1 1 0 0 0 .94 0l8-4.3a1 1 0 1 0-.94-1.76zm0 4.3L12 20.46l-7.53-4.04a1 1 0 1 0-.94 1.76l8 4.3a1 1 0 0 0 .94 0l8-4.3a1 1 0 1 0-.94-1.76z",
+    // phosphor: playlist
+    PhosphorIconCanvas(
+        "M32,64a8,8,0,0,1,8-8H216a8,8,0,0,1,0,16H40A8,8,0,0,1,32,64Zm128,56H40a8,8,0,0,0,0,16H160a8,8,0,0,0,0-16Zm-48,64H40a8,8,0,0,0,0,16h72a8,8,0,0,0,0-16Zm130.3-55.66-40-12A8,8,0,0,0,192,124v53.71A32,32,0,1,0,208,200V134.81l29.7,8.91a8,8,0,1,0,4.6-15.32ZM176,216a16,16,0,1,1,16-16A16,16,0,0,1,176,216Z",
         color = color,
         contentDescription = "Playlists",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphNowPlaying(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M12 3a9 9 0 0 0-9 9v6a3 3 0 0 0 3 3h1a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2H5v-1a7 7 0 0 1 14 0v1h-2a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h1a3 3 0 0 0 3-3v-6a9 9 0 0 0-9-9z",
+    // phosphor: waveform
+    PhosphorIconCanvas(
+        "M56,96v64a8,8,0,0,1-16,0V96a8,8,0,0,1,16,0ZM88,24a8,8,0,0,0-8,8V224a8,8,0,0,0,16,0V32A8,8,0,0,0,88,24Zm40,32a8,8,0,0,0-8,8V192a8,8,0,0,0,16,0V64A8,8,0,0,0,128,56Zm40,32a8,8,0,0,0-8,8v64a8,8,0,0,0,16,0V96A8,8,0,0,0,168,88Zm40-16a8,8,0,0,0-8,8v96a8,8,0,0,0,16,0V80A8,8,0,0,0,208,72Z",
         color = color,
         contentDescription = "Now Playing",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphSettings(color: Color, modifier: Modifier = Modifier.size(22.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M19.86 13.57l-1.35-1a1 1 0 0 1 0-1.14l1.35-1a1.55 1.55 0 0 0 .42-2l-1.33-2.3a1.56 1.56 0 0 0-1.89-.68l-1.61.61a1 1 0 0 1-1-.19a1 1 0 0 1-.37-.78l-.23-1.71A1.56 1.56 0 0 0 12.3 2H9.7a1.56 1.56 0 0 0-1.55 1.38l-.23 1.71a1 1 0 0 1-.37.78a1 1 0 0 1-1 .19l-1.61-.61a1.56 1.56 0 0 0-1.89.68L1.72 8.43a1.55 1.55 0 0 0 .42 2l1.35 1a1 1 0 0 1 0 1.14l-1.35 1a1.55 1.55 0 0 0-.42 2l1.33 2.3a1.56 1.56 0 0 0 1.89.68l1.61-.61a1 1 0 0 1 1 .19a1 1 0 0 1 .37.78l.23 1.71A1.56 1.56 0 0 0 9.7 22h2.6a1.56 1.56 0 0 0 1.55-1.38l.23-1.71a1 1 0 0 1 .37-.78a1 1 0 0 1 1-.19l1.61.61a1.56 1.56 0 0 0 1.89-.68l1.33-2.3a1.55 1.55 0 0 0-.42-2zM11 15a3 3 0 1 1 3-3a3 3 0 0 1-3 3z",
+    // phosphor: gear-six
+    PhosphorIconCanvas(
+        "M128,80a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Zm109.94-52.79a8,8,0,0,0-3.89-5.4l-29.83-17-.12-33.62a8,8,0,0,0-2.83-6.08,111.91,111.91,0,0,0-36.72-20.67,8,8,0,0,0-6.46.59L128,41.85,97.88,25a8,8,0,0,0-6.47-.6A111.92,111.92,0,0,0,54.73,45.15a8,8,0,0,0-2.83,6.07l-.15,33.65-29.83,17a8,8,0,0,0-3.89,5.4,106.47,106.47,0,0,0,0,41.56,8,8,0,0,0,3.89,5.4l29.83,17,.12,33.62a8,8,0,0,0,2.83,6.08,111.91,111.91,0,0,0,36.72,20.67,8,8,0,0,0,6.46-.59L128,214.15,158.12,231a7.91,7.91,0,0,0,3.9,1,8.09,8.09,0,0,0,2.57-.42,112.1,112.1,0,0,0,36.68-20.73,8,8,0,0,0,2.83-6.07l.15-33.65,29.83-17a8,8,0,0,0,3.89-5.4A106.47,106.47,0,0,0,237.94,107.21Zm-15,34.91-28.57,16.25a8,8,0,0,0-3,3c-.58,1-1.19,2.06-1.81,3.06a7.94,7.94,0,0,0-1.22,4.21l-.15,32.25a95.89,95.89,0,0,1-25.37,14.3L134,199.36a8,8,0,0,0-3.91-1h-.19c-1.21,0-2.43,0-3.64,0a8.1,8.1,0,0,0-4.1,1l-28.84,16.1A96,96,0,0,1,67.88,201l-.11-32.2a8,8,0,0,0-1.22-4.22c-.62-1-1.23-2-1.8-3.06a8.09,8.09,0,0,0-3-3.06l-28.6-16.29a90.49,90.49,0,0,1,0-28.26L61.72,97.63a8,8,0,0,0,3-3c.58-1,1.19-2.06,1.81-3.06a7.94,7.94,0,0,0,1.22-4.21l.15-32.25a95.89,95.89,0,0,1,25.37-14.3L122,56.64a8,8,0,0,0,4.1,1c1.21,0,2.43,0,3.64,0a8,8,0,0,0,4.1-1l28.84-16.1A96,96,0,0,1,188.12,55l.11,32.2a8,8,0,0,0,1.22,4.22c.62,1,1.23,2,1.8,3.06a8.09,8.09,0,0,0,3,3.06l28.6,16.29A90.49,90.49,0,0,1,222.9,142.12Z",
         color = color,
         contentDescription = "Settings",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphDiagnostics(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M14.33 20h-.21a2 2 0 0 1-1.76-1.58L9.68 6l-2.76 6.4A1 1 0 0 1 6 13H3a1 1 0 0 1 0-2h2.34l2.51-5.79a2 2 0 0 1 3.79.38L14.32 18l2.76-6.38A1 1 0 0 1 18 11h3a1 1 0 0 1 0 2h-2.34l-2.51 5.79A2 2 0 0 1 14.33 20z",
+    // phosphor: pulse
+    PhosphorIconCanvas(
+        "M240,128a8,8,0,0,1-8,8H204.94l-37.78,75.58A8,8,0,0,1,160,216h-.4a8,8,0,0,1-7.08-5.14L95.35,60.76,63.28,131.31A8,8,0,0,1,56,136H24a8,8,0,0,1,0-16H50.85L88.72,36.69a8,8,0,0,1,14.76.46l57.51,151,31.85-63.71A8,8,0,0,1,200,120h32A8,8,0,0,1,240,128Z",
         color = color,
         contentDescription = "Diagnostics",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphUpdate(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M20 16v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a1 1 0 0 0-2 0v2a4 4 0 0 0 4 4h12a4 4 0 0 0 4-4v-2a1 1 0 0 0-2 0zm-8.71-.29a1 1 0 0 0 .33.21a.94.94 0 0 0 .76 0a1 1 0 0 0 .33-.21l4-4a1 1 0 0 0-1.42-1.42L13 12.59V4a1 1 0 0 0-2 0v8.59l-2.29-2.3a1 1 0 1 0-1.42 1.42z",
+    // phosphor: download-simple
+    PhosphorIconCanvas(
+        "M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z",
         color = color,
         contentDescription = "Update",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphVolume(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M18.28 8.37a1 1 0 1 0-1.56 1.26a4 4 0 0 1 0 4.74A1 1 0 0 0 17.5 16a1 1 0 0 0 .78-.37a6 6 0 0 0 0-7.26zm1.68-2.74a1 1 0 1 0-1.42 1.42a8 8 0 0 1 0 9.9a1 1 0 0 0 1.42 1.42a10 10 0 0 0 0-12.74zM14.12 3.12a1 1 0 0 0-1.08.11L7.65 7.5H4a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h3.65l5.39 4.27a1 1 0 0 0 .62.23a1 1 0 0 0 .46-.11A1 1 0 0 0 14.66 20V4a1 1 0 0 0-.54-.88z",
+    // phosphor: speaker-high
+    PhosphorIconCanvas(
+        "M155.51,24.81a8,8,0,0,0-8.42.88L77.25,80H32A16,16,0,0,0,16,96v64a16,16,0,0,0,16,16H77.25l69.84,54.31A8,8,0,0,0,160,224V32A8,8,0,0,0,155.51,24.81ZM32,96H72v64H32ZM144,207.64,88,164.09V91.91l56-43.55Zm54-106.08a40,40,0,0,1,0,52.88,8,8,0,0,1-12-10.58,24,24,0,0,0,0-31.72,8,8,0,0,1,12-10.58ZM248,128a79.9,79.9,0,0,1-20.37,53.34,8,8,0,0,1-11.92-10.67,64,64,0,0,0,0-85.33,8,8,0,1,1,11.92-10.67A79.83,79.83,0,0,1,248,128Z",
         color = color,
         contentDescription = "Volume",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphVolumeMute(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
+    // phosphor: speaker-slash
+    PhosphorIconCanvas(
+        "M53.92,34.62A8,8,0,1,0,42.08,45.38L73.55,80H32A16,16,0,0,0,16,96v64a16,16,0,0,0,16,16H77.25l69.84,54.31A8,8,0,0,0,160,224V175.09l42.08,46.29a8,8,0,1,0,11.84-10.76ZM32,96H72v64H32ZM144,207.64,88,164.09V95.9l56,61.6Zm-30.34-135a8,8,0,0,1,1.65-11.21l31.78-24.72A8,8,0,0,1,160,32v74.59a8,8,0,0,1-16,0V48.36L124.87,63.24A8,8,0,0,1,113.66,72.64Zm84.33,28.92a40,40,0,0,1,0,52.88,8,8,0,0,1-12-10.58,24,24,0,0,0,0-31.72,8,8,0,0,1,12-10.58ZM248,128a79.9,79.9,0,0,1-20.37,53.34,8,8,0,0,1-11.92-10.67,64,64,0,0,0,0-85.33,8,8,0,1,1,11.92-10.67A79.83,79.83,0,0,1,248,128Z",
+        color = color,
+        contentDescription = "Volume Muted",
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphBitPerfect(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M12 21.85a2 2 0 0 1-1-.25l-.3-.17A15.17 15.17 0 0 1 3 8.23V6.09a2 2 0 0 1 1.31-1.88l7-2.59a2 2 0 0 1 1.38 0l7 2.59A2 2 0 0 1 21 6.09v2.14a15.17 15.17 0 0 1-7.7 13.2l-.3.17a2 2 0 0 1-1 .25zm-2-9.55l-1.29-1.3a1 1 0 0 0-1.42 1.42l2 2a1 1 0 0 0 1.42 0l4-4a1 1 0 0 0-1.42-1.42z",
+    // phosphor: shield-check
+    PhosphorIconCanvas(
+        "M208,40H48A16,16,0,0,0,32,56v58.78c0,89.61,75.82,119.34,91,124.39a15.53,15.53,0,0,0,10,0c15.2-5.05,91-34.78,91-124.39V56A16,16,0,0,0,208,40Zm0,74.79c0,78.42-66.35,104.62-80,109.18-13.53-4.51-80-30.69-80-109.18V56H208ZM82.34,141.66a8,8,0,0,1,11.32-11.32L112,148.68l50.34-50.34a8,8,0,0,1,11.32,11.32l-56,56a8,8,0,0,1-11.32,0Z",
         color = color,
         contentDescription = "Bit Perfect",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphCheck(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M9.86 18a1 1 0 0 1-.73-.32l-4.86-5.17a1 1 0 1 1 1.46-1.37l4.12 4.39l8.41-9.2a1 1 0 1 1 1.48 1.34l-9.14 10a1 1 0 0 1-.73.33z",
+    // phosphor: check
+    PhosphorIconCanvas(
+        "M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z",
         color = color,
         contentDescription = "Check",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphNotification(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M20.52 15.21l-1.8-1.81V8.94a6.86 6.86 0 0 0-5.82-6.88a6.74 6.74 0 0 0-7.62 6.67v4.67l-1.8 1.81A1.64 1.64 0 0 0 4.64 18H8v.34A3.84 3.84 0 0 0 12 22a3.84 3.84 0 0 0 4-3.66V18h3.36a1.64 1.64 0 0 0 1.16-2.79zM14 18.34A1.88 1.88 0 0 1 12 20a1.88 1.88 0 0 1-2-1.66V18h4z",
+    // phosphor: bell
+    PhosphorIconCanvas(
+        "M221.8,175.94C216.25,166.38,208,139.33,208,104a80,80,0,1,0-160,0c0,35.34-8.26,62.38-13.81,71.94A16,16,0,0,0,48,200H88.81a40,40,0,0,0,78.38,0H208a16,16,0,0,0,13.8-24.06ZM128,216a24,24,0,0,1-22.62-16h45.24A24,24,0,0,1,128,216ZM48,184c7.7-13.24,16-43.92,16-80a64,64,0,1,1,128,0c0,36.05,8.28,66.73,16,80Z",
         color = color,
         contentDescription = "Notification",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphDoNotDisturb(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M4.71 3.29a1 1 0 0 0-1.42 1.42l2.14 2.14A6.71 6.71 0 0 0 5.28 8.73v4.67l-1.8 1.81A1.64 1.64 0 0 0 4.64 18H8v.34A3.84 3.84 0 0 0 12 22a3.84 3.84 0 0 0 4-3.66V18h1.59l1.7 1.71a1 1 0 0 0 1.42 0a1 1 0 0 0 0-1.42zM14 18.34A1.88 1.88 0 0 1 12 20a1.88 1.88 0 0 1-2-1.66V18h4zm4.72-4.94V8.94a6.86 6.86 0 0 0-5.82-6.88a6.71 6.71 0 0 0-4.76 1.37L19.86 15.15z",
+    // phosphor: moon
+    PhosphorIconCanvas(
+        "M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z",
         color = color,
         contentDescription = "Do Not Disturb",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphInfo(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8a8 8 0 0 1-8 8zm0-8.5a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0v-3a1 1 0 0 0-1-1zm0-4a1.25 1.25 0 1 0 1.25 1.25A1.25 1.25 0 0 0 12 7.5z",
+    // phosphor: info
+    PhosphorIconCanvas(
+        "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm16-40a8,8,0,0,1-8,8,16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40A8,8,0,0,1,144,176ZM112,84a12,12,0,1,1,12,12A12,12,0,0,1,112,84Z",
         color = color,
         contentDescription = "Info",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphLyrics(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M19.74 7.33l-4.44-5a1 1 0 0 0-.74-.33h-8A2.53 2.53 0 0 0 4 4.5v15A2.53 2.53 0 0 0 6.56 22h10.88A2.53 2.53 0 0 0 20 19.5V8a1 1 0 0 0-.26-.67zM9 12h6a1 1 0 0 1 0 2H9a1 1 0 0 1 0-2zm6 6H9a1 1 0 0 1 0-2h6a1 1 0 0 1 0 2zm-.29-10a.79.79 0 0 1-.71-.85V4l3.74 4z",
+    // phosphor: microphone-stage
+    PhosphorIconCanvas(
+        "M168,16a63.84,63.84,0,0,0-60.92,44.76l-.15.46L30.22,191.91a16,16,0,0,0,2.47,19.38l12,12a16,16,0,0,0,19.38,2.47L194.78,149l.46-.15A64,64,0,1,0,168,16Zm48,64a47.82,47.82,0,0,1-9.22,28.31L139.69,41.22A48,48,0,0,1,216,80ZM56,212,44,200l73.57-73.57,12,12Zm100.34-44.34-12-12,51.09-29.93a48.29,48.29,0,0,1-9.16,9.16ZM105.66,150.34a8,8,0,0,1-11.32,11.32l-16-16a8,8,0,0,1,11.32-11.32Z",
         color = color,
         contentDescription = "Lyrics",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphArrowBack(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M19 11H7.14l3.63-4.36a1 1 0 1 0-1.54-1.28l-5 6a1.19 1.19 0 0 0-.09.15c0 .05 0 .08-.07.13A1 1 0 0 0 4 12a1 1 0 0 0 .07.36c0 .05 0 .08.07.13a1.19 1.19 0 0 0 .09.15l5 6A1 1 0 0 0 10 19a1 1 0 0 0 .77-.36a1 1 0 0 0-.13-1.41L7.14 13H19a1 1 0 0 0 0-2z",
+    // phosphor: arrow-left
+    PhosphorIconCanvas(
+        "M224,128a8,8,0,0,1-8,8H59.31l58.35,58.34a8,8,0,0,1-11.32,11.32l-72-72a8,8,0,0,1,0-11.32l72-72a8,8,0,0,1,11.32,11.32L59.31,120H216A8,8,0,0,1,224,128Z",
         color = color,
         contentDescription = "Back",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphFilter(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M13.9 22a1 1 0 0 1-.6-.2l-4-3.05a1 1 0 0 1-.39-.8v-3.27l-4.8-9.22A1 1 0 0 1 5 4h14a1 1 0 0 1 .86.49a1 1 0 0 1 0 .98l-4.8 9.21V21a1 1 0 0 1-.55.9a1 1 0 0 1-.61.1z",
+    // phosphor: funnel
+    PhosphorIconCanvas(
+        "M230.6,49.53A15.81,15.81,0,0,0,216,40H40A16,16,0,0,0,28.19,66.76l.08.09L96,139.17V216a16,16,0,0,0,24.87,13.32l32-21.34A16,16,0,0,0,160,194.66V139.17l67.74-72.32.08-.09A15.8,15.8,0,0,0,230.6,49.53ZM40,56h0Zm106.18,74.58A8,8,0,0,0,144,136v58.66L112,216V136a8,8,0,0,0-2.18-5.47L40,56H216Z",
         color = color,
         contentDescription = "Filter",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphPin(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M17.56 21a1 1 0 0 1-.46-.11L12 18.22l-5.1 2.67a1 1 0 0 1-1.45-1.06l1-5.63l-4.12-4a1 1 0 0 1-.25-1a1 1 0 0 1 .81-.68l5.7-.83l2.51-5.13a1 1 0 0 1 1.8 0l2.54 5.12l5.7.83a1 1 0 0 1 .81.68a1 1 0 0 1-.25 1l-4.12 4l1 5.63a1 1 0 0 1-.4 1a1 1 0 0 1-.62.18z",
+    // phosphor: push-pin
+    PhosphorIconCanvas(
+        "M235.33,104,152,20.69a16,16,0,0,0-22.63,0L98.37,51.72c-10.66-3.34-35-7.37-60.4,13.14a16,16,0,0,0-1.29,23.78L85,136.71,42.34,179.34a8,8,0,0,0,11.32,11.32L96.29,148l48.07,48.07A16,16,0,0,0,155.66,200c.38,0,.75,0,1.13,0a15.93,15.93,0,0,0,11.64-6.33c19.64-26.1,17.75-47.32,13.19-60L212.7,102.6,224,113.94a16,16,0,0,0,11.33-9.94ZM156,184,48,76c19.47-14.51,38.49-9.72,46.63-6.11a8,8,0,0,0,8.87-1.69L140.69,31,225,115.31,187.8,152.5a8,8,0,0,0-1.69,8.87C189.65,169.39,192.09,180.52,156,184Z",
         color = color,
         contentDescription = "Pin",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphGitHub(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2z",
+    // phosphor: github-logo
+    PhosphorIconCanvas(
+        "M208.31,75.68A59.78,59.78,0,0,0,202.93,28,8,8,0,0,0,196,24a59.75,59.75,0,0,0-48,24H124A59.75,59.75,0,0,0,76,24a8,8,0,0,0-6.93,4,59.78,59.78,0,0,0-5.38,47.68A58.14,58.14,0,0,0,56,104v8a56.06,56.06,0,0,0,48.44,55.47A39.8,39.8,0,0,0,96,192v8H72a24,24,0,0,1-24-24A40,40,0,0,0,8,136a8,8,0,0,0,0,16,24,24,0,0,1,24,24,40,40,0,0,0,40,40H96v16a8,8,0,0,0,16,0V192a24,24,0,0,1,48,0v40a8,8,0,0,0,16,0V192a39.8,39.8,0,0,0-8.44-24.53A56.06,56.06,0,0,0,216,112v-8A58.14,58.14,0,0,0,208.31,75.68ZM200,112a40,40,0,0,1-40,40H112a40,40,0,0,1-40-40v-8a41.74,41.74,0,0,1,6.9-22.48A8,8,0,0,0,80,73.83a43.81,43.81,0,0,1,.79-33.58,43.88,43.88,0,0,1,32.32,20.06A8,8,0,0,0,119.82,64h32.35a8,8,0,0,0,6.74-3.69,43.87,43.87,0,0,1,32.32-20.06A43.81,43.81,0,0,1,192,73.83a8.09,8.09,0,0,0,1,7.65A41.72,41.72,0,0,1,200,104Z",
         color = color,
         contentDescription = "GitHub",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphDiscord(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: discord-logo (filled 256x256)
+    PhosphorIconCanvas(
+        "M247.51,174.93,216.83,55.59A16.08,16.08,0,0,0,201.7,43.82l-36.5-5.22a8.1,8.1,0,0,0-9,6.22l-4.29,17.18a118.69,118.69,0,0,0-47.82,0L99.8,44.82a8.1,8.1,0,0,0-9-6.22L54.3,43.82A16.08,16.08,0,0,0,39.17,55.59L8.49,174.93a15.94,15.94,0,0,0,9.56,18.71l67.3,26.92a8,8,0,0,0,10.17-4.51l8.63-21.58a116.51,116.51,0,0,0,47.7,0l8.63,21.58a8,8,0,0,0,10.17,4.51l67.3-26.92A15.94,15.94,0,0,0,247.51,174.93ZM92,160a16,16,0,1,1,16-16A16,16,0,0,1,92,160Zm72,0a16,16,0,1,1,16-16A16,16,0,0,1,164,160Z",
+        color = color,
+        contentDescription = "Discord Server",
+        modifier = modifier,
+        filled = true
     )
 }
 
 @Composable
 fun GlyphBagiBagi(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
-    EvaIconCanvas(
-        svgPathData = "M20 7h-2.18c.11-.31.18-.65.18-1a3 3 0 0 0-5.5-1.65l-.5.67-.5-.68A3 3 0 0 0 6 6c0 .35.07.69.18 1H4a2 2 0 0 0-2 2v2a1 1 0 0 0 1 1h1v7a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-7h1a1 1 0 0 0 1-1V9a2 2 0 0 0-2-2zm-5-2a1 1 0 0 1 .8 1.6L14.5 7H13v-1a1 1 0 0 1 2-1zM8.2 6.6A1 1 0 0 1 9 5a1 1 0 0 1 1 1v1H9.5L8.2 6.6zM4 9h7v2H4V9zm2 10v-6h5v7H7a1 1 0 0 1-1-1zm12 0a1 1 0 0 1-1 1h-4v-7h5v6zm2-8h-7V9h7v2z",
+    // phosphor: hand-heart
+    PhosphorIconCanvas(
+        "M240,104a32.06,32.06,0,0,0-31,24H176a32,32,0,0,0-29.88-20.47L117,97.81A32,32,0,0,0,96,90.15H48a16,16,0,0,0-16,16v64a16,16,0,0,0,16,16H188.69a31.82,31.82,0,0,0,22.62-9.37l32-32A16,16,0,0,0,240,104ZM199.31,165.31a15.89,15.89,0,0,1-11.31,4.69H48v-64H96a16,16,0,0,1,10.49,3.91l29.11,9.7a16,16,0,0,1,10.94,15.18H112a8,8,0,0,0,0,16h56a8,8,0,0,0,8-8,16,16,0,0,1,32,0,8,8,0,0,0,8,8h1.37ZM125.13,86.17a8,8,0,0,0,5.74,0C136.4,84,184,64.42,184,36a28,28,0,0,0-52-14.34A28,28,0,0,0,80,36C80,64.42,127.6,84,125.13,86.17ZM108,24a12,12,0,0,1,12,12,8,8,0,0,0,16,0,12,12,0,0,1,24,0c0,14.12-21.57,28.72-32,34.43C117.57,64.72,96,50.12,96,36A12,12,0,0,1,108,24Z",
         color = color,
         contentDescription = "Bagi-Bagi Donation",
-        modifier = modifier
+        modifier = modifier,
+        filled = true
     )
+}
+
+@Composable
+fun GlyphEdit(color: Color, modifier: Modifier = Modifier.size(16.dp)) {
+    // phosphor: pencil-simple
+    PhosphorIconCanvas(
+        "M227.31,73.37,182.63,28.68a16,16,0,0,0-22.63,0L36.69,152A15.86,15.86,0,0,0,32,163.31V208a16,16,0,0,0,16,16H92.69A15.86,15.86,0,0,0,104,219.31L227.31,96a16,16,0,0,0,0-22.63ZM92.69,208H48V163.31l88-88L180.69,120ZM192,108.68,147.31,64l24-24L216,84.68Z",
+        color = color,
+        contentDescription = "Edit",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphSparkle(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: sparkle
+    PhosphorIconCanvas(
+        "M208,144a15.78,15.78,0,0,1-10.42,14.94l-51.65,19-19,51.61a15.92,15.92,0,0,1-29.88,0L78,178l-51.62-19a15.92,15.92,0,0,1,0-29.88l51.65-19,19-51.61a15.92,15.92,0,0,1,29.88,0l19,51.65,51.61,19A15.78,15.78,0,0,1,208,144ZM152,48h16V64a8,8,0,0,0,16,0V48h16a8,8,0,0,0,0-16H184V16a8,8,0,0,0-16,0V32H152a8,8,0,0,0,0,16Zm88,32h-8V72a8,8,0,0,0-16,0v8h-8a8,8,0,0,0,0,16h8v8a8,8,0,0,0,16,0V96h8a8,8,0,0,0,0-16Z",
+        color = color,
+        contentDescription = "Highlight",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphChatTeardropText(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: chat-teardrop-text
+    PhosphorIconCanvas(
+        "M132,24A100.11,100.11,0,0,0,32,124v84a16,16,0,0,0,16,16h84a100,100,0,0,0,0-200Zm0,184H48V124a84,84,0,1,1,84,84Zm40-100a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h68A8,8,0,0,1,172,108Zm0,32a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h68A8,8,0,0,1,172,140Z",
+        color = color,
+        contentDescription = "Message",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphEqualizer(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: sliders-horizontal (Parametric EQ)
+    PhosphorIconCanvas(
+        "M120,40v16H40a8,8,0,0,0,0,16h80V88a8,8,0,0,0,16,0V40a8,8,0,0,0-16,0Zm96,24H152a8,8,0,0,0,0,16h64a8,8,0,0,0,0-16ZM40,136h64a8,8,0,0,0,0-16H40a8,8,0,0,0,0,16Zm176-16H120v-16a8,8,0,0,0-16,0v48a8,8,0,0,0,16,0V136h96a8,8,0,0,0,0-16ZM80,168v-16a8,8,0,0,0-16,0v16H40a8,8,0,0,0,0,16H64v16a8,8,0,0,0,16,0V168Zm136,8H96a8,8,0,0,0,0,16H216a8,8,0,0,0,0-16Z",
+        color = color,
+        contentDescription = "Parametric Equalizer",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+// ==========================================
+// TSROSSA LOGO SILHOUETTE (Transparent Vector)
+// Exact 10-layer vector geometry from tsrossa_app_icons/icon-1024.png
+// (5 Alabaster/White Note & Outer Petals + 5 Crimson Rose Petals with EvenOdd Cutout)
+// ==========================================
+
+private data class TsrossaLogoLayer(
+    val pathData: String,
+    val isCrimsonPetal: Boolean,
+    val isEvenOdd: Boolean = false
+)
+
+private val tsrossaIcon1024Layers = arrayOf(
+    // 1. Windswept Upper-Left Rose Petal (Crimson)
+    TsrossaLogoLayer(
+        pathData = "M 35.8,34.8 A 14.0,14.0 0 0,1 50.2,24.6 A 14.0,14.0 0 0,1 35.8,34.8 Z",
+        isCrimsonPetal = true
+    ),
+    // 2. Outer Asymmetric Left Rose Petal (Alabaster)
+    TsrossaLogoLayer(
+        pathData = "M 29.65,64.88 A 21.00,21.00 0 0,1 24.85,54.68 A 21.00,21.00 0 0,1 35.60,49.37 A 13.20,13.20 0 0,0 29.65,64.88 Z",
+        isCrimsonPetal = false
+    ),
+    // 3. Outer Upper-Middle Rose Petal (Alabaster)
+    TsrossaLogoLayer(
+        pathData = "M 37.26,48.56 A 20.50,20.50 0 0,1 45.67,43.14 A 20.50,20.50 0 0,1 52.31,52.32 A 13.20,13.20 0 0,0 37.26,48.56 Z",
+        isCrimsonPetal = false
+    ),
+    // 4. Inner Upper Rose Petal (Crimson)
+    TsrossaLogoLayer(
+        pathData = "M 35.37,57.47 A 13.50,13.50 0 0,1 39.95,50.24 A 13.50,13.50 0 0,1 47.09,54.98 A 7.60,7.60 0 0,0 35.37,57.47 Z",
+        isCrimsonPetal = true
+    ),
+    // 5. Inner Lower-Left Rose Petal (Alabaster)
+    TsrossaLogoLayer(
+        pathData = "M 41.67,68.38 A 13.50,13.50 0 0,1 33.35,66.99 A 13.50,13.50 0 0,1 34.89,58.71 A 7.60,7.60 0 0,0 41.67,68.38 Z",
+        isCrimsonPetal = false
+    ),
+    // 6. Inner Right Rose Petal (Crimson)
+    TsrossaLogoLayer(
+        pathData = "M 48.03,56.24 A 12.00,12.00 0 0,1 51.10,62.68 A 12.00,12.00 0 0,1 45.21,67.56 A 7.40,7.40 0 0,0 48.03,56.24 Z",
+        isCrimsonPetal = true
+    ),
+    // 7. Central Rosebud Heart with EvenOdd Crescent Cutout (Crimson)
+    TsrossaLogoLayer(
+        pathData = "M 37.3,58.1 C 38.8,54.9 43.1,53.8 46.3,55.7 C 49.1,57.4 49.5,61.3 47.2,64.1 C 44.8,67.1 40.3,67.5 37.5,65.0 C 35.4,63.2 35.6,60.2 37.3,58.1 Z M 39.6,58.3 C 41.6,56.8 44.6,57.4 45.5,59.4 C 46.3,61.1 45.3,63.4 43.3,64.3 C 44.2,62.0 43.5,59.6 41.4,58.7 C 40.7,58.3 40.1,58.2 39.6,58.3 Z",
+        isCrimsonPetal = true,
+        isEvenOdd = true
+    ),
+    // 8. Secondary Crimson Streak Flag (Crimson)
+    TsrossaLogoLayer(
+        pathData = "M 62.0,37.4 C 69.0,40.4 73.8,47.2 73.4,54.8 C 73.0,62.4 67.8,69.2 59.8,72.8 C 64.2,67.4 66.6,60.6 66.2,53.8 C 65.8,47.4 64.2,42.2 61.6,39.4 Z",
+        isCrimsonPetal = true
+    ),
+    // 9. Bottom-Right Sonic/Rose Slash Accent (Alabaster)
+    TsrossaLogoLayer(
+        pathData = "M 47.8,81.8 C 58.0,83.4 68.4,79.4 75.0,71.4 C 67.4,77.0 57.8,79.8 47.8,81.8 Z",
+        isCrimsonPetal = false
+    ),
+    // 10. Main Unified Rose-Petal Base + Thorny Stem + Sweeping Alabaster Petal-Flag (Alabaster)
+    TsrossaLogoLayer(
+        pathData = "M 29.2,67.8 A 21.5,21.5 0 0,0 42.6,80.2 C 51.6,78.0 57.0,71.0 57.8,61.2 L 60.4,32.8 C 67.0,35.2 73.6,40.6 76.2,48.0 C 78.0,53.0 77.2,58.6 74.4,63.6 C 81.8,58.0 85.0,48.6 82.2,39.5 C 79.4,30.4 70.2,26.4 62.8,24.0 L 57.6,22.2 L 55.8,26.0 L 54.6,39.6 L 48.4,36.8 L 54.1,43.8 L 52.8,60.2 C 52.2,68.6 45.4,74.6 37.2,73.6 C 33.8,73.2 31.0,71.0 29.2,67.8 Z",
+        isCrimsonPetal = false
+    )
+)
+
+@Composable
+fun GlyphTsrossaLogoSilhouette(
+    color: Color = m3OnSurface(),
+    crimsonColor: Color = Color(0xFFFF2E55),
+    modifier: Modifier = Modifier.size(22.dp)
+) {
+    val parsedLayers = remember {
+        tsrossaIcon1024Layers.map { layer ->
+            val path = phosphorPathCache.getOrPut("tsrossa_1024_" + layer.pathData) {
+                PathParser().parsePathString(layer.pathData).toPath()
+            }
+            if (layer.isEvenOdd) {
+                path.fillType = PathFillType.EvenOdd
+            }
+            Pair(path, layer.isCrimsonPetal)
+        }
+    }
+    val transformedPath = remember { Path() }
+    val matrix = remember { Matrix() }
+
+    Canvas(modifier = modifier.semantics { this.contentDescription = "tsrossa Logo" }) {
+        // Tight bounding box of icon-1024.png geometry in 108x108 space:
+        // X in [24.5..83.0] -> width ~ 58.5, Y in [22.0..82.5] -> height ~ 60.5
+        val contentWidth = 59.0f
+        val contentHeight = 61.0f
+        val scale = minOf(size.width / contentWidth, size.height / contentHeight)
+        val left = (size.width - contentWidth * scale) / 2f
+        val top = (size.height - contentHeight * scale) / 2f
+
+        for ((basePath, isCrimson) in parsedLayers) {
+            transformedPath.reset()
+            transformedPath.fillType = basePath.fillType
+            transformedPath.addPath(basePath)
+            matrix.reset()
+            matrix.translate(left - 24.5f * scale, top - 22.0f * scale)
+            matrix.scale(scale, scale)
+            transformedPath.transform(matrix)
+            val fillCol = if (isCrimson) crimsonColor else color
+            drawPath(path = transformedPath, color = fillCol, style = Fill)
+        }
+    }
 }
 
 // ==========================================
@@ -569,10 +959,10 @@ fun HeroPlayButton(
     ) {
         val iconColor = Color(0xFF070A12) // Deep navy on neon hero background
         if (isPlaying) {
-            GlyphPause(color = iconColor, modifier = Modifier.size(24.dp))
+            GlyphPause(color = iconColor, modifier = Modifier.size(24.dp), filled = true)
         } else {
             Box(modifier = Modifier.padding(start = 3.dp)) {
-                GlyphPlay(color = iconColor, modifier = Modifier.size(24.dp))
+                GlyphPlay(color = iconColor, modifier = Modifier.size(24.dp), filled = true)
             }
         }
     }

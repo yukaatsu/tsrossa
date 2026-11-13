@@ -410,10 +410,18 @@ object AudioTagReader {
                 "TRCK" -> if (trackNumber == 0) trackNumber = text.split("/")[0].trim().toIntOrNull() ?: 0
                 "TYER", "TDRC" -> if (year == 0) year = extractYear(text)
                 "TCOM" -> if (composer == null) composer = text
-                "USLT", "SYLT" -> if (lyrics == null && text.isNotBlank()) lyrics = text
+                "USLT", "SYLT" -> {
+                    if (lyrics == null) {
+                        val uslt = parseId3Uslt(data, offset, frameSize)
+                        if (uslt.isNotBlank()) lyrics = uslt
+                    }
+                }
                 "TXXX" -> {
-                    if (lyrics == null && text.contains("LYRICS", ignoreCase = true)) {
-                        lyrics = text
+                    if (lyrics == null) {
+                        val txxx = parseId3Txxx(data, offset, frameSize)
+                        if (txxx != null && (txxx.first.contains("LYRICS", ignoreCase = true) || txxx.second.contains("[00:", ignoreCase = true))) {
+                            lyrics = txxx.second
+                        }
                     }
                 }
             }
@@ -444,6 +452,80 @@ object AudioTagReader {
         }
         val textBytes = data.copyOfRange(offset + 1, offset + size)
         return String(textBytes, charset).trim('\u0000', ' ')
+    }
+
+    private fun parseId3Uslt(data: ByteArray, offset: Int, size: Int): String {
+        if (size <= 5) return ""
+        val encodingByte = data[offset].toInt() and 0xFF
+        val charset = when (encodingByte) {
+            1 -> Charset.forName("UTF-16")
+            2 -> Charset.forName("UTF-16BE")
+            3 -> Charset.forName("UTF-8")
+            else -> Charset.forName("ISO-8859-1")
+        }
+        // Skip 1 byte encoding + 3 bytes language code = 4 bytes
+        var pos = offset + 4
+        val end = offset + size
+
+        // Content descriptor is null-terminated according to encoding
+        if (encodingByte == 1 || encodingByte == 2) {
+            while (pos + 1 < end) {
+                if (data[pos] == 0.toByte() && data[pos + 1] == 0.toByte()) {
+                    pos += 2
+                    break
+                }
+                pos += 2
+            }
+        } else {
+            while (pos < end) {
+                if (data[pos] == 0.toByte()) {
+                    pos += 1
+                    break
+                }
+                pos += 1
+            }
+        }
+
+        if (pos >= end) return ""
+        val textBytes = data.copyOfRange(pos, end)
+        return String(textBytes, charset).trim('\u0000', ' ')
+    }
+
+    private fun parseId3Txxx(data: ByteArray, offset: Int, size: Int): Pair<String, String>? {
+        if (size <= 2) return null
+        val encodingByte = data[offset].toInt() and 0xFF
+        val charset = when (encodingByte) {
+            1 -> Charset.forName("UTF-16")
+            2 -> Charset.forName("UTF-16BE")
+            3 -> Charset.forName("UTF-8")
+            else -> Charset.forName("ISO-8859-1")
+        }
+        var pos = offset + 1
+        val end = offset + size
+        val descStart = pos
+
+        if (encodingByte == 1 || encodingByte == 2) {
+            while (pos + 1 < end) {
+                if (data[pos] == 0.toByte() && data[pos + 1] == 0.toByte()) {
+                    break
+                }
+                pos += 2
+            }
+        } else {
+            while (pos < end) {
+                if (data[pos] == 0.toByte()) break
+                pos += 1
+            }
+        }
+
+        val descBytes = data.copyOfRange(descStart, minOf(pos, end))
+        val description = String(descBytes, charset).trim('\u0000', ' ')
+
+        val valueStart = if (encodingByte == 1 || encodingByte == 2) pos + 2 else pos + 1
+        if (valueStart >= end) return Pair(description, "")
+        val valueBytes = data.copyOfRange(valueStart, end)
+        val value = String(valueBytes, charset).trim('\u0000', ' ')
+        return Pair(description, value)
     }
 
     private fun extractYear(str: String): Int {

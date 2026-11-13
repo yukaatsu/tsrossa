@@ -20,6 +20,14 @@ object MusicScannerHelper {
         val hasChanges: Boolean
     )
 
+    fun shouldEnterDirectory(dir: File, rootDir: File): Boolean {
+        if (dir == rootDir) return true
+        // Skip hidden system/cache directories like .thumbnails, .Trash, etc.
+        // Inside user-selected rootDir, .nomedia files must NOT block scanning
+        // because audiophiles often use .nomedia to isolate album art from standard galleries.
+        return !dir.name.startsWith(".")
+    }
+
     /**
      * Performs an incremental scan of [rootDir] backed by [MusicLibraryDatabaseHelper].
      * Unchanged files reuse their SQLite metadata without re-reading disk headers.
@@ -45,8 +53,7 @@ object MusicScannerHelper {
 
         rootDir.walkTopDown()
             .onEnter { dir ->
-                if (dir.name.startsWith(".") && dir != rootDir) false
-                else !File(dir, ".nomedia").exists()
+                shouldEnterDirectory(dir, rootDir)
             }
             .forEach { file ->
                 if (file.isFile && !file.name.startsWith(".")) {
@@ -96,8 +103,7 @@ object MusicScannerHelper {
         val rootPath = rootDir.absolutePath
         return rootDir.walkTopDown()
             .onEnter { dir ->
-                if (dir.name.startsWith(".") && dir != rootDir) false
-                else !File(dir, ".nomedia").exists()
+                shouldEnterDirectory(dir, rootDir)
             }
             .filter { file ->
                 file.isFile && !file.name.startsWith(".") &&

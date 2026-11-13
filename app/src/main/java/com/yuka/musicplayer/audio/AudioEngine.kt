@@ -177,6 +177,15 @@ class AudioEngine {
     external fun getTimingTelemetry(): String
     external fun isBitPerfectIntegerPassActive(): Boolean
 
+    // Professional 10-Band Parametric EQ (Direct USB C++ Engine)
+    external fun setPeqEnabled(enabled: Boolean)
+    external fun isPeqEnabled(): Boolean
+    external fun setPeqPreampDb(preampDb: Float)
+    external fun setPeqBand(bandIndex: Int, freqHz: Float, gainDb: Float, q: Float, filterType: Int, enabled: Boolean)
+    external fun setPeqAllBands(freqsHz: FloatArray, gainsDb: FloatArray, qs: FloatArray, filterTypes: IntArray)
+    external fun setPeqFullConfig(enabled: Boolean, preampDb: Float, freqsHz: FloatArray, gainsDb: FloatArray, qs: FloatArray, filterTypes: IntArray)
+    external fun resetPeqState()
+
     // C++ callback when track playback completes
     var onTrackFinishedCallback: (() -> Unit)? = null
     // C++ callback when track transitions gaplessly

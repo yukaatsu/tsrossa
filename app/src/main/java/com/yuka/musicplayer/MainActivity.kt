@@ -36,7 +36,14 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import com.yuka.musicplayer.audio.PeqConfiguration
+import com.yuka.musicplayer.audio.PeqPreferencesHelper
+import com.yuka.musicplayer.ui.dialogs.ParametricEqModalSheet
+import com.yuka.musicplayer.util.MusicLibraryDatabaseHelper
+import com.yuka.musicplayer.util.PlaylistStorageHelper
+import com.yuka.musicplayer.util.TrackDeleteHelper
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.activity.ComponentActivity
@@ -254,10 +261,17 @@ fun KewApp(audioEngine: AudioEngine) {
     var accentMode by remember { mutableStateOf(sharedPref.getString("accent_mode", "DYNAMIC") ?: "DYNAMIC") }
     var accentFixedColorStr by remember { mutableStateOf(sharedPref.getString("accent_fixed_color", "#00FF00") ?: "#00FF00") }
     var usbBufferProfile by remember { mutableStateOf(sharedPref.getInt("usb_buffer_profile", 1)) }
+    var peqConfig by remember {
+        mutableStateOf(PeqPreferencesHelper.load(sharedPref))
+    }
+    var userPeqPresets by remember {
+        mutableStateOf(PeqPreferencesHelper.loadUserPresets(sharedPref))
+    }
 
-    // Initialize USB buffer profile in C++ engine on app launch
+    // Initialize USB buffer profile and PEQ in C++ engine on app launch
     LaunchedEffect(Unit) {
         com.yuka.musicplayer.audio.AudioEngine.applyBufferProfile(usbBufferProfile)
+        PeqPreferencesHelper.applyToEngine(audioEngine, peqConfig)
     }
     
     val permState = com.yuka.musicplayer.util.rememberAppPermissionState(context)
@@ -306,6 +320,19 @@ fun KewApp(audioEngine: AudioEngine) {
     var queueRevealFraction by remember { mutableFloatStateOf(0f) }
     var nowPlayingCollapseDragFraction by remember { mutableFloatStateOf(0f) }
     var showUpdatePanel by remember { mutableStateOf(false) }
+    var hasAutoShownUpdateModal by remember { mutableStateOf(false) }
+    var showDonationModal by remember { mutableStateOf(false) }
+    var hasSeenWelcomeDonation by remember {
+        mutableStateOf(sharedPref.getBoolean("has_seen_welcome_donation_modal", false))
+    }
+    var showDiscordModal by remember { mutableStateOf(false) }
+    var hasSeenWelcomeDiscord by remember {
+        mutableStateOf(sharedPref.getBoolean("has_seen_welcome_discord_modal", false))
+    }
+    // Urutan acak saat first-install: menentukan apakah Donasi atau Discord yang tampil duluan
+    val firstInstallOrderDonationFirst = remember { kotlin.random.Random.nextBoolean() }
+    // Modal yang terpilih secara acak saat siklus reopen (null, "DONATION", atau "DISCORD")
+    var reopenActiveModalType by remember { mutableStateOf<String?>(null) }
     var showSettingsModal by remember { mutableStateOf(false) }
     var showWarmupConfirmModal by remember { mutableStateOf(false) }
     var updateCheckState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
@@ -320,6 +347,71 @@ fun KewApp(audioEngine: AudioEngine) {
     var tracksToDelete by remember { mutableStateOf<List<File>>(emptyList()) }
     var selectedTracksForPlaylist by remember { mutableStateOf<List<File>>(emptyList()) }
     var settingsInitialSubPage by remember { mutableStateOf(com.yuka.musicplayer.ui.views.settings.SettingsSubPage.ROOT) }
+    var showPeqModal by remember { mutableStateOf(false) }
+    var pendingDeleteFiles by remember { mutableStateOf<List<File>>(emptyList()) }
+    var handleTracksDeletedRef by remember { mutableStateOf<((List<File>) -> Unit)?>(null) }
+    val deleteIntentSenderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val confirmed = pendingDeleteFiles
+            pendingDeleteFiles = emptyList()
+            handleTracksDeletedRef?.invoke(confirmed)
+        } else {
+            pendingDeleteFiles = emptyList()
+            android.widget.Toast.makeText(context, "Track deletion cancelled", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // PEQ Preset Export / Import Document Launchers (#NOTE 1)
+    var pendingPeqExportJson by remember { mutableStateOf<String?>(null) }
+    val exportPeqJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null && pendingPeqExportJson != null) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { stream ->
+                    stream.write(pendingPeqExportJson!!.toByteArray(Charsets.UTF_8))
+                }
+                Toast.makeText(context, "File preset PEQ berhasil disimpan", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Gagal menyimpan file preset: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        pendingPeqExportJson = null
+    }
+
+    val importPeqJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val rawText = context.contentResolver.openInputStream(uri)?.use { stream ->
+                    stream.bufferedReader().use { it.readText() }
+                } ?: ""
+                val (updatedList, newlyImported) = PeqPreferencesHelper.importUserPresets(sharedPref, rawText)
+                if (newlyImported.isNotEmpty()) {
+                    userPeqPresets = updatedList
+                    val active = newlyImported.first()
+                    val updatedConfig = peqConfig.copy(
+                        enabled = true,
+                        selectedPresetId = active.id,
+                        preampDb = active.preampDb,
+                        autoPreampEnabled = active.autoPreampEnabled,
+                        bands = active.bands
+                    )
+                    peqConfig = updatedConfig
+                    PeqPreferencesHelper.save(sharedPref, updatedConfig)
+                    PeqPreferencesHelper.applyToEngine(audioEngine, updatedConfig)
+                    Toast.makeText(context, "Berhasil meng-import ${newlyImported.size} preset ('${active.name}')", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Format file preset PEQ tidak dikenali", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Gagal membaca file: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     // Screen Pinning / Lock Task Mode State
     fun Context.findComponentActivity(): ComponentActivity? {
@@ -568,6 +660,13 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
 
+    var isMusicDirectoryConfigured by remember {
+        mutableStateOf(
+            sharedPref.getBoolean("music_directory_configured", false) &&
+                sharedPref.getString("music_root_directory", null)?.let { File(it).exists() && File(it).isDirectory } == true
+        )
+    }
+
     val defaultMusicDir = remember {
         val savedPath = sharedPref.getString("music_root_directory", null)
         if (savedPath != null && File(savedPath).exists()) {
@@ -580,6 +679,7 @@ fun KewApp(audioEngine: AudioEngine) {
     }
 
     var musicRootDirectory by remember { mutableStateOf(defaultMusicDir) }
+    var forceFullRescanRequested by remember { mutableStateOf(false) }
     var isScanningLibrary by remember { mutableStateOf(false) }
     var scannedLibraryItems by remember { mutableStateOf<List<com.yuka.musicplayer.model.ScannedMusicItem>>(emptyList()) }
 
@@ -618,8 +718,13 @@ fun KewApp(audioEngine: AudioEngine) {
 
     var showFolderPickerDialog by remember { mutableStateOf(false) }
     
-    LaunchedEffect(musicRootDirectory) {
-        sharedPref.edit().putString("music_root_directory", musicRootDirectory.absolutePath).apply()
+    LaunchedEffect(musicRootDirectory, isMusicDirectoryConfigured) {
+        if (isMusicDirectoryConfigured) {
+            sharedPref.edit()
+                .putString("music_root_directory", musicRootDirectory.absolutePath)
+                .putBoolean("music_directory_configured", true)
+                .apply()
+        }
     }
 
     var librarySortMode by remember { mutableStateOf(LibrarySortMode.NAME_ASC) }
@@ -657,48 +762,84 @@ fun KewApp(audioEngine: AudioEngine) {
     }
     var libraryRefreshTrigger by remember { mutableIntStateOf(0) }
 
-    // Two-stage Library Loader:
-    // Stage 1: Load SQLite cached tracks in <20ms so Library renders immediately without a loading spinner.
-    // Stage 2: Run incremental filesystem diff in the background and update state only if files changed.
-    LaunchedEffect(musicRootDirectory, isStorageGranted, libraryRefreshTrigger) {
+    // Two-stage Library Loader & Force Full Rescan Engine:
+    // If user has not configured music directory yet, stay empty until user sets it.
+    // If manual force rescan is requested (from Rescan button or FolderPickerDialog):
+    // Perform full filesystem scan, atomically replace SQLite tracks for this root, and show confirmation Toast.
+    // Otherwise, fast incremental startup scan from SQLite cache.
+    LaunchedEffect(musicRootDirectory, isStorageGranted, isMusicDirectoryConfigured, libraryRefreshTrigger) {
+        if (!isMusicDirectoryConfigured) {
+            scannedLibraryItems = emptyList()
+            isScanningLibrary = false
+            return@LaunchedEffect
+        }
         if (isStorageGranted) {
+            val isManualForceRescan = forceFullRescanRequested
+            forceFullRescanRequested = false
+
             withContext(Dispatchers.IO) {
                 val db = com.yuka.musicplayer.util.MusicLibraryDatabaseHelper.getInstance(context)
-                val cached = db.getCachedTracksForRoot(musicRootDirectory)
-                if (cached.isNotEmpty()) {
-                    val sortedCached = com.yuka.musicplayer.model.sortScannedItemsByField(
-                        cached,
-                        librarySortField,
-                        librarySortOrder
-                    )
-                    withContext(Dispatchers.Main) {
-                        scannedLibraryItems = sortedCached
-                        isScanningLibrary = false
-                    }
-                } else {
+
+                if (isManualForceRescan) {
                     withContext(Dispatchers.Main) {
                         isScanningLibrary = true
                     }
-                }
-
-                val scanResult = com.yuka.musicplayer.util.MusicScannerHelper.scanMusicDirectoryIncremental(
-                    context = context,
-                    rootDir = musicRootDirectory,
-                    cachedItems = cached.takeIf { it.isNotEmpty() }
-                )
-                if (scanResult.hasChanges || cached.isEmpty()) {
+                    val startTime = android.os.SystemClock.elapsedRealtime()
+                    val freshItems = com.yuka.musicplayer.util.MusicScannerHelper.scanMusicDirectory(musicRootDirectory)
+                    db.replaceAllTracksForRoot(musicRootDirectory, freshItems)
+                    val elapsed = android.os.SystemClock.elapsedRealtime() - startTime
+                    if (elapsed < 450L) {
+                        delay(450L - elapsed)
+                    }
                     val sortedFresh = com.yuka.musicplayer.model.sortScannedItemsByField(
-                        scanResult.items,
+                        freshItems,
                         librarySortField,
                         librarySortOrder
                     )
                     withContext(Dispatchers.Main) {
                         scannedLibraryItems = sortedFresh
                         isScanningLibrary = false
+                        Toast.makeText(
+                            context,
+                            "Rescan complete • ${freshItems.size} tracks found in ${musicRootDirectory.name}",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 } else {
                     withContext(Dispatchers.Main) {
-                        isScanningLibrary = false
+                        isScanningLibrary = true
+                    }
+                    val cached = db.getCachedTracksForRoot(musicRootDirectory)
+                    if (cached.isNotEmpty()) {
+                        val sortedCached = com.yuka.musicplayer.model.sortScannedItemsByField(
+                            cached,
+                            librarySortField,
+                            librarySortOrder
+                        )
+                        withContext(Dispatchers.Main) {
+                            scannedLibraryItems = sortedCached
+                        }
+                    }
+
+                    val scanResult = com.yuka.musicplayer.util.MusicScannerHelper.scanMusicDirectoryIncremental(
+                        context = context,
+                        rootDir = musicRootDirectory,
+                        cachedItems = cached.takeIf { it.isNotEmpty() }
+                    )
+                    if (scanResult.hasChanges || cached.isEmpty()) {
+                        val sortedFresh = com.yuka.musicplayer.model.sortScannedItemsByField(
+                            scanResult.items,
+                            librarySortField,
+                            librarySortOrder
+                        )
+                        withContext(Dispatchers.Main) {
+                            scannedLibraryItems = sortedFresh
+                            isScanningLibrary = false
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            isScanningLibrary = false
+                        }
                     }
                 }
             }
@@ -708,6 +849,13 @@ fun KewApp(audioEngine: AudioEngine) {
     LaunchedEffect(scannedLibraryItems) {
         if (scannedLibraryItems.isNotEmpty()) {
             com.yuka.musicplayer.util.AlbumArtThumbnailCache.prewarmLibraryThumbnails(scannedLibraryItems)
+        }
+        if (activePlayingPlaylistId == null) {
+            val playable = com.yuka.musicplayer.util.MusicScannerHelper.filterPlayableFiles(scannedLibraryItems)
+            playbackLibraryFiles = playable
+            if (isShuffleEnabled) {
+                shuffledList = playable.shuffled()
+            }
         }
     }
 
@@ -742,6 +890,128 @@ fun KewApp(audioEngine: AudioEngine) {
         if (autoCheck) {
             updateCheckState = UpdateCheckState.Checking
             updateCheckState = AppUpdateManager.checkForUpdates(BuildConfig.VERSION_NAME)
+        }
+    }
+
+    // Unified Modal Cycle (Donation & Discord: First-Install Guarantee + Randomized Reopen 2..4x, #BUG 1)
+    val modalCycleLifecycleOwner = LocalLifecycleOwner.current
+    var wasAppStopped by remember { mutableStateOf(false) }
+
+    fun pickNextRandomModal(prefs: android.content.SharedPreferences): String {
+        val lastType = prefs.getString("modal_cycle_last_type", "") ?: ""
+        val streak = prefs.getInt("modal_cycle_streak_count", 0)
+        val chosen = if (streak >= 2 && (lastType == "DONATION" || lastType == "DISCORD")) {
+            if (lastType == "DONATION") "DISCORD" else "DONATION"
+        } else {
+            if (kotlin.random.Random.nextBoolean()) "DONATION" else "DISCORD"
+        }
+        val newStreak = if (chosen == lastType) streak + 1 else 1
+        prefs.edit()
+            .putString("modal_cycle_last_type", chosen)
+            .putInt("modal_cycle_streak_count", newStreak)
+            .apply()
+        return chosen
+    }
+
+    fun advanceReopenModalCycle(prefs: android.content.SharedPreferences) {
+        val seenDonation = prefs.getBoolean("has_seen_welcome_donation_modal", false)
+        val seenDiscord = prefs.getBoolean("has_seen_welcome_discord_modal", false)
+        if (seenDonation && seenDiscord) {
+            val currentCount = prefs.getInt("modal_cycle_reopen_count", 0) + 1
+            val target = prefs.getInt("modal_cycle_target_reopen", 0).let {
+                if (it in 2..4) it else (2..4).random().also { r ->
+                    prefs.edit().putInt("modal_cycle_target_reopen", r).apply()
+                }
+            }
+            prefs.edit().putInt("modal_cycle_reopen_count", currentCount).apply()
+            if (currentCount >= target && reopenActiveModalType == null) {
+                reopenActiveModalType = pickNextRandomModal(prefs)
+            }
+        } else {
+            if (!prefs.contains("modal_cycle_target_reopen")) {
+                prefs.edit().putInt("modal_cycle_target_reopen", (2..4).random()).apply()
+            }
+        }
+    }
+
+    // Cold Start modal cycle check
+    LaunchedEffect(Unit) {
+        advanceReopenModalCycle(sharedPref)
+    }
+
+    // Warm Reopen (ON_STOP -> ON_START)
+    DisposableEffect(modalCycleLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                wasAppStopped = true
+            } else if (event == androidx.lifecycle.Lifecycle.Event.ON_START) {
+                if (wasAppStopped) {
+                    wasAppStopped = false
+                    advanceReopenModalCycle(sharedPref)
+                }
+            }
+        }
+        modalCycleLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            modalCycleLifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    // Unified First-Install Dual Welcome + Randomized Reopen Modal Orchestrator (#BUG 1)
+    LaunchedEffect(
+        isStorageGranted,
+        isMusicDirectoryConfigured,
+        showPermissionDialog,
+        showFolderPickerDialog,
+        showDonationModal,
+        showDiscordModal,
+        hasSeenWelcomeDonation,
+        hasSeenWelcomeDiscord,
+        reopenActiveModalType
+    ) {
+        if (!isStorageGranted || !isMusicDirectoryConfigured || showPermissionDialog || showFolderPickerDialog) {
+            return@LaunchedEffect
+        }
+        // Jangan tampilkan modal baru jika salah satu modal sedang aktif terbuka
+        if (showDonationModal || showDiscordModal) {
+            return@LaunchedEffect
+        }
+
+        // 1. FASE FIRST INSTALL: Pastikan KEDUA modal (Donasi & Discord) 100% muncul satu per satu!
+        if (!hasSeenWelcomeDonation || !hasSeenWelcomeDiscord) {
+            if (!hasSeenWelcomeDonation && !hasSeenWelcomeDiscord) {
+                // Keduanya belum pernah muncul -> undi urutan pertama
+                if (firstInstallOrderDonationFirst) {
+                    showDonationModal = true
+                } else {
+                    showDiscordModal = true
+                }
+            } else if (!hasSeenWelcomeDonation) {
+                showDonationModal = true
+            } else {
+                showDiscordModal = true
+            }
+            return@LaunchedEffect
+        }
+
+        // 2. FASE REOPEN CYCLE: Tampilkan modal yang terpilih secara acak pada siklus ini
+        when (reopenActiveModalType) {
+            "DONATION" -> showDonationModal = true
+            "DISCORD" -> showDiscordModal = true
+        }
+    }
+
+    // Auto Update Notification Modal (#NOTE 3)
+    LaunchedEffect(updateCheckState, showPermissionDialog, showFolderPickerDialog, showDonationModal, showDiscordModal) {
+        if (updateCheckState is UpdateCheckState.UpdateAvailable &&
+            !hasAutoShownUpdateModal &&
+            !showPermissionDialog &&
+            !showFolderPickerDialog &&
+            !showDonationModal &&
+            !showDiscordModal
+        ) {
+            hasAutoShownUpdateModal = true
+            showUpdatePanel = true
         }
     }
 
@@ -1293,8 +1563,13 @@ fun KewApp(audioEngine: AudioEngine) {
     }
 
     val refreshLibrary = {
-        libraryRefreshTrigger++
-        Toast.makeText(context, "Scanning music directory...", Toast.LENGTH_SHORT).show()
+        if (!isMusicDirectoryConfigured) {
+            showFolderPickerDialog = true
+        } else if (!isScanningLibrary) {
+            isScanningLibrary = true
+            forceFullRescanRequested = true
+            libraryRefreshTrigger++
+        }
     }
 
     val currentPlayNext by rememberUpdatedState(::playNext)
@@ -1567,6 +1842,7 @@ fun KewApp(audioEngine: AudioEngine) {
                             }
                         },
                         hasUpdateAvailable = updateCheckState is UpdateCheckState.UpdateAvailable,
+                        onDonationClick = { showDonationModal = true },
                         onAboutClick = {
                             settingsInitialSubPage = com.yuka.musicplayer.ui.views.settings.SettingsSubPage.ABOUT
                             showSettingsModal = true
@@ -1608,6 +1884,60 @@ fun KewApp(audioEngine: AudioEngine) {
             )
         }
 
+        val handleTracksDeleted: (List<File>) -> Unit = { deletedFiles ->
+            if (deletedFiles.isNotEmpty()) {
+                val deletedPaths = deletedFiles.map { it.absolutePath }.toSet()
+
+                // 1. Advance or stop if currently playing track was deleted
+                val activeTrackPath = currentTrack?.file?.absolutePath
+                if (activeTrackPath != null && activeTrackPath in deletedPaths) {
+                    val remainingPlayable = scannedLibraryItems
+                        .filterNot { it.file.absolutePath in deletedPaths }
+                        .filter { it.isSupported }
+                    if (remainingPlayable.isEmpty()) {
+                        audioEngine.stopAudio()
+                        audioEngine.clearNextTrack()
+                        currentTrack = null
+                        isPlaying = false
+                    } else {
+                        playNext(false)
+                    }
+                }
+
+                // 2. Remove from priority queue
+                val updatedQueue = priorityQueue.filterNot { it.absolutePath in deletedPaths }
+                priorityQueue = updatedQueue
+                com.yuka.musicplayer.audio.AudioPlayerManager.priorityQueue = updatedQueue
+
+                // 3. Remove from shuffled deck
+                shuffledList = shuffledList.filterNot { it.absolutePath in deletedPaths }
+
+                // 4. Remove from all playlists
+                val updatedPlaylists = PlaylistStorageHelper.removeTracksFromAllPlaylists(context, deletedPaths)
+                if (updatedPlaylists != null) {
+                    allPlaylists = updatedPlaylists
+                }
+
+                // 5. Update library state immediately
+                val updatedScanned = scannedLibraryItems.filterNot { it.file.absolutePath in deletedPaths }
+                scannedLibraryItems = updatedScanned
+                playbackLibraryFiles = com.yuka.musicplayer.util.MusicScannerHelper.filterPlayableFiles(updatedScanned)
+
+                // 6. Delete from SQLite cache on IO thread
+                coroutineScope.launch(Dispatchers.IO) {
+                    val db = MusicLibraryDatabaseHelper.getInstance(context)
+                    db.saveTracksForRoot(musicRootDirectory, emptyList(), deletedPaths)
+                }
+
+                Toast.makeText(
+                    context,
+                    "${deletedFiles.size} track${if (deletedFiles.size == 1) "" else "s"} deleted",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        handleTracksDeletedRef = handleTracksDeleted
+
         // Modal Sheets Host (Logs, Help, Update, Permissions, Queue, Track Options)
         com.yuka.musicplayer.ui.dialogs.AppModalSheetsHost(
             context = context,
@@ -1623,10 +1953,41 @@ fun KewApp(audioEngine: AudioEngine) {
             onDismissHelpPanel = { showHelpPanel = false },
             showUpdatePanel = showUpdatePanel,
             onDismissUpdatePanel = { showUpdatePanel = false },
+            showDonationModal = showDonationModal,
+            onDismissDonationModal = {
+                showDonationModal = false
+                hasSeenWelcomeDonation = true
+                if (reopenActiveModalType == "DONATION") {
+                    reopenActiveModalType = null
+                }
+                val nextTarget = (2..4).random()
+                sharedPref.edit()
+                    .putBoolean("has_seen_welcome_donation_modal", true)
+                    .putInt("modal_cycle_reopen_count", 0)
+                    .putInt("modal_cycle_target_reopen", nextTarget)
+                    .apply()
+            },
+            showDiscordModal = showDiscordModal,
+            onDismissDiscordModal = {
+                showDiscordModal = false
+                hasSeenWelcomeDiscord = true
+                if (reopenActiveModalType == "DISCORD") {
+                    reopenActiveModalType = null
+                }
+                val nextDiscordTarget = (2..4).random()
+                sharedPref.edit()
+                    .putBoolean("has_seen_welcome_discord_modal", true)
+                    .putInt("modal_cycle_reopen_count", 0)
+                    .putInt("modal_cycle_target_reopen", nextDiscordTarget)
+                    .apply()
+            },
             showPermissionDialog = showPermissionDialog,
             onDismissPermissionDialog = {
                 if (isStorageGranted) {
                     modalActionHandler.onCompletePermissions()
+                    if (!isMusicDirectoryConfigured) {
+                        showFolderPickerDialog = true
+                    }
                 }
             },
             isNotificationGranted = isNotificationGranted,
@@ -1674,17 +2035,20 @@ fun KewApp(audioEngine: AudioEngine) {
             onDismissConfirmDelete = { tracksToDelete = emptyList() },
             onConfirmDeleteTracks = { files ->
                 tracksToDelete = emptyList()
-                coroutineScope.launch(Dispatchers.IO) {
-                    var deletedCount = 0
-                    files.forEach { file ->
-                        if (file.delete()) {
-                            deletedCount++
-                        }
+                val result = TrackDeleteHelper.deleteTracks(context, files)
+                if (result.immediatelyDeletedFiles.isNotEmpty()) {
+                    handleTracksDeleted(result.immediatelyDeletedFiles)
+                }
+                if (result.pendingIntentSender != null) {
+                    pendingDeleteFiles = result.pendingFilesForPrompt
+                    try {
+                        val request = IntentSenderRequest.Builder(result.pendingIntentSender).build()
+                        deleteIntentSenderLauncher.launch(request)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "Failed to launch delete request", e)
                     }
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "$deletedCount track${if (deletedCount == 1) "" else "s"} deleted", Toast.LENGTH_SHORT).show()
-                        refreshLibrary()
-                    }
+                } else if (result.immediatelyDeletedFiles.isEmpty()) {
+                    Toast.makeText(context, "Unable to delete selected track(s)", Toast.LENGTH_SHORT).show()
                 }
             }
         )
@@ -1830,11 +2194,17 @@ fun KewApp(audioEngine: AudioEngine) {
                 updateCheckState = updateCheckState,
                 onOpenUpdateDialog = { showUpdatePanel = true },
                 onOpenLogs = { showSystemLogs = true },
+                onOpenDonationModal = { showDonationModal = true },
                 usbBufferProfile = usbBufferProfile,
                 onUsbBufferProfileChange = { newProfile ->
                     usbBufferProfile = newProfile
                     sharedPref.edit().putInt("usb_buffer_profile", newProfile).apply()
                     com.yuka.musicplayer.audio.AudioEngine.applyBufferProfile(newProfile)
+                },
+                isPeqActive = peqConfig.enabled,
+                onOpenPeq = {
+                    showSettingsModal = false
+                    showPeqModal = true
                 },
                 initialSubPage = settingsInitialSubPage,
                 surfaceStyle = surfaceStyle,
@@ -1852,6 +2222,72 @@ fun KewApp(audioEngine: AudioEngine) {
             )
         }
 
+        // Parametric Equalizer Modal Sheet
+        ParametricEqModalSheet(
+            visible = showPeqModal,
+            config = peqConfig,
+            userPresets = userPeqPresets,
+            onConfigChange = { newConfig ->
+                peqConfig = newConfig
+                PeqPreferencesHelper.save(sharedPref, newConfig)
+                PeqPreferencesHelper.applyToEngine(audioEngine, newConfig)
+            },
+            onSaveUserPreset = { name, overwriteId ->
+                val (updatedList, saved) = PeqPreferencesHelper.saveOrUpdateUserPreset(
+                    prefs = sharedPref,
+                    name = name,
+                    config = peqConfig,
+                    overwritePresetId = overwriteId
+                )
+                userPeqPresets = updatedList
+                val updatedConfig = peqConfig.copy(selectedPresetId = saved.id)
+                peqConfig = updatedConfig
+                PeqPreferencesHelper.save(sharedPref, updatedConfig)
+                Toast.makeText(context, "Preset '${saved.name}' disimpan", Toast.LENGTH_SHORT).show()
+            },
+            onDeleteUserPreset = { presetId ->
+                val deletedName = userPeqPresets.find { it.id == presetId }?.name ?: "Preset"
+                val updatedList = PeqPreferencesHelper.deleteUserPreset(sharedPref, presetId)
+                userPeqPresets = updatedList
+                if (peqConfig.selectedPresetId == presetId) {
+                    val updatedConfig = peqConfig.copy(selectedPresetId = "custom")
+                    peqConfig = updatedConfig
+                    PeqPreferencesHelper.save(sharedPref, updatedConfig)
+                }
+                Toast.makeText(context, "Preset '$deletedName' dihapus", Toast.LENGTH_SHORT).show()
+            },
+            onImportPresetsText = { rawText ->
+                val (updatedList, newlyImported) = PeqPreferencesHelper.importUserPresets(sharedPref, rawText)
+                if (newlyImported.isNotEmpty()) {
+                    userPeqPresets = updatedList
+                    val active = newlyImported.first()
+                    val updatedConfig = peqConfig.copy(
+                        enabled = true,
+                        selectedPresetId = active.id,
+                        preampDb = active.preampDb,
+                        autoPreampEnabled = active.autoPreampEnabled,
+                        bands = active.bands
+                    )
+                    peqConfig = updatedConfig
+                    PeqPreferencesHelper.save(sharedPref, updatedConfig)
+                    PeqPreferencesHelper.applyToEngine(audioEngine, updatedConfig)
+                    Toast.makeText(context, "Berhasil meng-import ${newlyImported.size} preset ('${active.name}')", Toast.LENGTH_SHORT).show()
+                    newlyImported.size
+                } else {
+                    Toast.makeText(context, "Format kode preset PEQ tidak valid", Toast.LENGTH_SHORT).show()
+                    0
+                }
+            },
+            onExportJsonFileRequest = { jsonContent, suggestedFileName ->
+                pendingPeqExportJson = jsonContent
+                exportPeqJsonLauncher.launch(suggestedFileName)
+            },
+            onImportJsonFileRequest = {
+                importPeqJsonLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+            },
+            onDismissRequest = { showPeqModal = false }
+        )
+
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             AppScreenContent(
                 viewState = viewState,
@@ -1861,6 +2297,7 @@ fun KewApp(audioEngine: AudioEngine) {
                 musicRootDirectory = musicRootDirectory,
                 scannedItems = scannedLibraryItems,
                 isScanningLibrary = isScanningLibrary,
+                isMusicDirectoryConfigured = isMusicDirectoryConfigured,
                 onChangeDirectory = { showFolderPickerDialog = true },
                 currentTrack = currentTrack,
                 playlistSet = playlistSet,
@@ -2128,6 +2565,11 @@ fun KewApp(audioEngine: AudioEngine) {
                     isShuffleEnabled = isShuffleEnabled,
                     repeatMode = repeatMode,
                     priorityQueueSize = priorityQueue.size,
+                    outputBitDepth = telemetry.outputBitDepth,
+                    outputSampleRate = telemetry.outputSampleRate,
+                    isDacConnected = isDacConnected,
+                    isPeqActive = peqConfig.enabled,
+                    onOpenPeq = { showPeqModal = true },
                     onTogglePlay = sharedOnTogglePlay,
                     onVolumeChange = { vol -> currentVolume = vol },
                     onPlayNext = { playNext(false) },
@@ -2193,9 +2635,15 @@ fun KewApp(audioEngine: AudioEngine) {
         currentPath = musicRootDirectory,
         onDismissRequest = { showFolderPickerDialog = false },
         onSelectDirectory = { dir ->
-            showFolderPickerDialog = false
+            isMusicDirectoryConfigured = true
             musicRootDirectory = dir
-            Toast.makeText(context, "Scanning ${dir.name}...", Toast.LENGTH_SHORT).show()
+            sharedPref.edit()
+                .putString("music_root_directory", dir.absolutePath)
+                .putBoolean("music_directory_configured", true)
+                .apply()
+            showFolderPickerDialog = false
+            forceFullRescanRequested = true
+            libraryRefreshTrigger++
         }
     )
 

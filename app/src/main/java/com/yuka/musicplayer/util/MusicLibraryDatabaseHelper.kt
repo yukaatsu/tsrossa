@@ -176,4 +176,45 @@ class MusicLibraryDatabaseHelper private constructor(context: Context) :
             db.endTransaction()
         }
     }
+
+    /**
+     * Atomically replaces all cached tracks for [rootDir] with [freshItems].
+     * Used for full manual library rescan to eliminate stale or ghost entries.
+     */
+    fun replaceAllTracksForRoot(rootDir: File, freshItems: List<ScannedMusicItem>) {
+        val rootPath = rootDir.absolutePath
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete(TABLE_TRACKS, "root_path = ?", arrayOf(rootPath))
+            for (item in freshItems) {
+                val cv = ContentValues().apply {
+                    put("file_path", item.file.absolutePath)
+                    put("root_path", rootPath)
+                    put("is_supported", if (item.isSupported) 1 else 0)
+                    put("format_label", item.formatLabel)
+                    put("breadcrumb", item.breadcrumb)
+                    put("title", item.title)
+                    put("artist", item.artist)
+                    put("album", item.album)
+                    put("album_artist", item.albumArtist)
+                    put("genre", item.genre)
+                    put("track_number", item.trackNumber)
+                    put("duration_ms", item.durationMs)
+                    put("year", item.year)
+                    put("composer", item.composer)
+                    put("file_size", item.fileSize)
+                    put("sample_rate", item.sampleRateHz)
+                    put("bit_depth", item.bitDepth)
+                    put("bitrate_kbps", item.bitrateKbps)
+                    put("date_added", item.dateAdded)
+                    put("date_modified", item.dateModified)
+                }
+                db.insertWithOnConflict(TABLE_TRACKS, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
 }

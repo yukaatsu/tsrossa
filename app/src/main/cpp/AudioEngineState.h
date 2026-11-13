@@ -14,6 +14,7 @@
 
 #include "AudioCommon.h"
 #include "AudioDecoder.h"
+#include "ParametricEq.h"
 
 struct AtomicFloat {
   std::atomic<float> val{1.0f};
@@ -206,6 +207,9 @@ struct AudioEngineState {
   std::atomic<bool> bitPerfectDirectPassActive{false};
   std::atomic<int> isoTransfersCount{12};
   std::atomic<int> isoPacketsCount{16};
+
+  // Professional 10-Band Parametric EQ State (Zero OS Resampling, Direct USB DSP)
+  ParametricEqState peqState;
 };
 
 extern AudioEngineState g_audioState;

@@ -72,6 +72,83 @@ class LyricsHelperTest {
     }
 
     @Test
+    fun testParseEnhancedLrcExactBugReport() {
+        val lrcBugReport = """
+            v1: <00:23.146>Touch <00:23.831>my <00:24.114>body
+
+            <00:24.762>tender<00:25.552>
+
+            v1: <00:27.671>'Cause <00:28.050>the <00:28.300>feeling <00:29.303>makes <00:29.636>me
+
+            <00:29.919>weak<00:30.765>
+
+            v1: <00:33.482>Kicking <00:34.526>off <00:34.842>the
+        """.trimIndent()
+
+        val parsed = LyricsHelper.parseLrc(lrcBugReport)
+        assertTrue("Enhanced LRC must be recognized as synced", parsed.isSynced)
+        assertTrue("Enhanced LRC must be recognized as word-synced", parsed.isWordSynced)
+        assertEquals(3, parsed.lines.size)
+
+        // Line 1: 'Touch my body tender'
+        val line1 = parsed.lines[0]
+        assertEquals(23.146, line1.timeSec, 0.001)
+        assertEquals("Touch my body tender", line1.text)
+        assertEquals(VoiceType.PRIMARY, line1.voiceType)
+        assertEquals(4, line1.words.size)
+        assertEquals("Touch ", line1.words[0].text)
+        assertEquals(23.146, line1.words[0].startTimeSec, 0.001)
+        assertEquals(23.831, line1.words[0].endTimeSec, 0.001)
+        assertEquals("tender", line1.words[3].text)
+        assertEquals(24.762, line1.words[3].startTimeSec, 0.001)
+        assertEquals(25.552, line1.words[3].endTimeSec, 0.001)
+        assertEquals(25.552, line1.endTimeSec, 0.001)
+
+        // Line 2: ''Cause the feeling makes me weak'
+        val line2 = parsed.lines[1]
+        assertEquals(27.671, line2.timeSec, 0.001)
+        assertEquals("'Cause the feeling makes me weak", line2.text)
+        assertEquals(VoiceType.PRIMARY, line2.voiceType)
+        assertEquals(6, line2.words.size)
+        assertEquals("weak", line2.words[5].text)
+        assertEquals(30.765, line2.endTimeSec, 0.001)
+
+        // Line 3: 'Kicking off the'
+        val line3 = parsed.lines[2]
+        assertEquals(33.482, line3.timeSec, 0.001)
+        assertEquals("Kicking off the", line3.text)
+        assertEquals(3, line3.words.size)
+    }
+
+    @Test
+    fun testParseEnhancedLrcWithDuetAndBackgroundVocals() {
+        val lrcDuet = """
+            [00:10.00]v1: <00:10.00>First <00:11.00>voice
+            [00:15.00]v2: <00:15.00>Second <00:16.00>voice
+            [00:20.00]v3: <00:20.00>All <00:21.00>together
+            [00:25.00]Main vocal [bg: <00:26.00>echo <00:27.00>sound]
+        """.trimIndent()
+
+        val parsed = LyricsHelper.parseLrc(lrcDuet)
+        assertTrue(parsed.isSynced)
+        assertTrue(parsed.isWordSynced)
+        assertEquals(4, parsed.lines.size)
+
+        assertEquals(VoiceType.PRIMARY, parsed.lines[0].voiceType)
+        assertEquals("First voice", parsed.lines[0].text)
+
+        assertEquals(VoiceType.SECONDARY, parsed.lines[1].voiceType)
+        assertEquals("Second voice", parsed.lines[1].text)
+
+        assertEquals(VoiceType.ENSEMBLE, parsed.lines[2].voiceType)
+        assertEquals("All together", parsed.lines[2].text)
+
+        assertEquals(VoiceType.PRIMARY, parsed.lines[3].voiceType)
+        assertEquals("Main vocal", parsed.lines[3].text)
+        assertEquals("echo sound", parsed.lines[3].backgroundText)
+    }
+
+    @Test
     fun testFindLyricsForTrack_extractsEmbeddedFlacVorbisCommentLyrics() {
         val tempFlac = createSyntheticFlacWithVorbisComments(
             mapOf(

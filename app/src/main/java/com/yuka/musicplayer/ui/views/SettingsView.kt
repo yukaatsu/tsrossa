@@ -70,8 +70,11 @@ fun SettingsView(
     updateCheckState: UpdateCheckState = UpdateCheckState.Idle,
     onOpenUpdateDialog: () -> Unit = {},
     onOpenLogs: () -> Unit = {},
+    onOpenDonationModal: () -> Unit = {},
     usbBufferProfile: Int = 1,
     onUsbBufferProfileChange: (Int) -> Unit = {},
+    isPeqActive: Boolean = false,
+    onOpenPeq: () -> Unit = {},
     initialSubPage: SettingsSubPage = SettingsSubPage.ROOT,
     onBackFromRoot: () -> Unit = {},
     surfaceStyle: String = "BLUR_OPACITY",
@@ -188,7 +191,7 @@ fun SettingsView(
                 // 6. About Card
                 SettingsMenuCard(
                     title = "About",
-                    subtitle = "Developer profile, source code & donation support",
+                    subtitle = "Developer profile, Discord bug report, source code & donation",
                     icon = { GlyphInfo(color = accent, modifier = Modifier.size(20.dp)) },
                     onClick = { currentSubPage = SettingsSubPage.ABOUT }
                 )
@@ -279,7 +282,9 @@ fun SettingsView(
                             defaultScreen = defaultScreen,
                             onDefaultScreenChange = onDefaultScreenChange,
                             usbBufferProfile = usbBufferProfile,
-                            onUsbBufferProfileChange = onUsbBufferProfileChange
+                            onUsbBufferProfileChange = onUsbBufferProfileChange,
+                            isPeqActive = isPeqActive,
+                            onOpenPeq = onOpenPeq
                         )
                     }
 
@@ -314,7 +319,9 @@ fun SettingsView(
                     SettingsSubPage.ABOUT -> {
                         DeveloperInfoSection()
 
-                        DonationSupportSection()
+                        DonationSupportSection(
+                            onOpenDonationModal = onOpenDonationModal
+                        )
                     }
 
                     SettingsSubPage.ROOT -> { /* Handled above */ }

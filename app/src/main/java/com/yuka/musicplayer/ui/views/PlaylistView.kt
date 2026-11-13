@@ -593,7 +593,11 @@ fun PlaylistView(
                                         .background(accent.copy(alpha = 0.12f))
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
                                 ) {
-                                    Text("CLEAR", color = accent, fontSize = 9.sp, fontFamily = ModernSansFont, fontWeight = FontWeight.SemiBold)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        GlyphDelete(color = accent, modifier = Modifier.size(11.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("CLEAR", color = accent, fontSize = 9.sp, fontFamily = ModernSansFont, fontWeight = FontWeight.SemiBold)
+                                    }
                                 }
                             }
 
@@ -605,7 +609,11 @@ fun PlaylistView(
                                     .background(accent.copy(alpha = 0.12f))
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
-                                Text("RENAME", color = accent, fontSize = 9.sp, fontFamily = ModernSansFont, fontWeight = FontWeight.SemiBold)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    GlyphEdit(color = accent, modifier = Modifier.size(11.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text("RENAME", color = accent, fontSize = 9.sp, fontFamily = ModernSansFont, fontWeight = FontWeight.SemiBold)
+                                }
                             }
                         }
                     }
@@ -704,7 +712,11 @@ fun PlaylistView(
                             )
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            GlyphRepeat(color = if (isRepActive) accent else m3OnSurfaceVariant(), modifier = Modifier.size(14.dp))
+                            if (repeatMode == RepeatMode.ONE) {
+                                GlyphRepeatOne(color = if (isRepActive) accent else m3OnSurfaceVariant(), modifier = Modifier.size(14.dp))
+                            } else {
+                                GlyphRepeat(color = if (isRepActive) accent else m3OnSurfaceVariant(), modifier = Modifier.size(14.dp))
+                            }
                             Spacer(modifier = Modifier.width(6.dp))
                             val repText = when (repeatMode) {
                                 RepeatMode.OFF -> "Repeat"

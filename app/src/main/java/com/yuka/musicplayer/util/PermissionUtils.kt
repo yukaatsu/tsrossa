@@ -48,9 +48,8 @@ data class StorageVolumeRoot(
 )
 
 /**
- * Discovers the default Music directory plus any mounted external microSD cards or USB OTG drives.
- * Does NOT expose the full internal storage root (/storage/emulated/0), keeping access scoped to Music
- * and external drives.
+ * Discovers the primary Internal Storage root (/storage/emulated/0), standard music/download shortcuts,
+ * plus any mounted external microSD cards or USB OTG drives.
  */
 fun discoverAvailableMusicRoots(context: Context): List<StorageVolumeRoot> {
     val roots = ArrayList<StorageVolumeRoot>()
@@ -64,13 +63,30 @@ fun discoverAvailableMusicRoots(context: Context): List<StorageVolumeRoot> {
         }
     }
 
-    // 1. Scoped Internal Music Directory ONLY (never full internal storage)
+    // 1. Primary Internal Storage Root (/storage/emulated/0) so user can freely navigate any music folder
+    runCatching {
+        val internalRoot = Environment.getExternalStorageDirectory()
+        if (internalRoot != null && internalRoot.exists() && internalRoot.isDirectory) {
+            addRoot("Internal Storage", internalRoot, isExternal = false)
+        }
+    }
+
+    // 1b. Standard Music directory shortcut (/storage/emulated/0/Music)
     val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
         ?: File(Environment.getExternalStorageDirectory(), "Music")
     if (!musicDir.exists()) {
         runCatching { musicDir.mkdirs() }
     }
-    addRoot("Music Folder", musicDir, isExternal = false)
+    addRoot("Music", musicDir, isExternal = false)
+
+    // 1c. Standard Download directory shortcut (/storage/emulated/0/Download)
+    runCatching {
+        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            ?: File(Environment.getExternalStorageDirectory(), "Download")
+        if (downloadDir.exists() && downloadDir.isDirectory) {
+            addRoot("Download", downloadDir, isExternal = false)
+        }
+    }
 
     // 2. Discover removable microSD & USB OTG volumes via StorageManager (API 24+)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {

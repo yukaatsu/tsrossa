@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.BuildConfig
 import com.yuka.musicplayer.R
 import com.yuka.musicplayer.ui.components.GlyphBagiBagi
+import com.yuka.musicplayer.ui.components.GlyphChatTeardropText
+import com.yuka.musicplayer.ui.components.GlyphDiscord
 import com.yuka.musicplayer.ui.components.GlyphGitHub
 import com.yuka.musicplayer.ui.components.TactileBox
 import com.yuka.musicplayer.ui.theme.LocalAccentColor
@@ -237,12 +239,55 @@ fun DeveloperInfoSection(
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Full-width Discord Server Button for Bug Reports & Community Discussion (#NOTE 1)
+            TactileBox(
+                onClick = {
+                    try {
+                        val intent = android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://discord.gg/VJZgdF6Fq8")
+                        ).apply {
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(context, "Could not open Discord link", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                },
+                pressedScale = 0.94f,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(accent.copy(alpha = 0.16f))
+                    .padding(vertical = 10.dp, horizontal = 14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    GlyphDiscord(color = accent, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Discord Server (Lapor Bug & Komunitas)",
+                        color = accent,
+                        fontFamily = ModernSansFont,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-fun DonationSupportSection() {
+fun DonationSupportSection(
+    onOpenDonationModal: () -> Unit = {}
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val accent = LocalAccentColor.current
 
@@ -255,15 +300,45 @@ fun DonationSupportSection() {
                 .padding(14.dp)
         ) {
             Text(
-                text = "Support the continued development of tsrossa and its bit-perfect USB DAC audio engine.",
+                text = "Dukung kelanjutan pengembangan tsrossa & bit-perfect USB DAC audio engine. Kamu juga bisa merequest fitur baru agar diprioritaskan melalui pesan donasi!",
                 color = com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
                 fontFamily = ModernSansFont,
                 fontSize = 11.5.sp,
                 lineHeight = 16.sp
             )
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
+            // Button 1: Open Supporter Wall & Feature Request Modal
+            TactileBox(
+                onClick = onOpenDonationModal,
+                pressedScale = 0.94f,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(accent.copy(alpha = 0.16f))
+                    .padding(vertical = 10.dp, horizontal = 14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    GlyphChatTeardropText(color = accent, modifier = Modifier.size(17.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Lihat Supporter Wall & Request Fitur",
+                        color = accent,
+                        fontFamily = ModernSansFont,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Button 2: Direct Bagi-Bagi Link
             TactileBox(
                 onClick = {
                     try {
@@ -282,7 +357,7 @@ fun DonationSupportSection() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(accent.copy(alpha = 0.16f))
+                    .background(com.yuka.musicplayer.ui.theme.m3SurfaceContainerHigh().copy(alpha = 0.5f))
                     .padding(vertical = 10.dp, horizontal = 14.dp)
             ) {
                 Row(
@@ -290,13 +365,13 @@ fun DonationSupportSection() {
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    GlyphBagiBagi(color = accent, modifier = Modifier.size(18.dp))
+                    GlyphBagiBagi(color = accent, modifier = Modifier.size(17.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Bagi-Bagi (bagibagi.co)",
-                        color = accent,
+                        text = "Buka Bagi-Bagi (bagibagi.co/Yukaatsu)",
+                        color = com.yuka.musicplayer.ui.theme.m3OnSurface(),
                         fontFamily = ModernSansFont,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         fontSize = 12.sp
                     )
                 }

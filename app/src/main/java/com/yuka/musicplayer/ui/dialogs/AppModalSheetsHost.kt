@@ -46,6 +46,10 @@ fun AppModalSheetsHost(
     onDismissHelpPanel: () -> Unit,
     showUpdatePanel: Boolean,
     onDismissUpdatePanel: () -> Unit,
+    showDonationModal: Boolean = false,
+    onDismissDonationModal: () -> Unit = {},
+    showDiscordModal: Boolean = false,
+    onDismissDiscordModal: () -> Unit = {},
     showPermissionDialog: Boolean,
     onDismissPermissionDialog: () -> Unit,
     isNotificationGranted: Boolean,
@@ -150,6 +154,32 @@ fun AppModalSheetsHost(
             onOpenPermissionSettings = { AppUpdateManager.openInstallPermissionSettings(context) },
             canInstallPackages = AppUpdateManager.canInstallPackages(context),
             onClose = onDismissUpdatePanel
+        )
+    }
+
+    // 3.5. Donation & Supporter Wall Panel
+    CyberBottomSheet(
+        visible = showDonationModal,
+        onDismissRequest = onDismissDonationModal,
+        maxHeightFraction = 0.85f,
+        maxWidth = 440.dp
+    ) {
+        DonationModalPanel(
+            context = context,
+            onClose = onDismissDonationModal
+        )
+    }
+
+    // 3.6. Discord Server & Bug Report Community Panel (#NOTE 1)
+    CyberBottomSheet(
+        visible = showDiscordModal,
+        onDismissRequest = onDismissDiscordModal,
+        maxHeightFraction = 0.85f,
+        maxWidth = 440.dp
+    ) {
+        DiscordModalPanel(
+            context = context,
+            onClose = onDismissDiscordModal
         )
     }
 

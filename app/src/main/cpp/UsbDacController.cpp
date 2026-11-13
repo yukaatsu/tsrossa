@@ -911,22 +911,40 @@ bool init_usb_dac_internal(int fd) {
 
   if (!g_audioState.validAlts.empty()) {
     int source_bytes = g_audioState.sourceBitDepth.load() / 8;
-    if (source_bytes == 0)
+    if (source_bytes < 2)
       source_bytes = 2; // Default 16-bit
+    if (source_bytes > 4)
+      source_bytes = 4;
+
+    const bool peq_active_for_alt =
+        g_audioState.peqState.enabled.load(std::memory_order_relaxed);
 
     AltSettingInfo best_alt = g_audioState.validAlts[0];
     int best_score = -1;
     for (const auto &a : g_audioState.validAlts) {
       int score = 0;
-      if (a.subframe_size >= source_bytes) {
-        if (a.subframe_size == 4) score = 600;
-        else if (a.subframe_size == 3) score = 550;
-        else if (a.subframe_size == 2) score = 400;
-        else score = 300;
+      if (!peq_active_for_alt) {
+        // MODE BIT-PERFECT 1:1 MURNI:
+        // Prioritaskan kecocokan 1:1 (16-bit -> 16-bit, 24-bit -> 24-bit, 32-bit -> 32-bit)
+        if (a.subframe_size == source_bytes) {
+          score = 1000; // Exact 1:1 Native Bit-Depth Match!
+        } else if (a.subframe_size > source_bytes) {
+          score = 700 - (a.subframe_size - source_bytes) * 50;
+        } else {
+          score = 100 + a.subframe_size * 50;
+        }
       } else {
-        if (a.subframe_size == 3) score = 250;
-        else if (a.subframe_size == 2) score = 200;
-        else score = 50;
+        // MODE DSP 64-BIT PEQ AKTIF:
+        if (a.subframe_size >= source_bytes) {
+          if (a.subframe_size == 4) score = 600;
+          else if (a.subframe_size == 3) score = 550;
+          else if (a.subframe_size == 2) score = 400;
+          else score = 300;
+        } else {
+          if (a.subframe_size == 3) score = 250;
+          else if (a.subframe_size == 2) score = 200;
+          else score = 50;
+        }
       }
       if (score > best_score) {
         best_score = score;

@@ -313,3 +313,110 @@ Java_com_yuka_musicplayer_audio_AudioEngine_getTimingTelemetry(JNIEnv *env, jobj
   json += "}";
   return env->NewStringUTF(json.c_str());
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_setPeqEnabled(JNIEnv *env, jobject thiz, jboolean enabled) {
+  g_audioState.peqState.enabled.store(enabled == JNI_TRUE, std::memory_order_release);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_isPeqEnabled(JNIEnv *env, jobject thiz) {
+  return g_audioState.peqState.enabled.load(std::memory_order_relaxed) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_setPeqPreampDb(JNIEnv *env, jobject thiz, jfloat preampDb) {
+  g_audioState.peqState.preampDb.store(preampDb, std::memory_order_release);
+  uint32_t sr = g_audioState.sampleRate.load(std::memory_order_relaxed);
+  if (sr > 0) {
+    g_audioState.peqState.updateCoefficients(sr);
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_setPeqBand(
+    JNIEnv *env, jobject thiz,
+    jint bandIndex, jfloat freqHz, jfloat gainDb, jfloat q, jint filterType, jboolean enabled) {
+  if (bandIndex < 0 || bandIndex >= kNumPeqBands) return;
+  auto &p = g_audioState.peqState.bandParams[bandIndex];
+  p.freqHz = static_cast<double>(freqHz);
+  p.gainDb = static_cast<double>(gainDb);
+  p.q = static_cast<double>(q);
+  p.filterType = static_cast<int>(filterType);
+  p.enabled = (enabled == JNI_TRUE);
+
+  uint32_t sr = g_audioState.sampleRate.load(std::memory_order_relaxed);
+  if (sr > 0) {
+    g_audioState.peqState.updateCoefficients(sr);
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_setPeqAllBands(
+    JNIEnv *env, jobject thiz,
+    jfloatArray freqs, jfloatArray gains, jfloatArray qs, jintArray filterTypes) {
+  if (!freqs || !gains || !qs || !filterTypes) return;
+  jsize len = env->GetArrayLength(freqs);
+  if (len > kNumPeqBands) len = kNumPeqBands;
+
+  jfloat *fBuf = env->GetFloatArrayElements(freqs, nullptr);
+  jfloat *gBuf = env->GetFloatArrayElements(gains, nullptr);
+  jfloat *qBuf = env->GetFloatArrayElements(qs, nullptr);
+  jint *tBuf = env->GetIntArrayElements(filterTypes, nullptr);
+
+  for (int i = 0; i < len; ++i) {
+    auto &p = g_audioState.peqState.bandParams[i];
+    p.freqHz = static_cast<double>(fBuf[i]);
+    p.gainDb = static_cast<double>(gBuf[i]);
+    p.q = static_cast<double>(qBuf[i]);
+    p.filterType = static_cast<int>(tBuf[i]);
+    p.enabled = true;
+  }
+
+  env->ReleaseFloatArrayElements(freqs, fBuf, JNI_ABORT);
+  env->ReleaseFloatArrayElements(gains, gBuf, JNI_ABORT);
+  env->ReleaseFloatArrayElements(qs, qBuf, JNI_ABORT);
+  env->ReleaseIntArrayElements(filterTypes, tBuf, JNI_ABORT);
+
+  uint32_t sr = g_audioState.sampleRate.load(std::memory_order_relaxed);
+  if (sr > 0) {
+    g_audioState.peqState.updateCoefficients(sr);
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_setPeqFullConfig(
+    JNIEnv *env, jobject thiz,
+    jboolean enabled, jfloat preampDb,
+    jfloatArray freqs, jfloatArray gains, jfloatArray qs, jintArray filterTypes) {
+  if (!freqs || !gains || !qs || !filterTypes) return;
+  jsize len = env->GetArrayLength(freqs);
+  if (len > kNumPeqBands) len = kNumPeqBands;
+
+  jfloat *fBuf = env->GetFloatArrayElements(freqs, nullptr);
+  jfloat *gBuf = env->GetFloatArrayElements(gains, nullptr);
+  jfloat *qBuf = env->GetFloatArrayElements(qs, nullptr);
+  jint *tBuf = env->GetIntArrayElements(filterTypes, nullptr);
+
+  uint32_t sr = g_audioState.sampleRate.load(std::memory_order_relaxed);
+  g_audioState.peqState.setFullConfig(
+      enabled == JNI_TRUE,
+      preampDb,
+      fBuf,
+      gBuf,
+      qBuf,
+      tBuf,
+      len,
+      sr
+  );
+
+  env->ReleaseFloatArrayElements(freqs, fBuf, JNI_ABORT);
+  env->ReleaseFloatArrayElements(gains, gBuf, JNI_ABORT);
+  env->ReleaseFloatArrayElements(qs, qBuf, JNI_ABORT);
+  env->ReleaseIntArrayElements(filterTypes, tBuf, JNI_ABORT);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yuka_musicplayer_audio_AudioEngine_resetPeqState(JNIEnv *env, jobject thiz) {
+  g_audioState.peqState.resetFilterStates();
+}

@@ -27,14 +27,29 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import android.os.Build
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.RepeatMode as AnimRepeatMode
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.TextStyle
+import com.yuka.musicplayer.util.LyricLine
+import com.yuka.musicplayer.util.LyricWord
+import com.yuka.musicplayer.util.VoiceType
 import android.content.res.Configuration
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -372,6 +387,11 @@ fun TrackView(
     isHardwareVolumeEnabled: Boolean = false,
     onToggleHardwareVolume: ((Boolean) -> Unit)? = null,
     onCollapse: (() -> Unit)? = null,
+    outputBitDepth: Int = 0,
+    outputSampleRate: Int = 0,
+    isDacConnected: Boolean = false,
+    isPeqActive: Boolean = false,
+    onOpenPeq: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val dynamicColor = LocalAccentColor.current
@@ -638,6 +658,7 @@ fun TrackView(
                                 lyrics = parsedLyrics,
                                 isLoading = isLyricsLoading,
                                 playbackPosition = playbackPosition,
+                                isPlaying = isPlaying,
                                 dynamicColor = dynamicColor,
                                 onSeekTo = onSeekTo,
                                 modifier = Modifier.fillMaxHeight(0.85f)
@@ -684,7 +705,12 @@ fun TrackView(
                         onToggleShuffle = onToggleShuffle,
                         onCycleRepeat = onCycleRepeat,
                         onOpenQueue = onOpenQueue,
-                        onSeekTo = onSeekTo
+                        onSeekTo = onSeekTo,
+                        outputBitDepth = outputBitDepth,
+                        outputSampleRate = outputSampleRate,
+                        isDacConnected = isDacConnected,
+                        isPeqActive = isPeqActive,
+                        onOpenPeq = onOpenPeq
                     )
                 }
             }
@@ -708,6 +734,7 @@ fun TrackView(
                             lyrics = parsedLyrics,
                             isLoading = isLyricsLoading,
                             playbackPosition = playbackPosition,
+                            isPlaying = isPlaying,
                             dynamicColor = dynamicColor,
                             onSeekTo = onSeekTo,
                             modifier = Modifier.fillMaxWidth(0.92f)
@@ -747,6 +774,11 @@ fun TrackView(
                     onCycleRepeat = onCycleRepeat,
                     onOpenQueue = onOpenQueue,
                     onSeekTo = onSeekTo,
+                    outputBitDepth = outputBitDepth,
+                    outputSampleRate = outputSampleRate,
+                    isDacConnected = isDacConnected,
+                    isPeqActive = isPeqActive,
+                    onOpenPeq = onOpenPeq,
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -803,11 +835,252 @@ private fun AlbumArtHero(
     }
 }
 
+/**
+ * 60 FPS smooth playback position interpolator using withFrameNanos.
+ * Keeps word-by-word karaoke fills perfectly fluid without stressing background threads.
+ */
+@Composable
+private fun rememberSmoothPlaybackPosition(
+    externalPositionSec: Double,
+    isPlaying: Boolean
+): Double {
+    var smoothPosition by remember { mutableDoubleStateOf(externalPositionSec) }
+    val latestExternalPos by rememberUpdatedState(externalPositionSec)
+
+    LaunchedEffect(externalPositionSec) {
+        if (!isPlaying || kotlin.math.abs(externalPositionSec - smoothPosition) > 0.35) {
+            smoothPosition = externalPositionSec
+        }
+    }
+
+    LaunchedEffect(isPlaying) {
+        if (!isPlaying) return@LaunchedEffect
+        var lastFrameNanos = withFrameNanos { it }
+        while (isActive && isPlaying) {
+            val frameNanos = withFrameNanos { it }
+            val deltaSec = ((frameNanos - lastFrameNanos) / 1_000_000_000.0).coerceIn(0.0, 0.08)
+            lastFrameNanos = frameNanos
+            val candidate = smoothPosition + deltaSec
+            smoothPosition = if (kotlin.math.abs(candidate - latestExternalPos) > 0.45) {
+                latestExternalPos
+            } else {
+                candidate
+            }
+        }
+    }
+
+    return if (isPlaying) smoothPosition else externalPositionSec
+}
+
+/**
+ * Apple Music style breathing dots (• • •) indicating instrumental intro or mid-song breaks.
+ */
+@Composable
+private fun InterludeBreathingDots(
+    dynamicColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "dotsBreathing")
+    val dot1Scale by infiniteTransition.animateFloat(
+        initialValue = 0.65f, targetValue = 1.25f,
+        animationSpec = infiniteRepeatable(tween(750, easing = FastOutSlowInEasing), AnimRepeatMode.Reverse),
+        label = "dot1"
+    )
+    val dot2Scale by infiniteTransition.animateFloat(
+        initialValue = 0.65f, targetValue = 1.25f,
+        animationSpec = infiniteRepeatable(tween(750, delayMillis = 200, easing = FastOutSlowInEasing), AnimRepeatMode.Reverse),
+        label = "dot2"
+    )
+    val dot3Scale by infiniteTransition.animateFloat(
+        initialValue = 0.65f, targetValue = 1.25f,
+        animationSpec = infiniteRepeatable(tween(750, delayMillis = 400, easing = FastOutSlowInEasing), AnimRepeatMode.Reverse),
+        label = "dot3"
+    )
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 14.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .graphicsLayer { scaleX = dot1Scale; scaleY = dot1Scale }
+                .background(dynamicColor, CircleShape)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .graphicsLayer { scaleX = dot2Scale; scaleY = dot2Scale }
+                .background(dynamicColor, CircleShape)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .graphicsLayer { scaleX = dot3Scale; scaleY = dot3Scale }
+                .background(dynamicColor, CircleShape)
+        )
+    }
+}
+
+/**
+ * Word-by-word karaoke line with Apple Music style horizontal fill, micro-lift, and duet alignment.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WordSyncedLyricLine(
+    line: LyricLine,
+    smoothPosition: Double,
+    isActive: Boolean,
+    dynamicColor: Color,
+    onClick: () -> Unit
+) {
+    val alignment = when (line.voiceType) {
+        VoiceType.SECONDARY -> Alignment.End
+        else -> Alignment.Start
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(vertical = 5.dp, horizontal = 8.dp),
+        horizontalAlignment = alignment
+    ) {
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = when (line.voiceType) {
+                VoiceType.SECONDARY -> Arrangement.End
+                else -> Arrangement.Start
+            },
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            for (word in line.words) {
+                val duration = (word.endTimeSec - word.startTimeSec).coerceAtLeast(0.08)
+                val wordProgress = ((smoothPosition - word.startTimeSec) / duration).toFloat().coerceIn(0f, 1f)
+                val isCurrentlySinging = isActive && wordProgress > 0f && wordProgress < 1f
+                val isPast = wordProgress >= 1f
+
+                val liftY = if (isCurrentlySinging) -2f else 0f
+
+                val textColor = when {
+                    !isActive -> m3OnSurface().copy(alpha = 0.40f)
+                    isPast -> Color.White
+                    isCurrentlySinging -> Color.White
+                    else -> Color.White.copy(alpha = 0.35f)
+                }
+
+                Box(
+                    modifier = Modifier
+                        .graphicsLayer {
+                            translationY = liftY
+                        }
+                        .padding(end = 4.dp)
+                ) {
+                    if (isCurrentlySinging) {
+                        Text(
+                            text = word.text,
+                            style = TextStyle(
+                                brush = Brush.horizontalGradient(
+                                    0.0f to Color.White,
+                                    wordProgress to Color.White,
+                                    (wordProgress + 0.06f).coerceAtMost(1f) to Color.White.copy(alpha = 0.35f),
+                                    1.0f to Color.White.copy(alpha = 0.35f)
+                                ),
+                                fontSize = 21.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFamily = ModernSansFont
+                            )
+                        )
+                    } else {
+                        Text(
+                            text = word.text,
+                            color = textColor,
+                            fontSize = if (isActive) 21.sp else 18.sp,
+                            fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Bold,
+                            fontFamily = ModernSansFont
+                        )
+                    }
+                }
+            }
+        }
+
+        if (!line.backgroundText.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "(${line.backgroundText})",
+                color = if (isActive) dynamicColor.copy(alpha = 0.85f) else m3OnSurfaceVariant().copy(alpha = 0.40f),
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = ModernSansFont
+            )
+        }
+    }
+}
+
+/**
+ * Standard line-synced lyric line for songs with line-level timestamps.
+ */
+@Composable
+private fun StandardLyricLine(
+    line: LyricLine,
+    isActive: Boolean,
+    dynamicColor: Color,
+    onClick: () -> Unit
+) {
+    val alignment = when (line.voiceType) {
+        VoiceType.SECONDARY -> Alignment.End
+        else -> Alignment.Start
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(vertical = 5.dp, horizontal = 8.dp),
+        horizontalAlignment = alignment
+    ) {
+        Text(
+            text = line.text.ifEmpty { "♪" },
+            color = if (isActive) Color.White else m3OnSurface().copy(alpha = 0.40f),
+            fontSize = if (isActive) 21.sp else 18.sp,
+            fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Bold,
+            fontFamily = ModernSansFont,
+            textAlign = when (line.voiceType) {
+                VoiceType.SECONDARY -> TextAlign.End
+                else -> TextAlign.Start
+            }
+        )
+
+        if (!line.backgroundText.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "(${line.backgroundText})",
+                color = if (isActive) dynamicColor.copy(alpha = 0.85f) else m3OnSurfaceVariant().copy(alpha = 0.40f),
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = ModernSansFont
+            )
+        }
+    }
+}
+
+/**
+ * Apple Music style "Beauty Lyrics" view with 60 FPS interpolation, word-by-word karaoke sweep,
+ * depth-of-field progressive blur, instrumental breathing dots, and vertical edge vignette mask.
+ */
 @Composable
 private fun NowPlayingLyricsView(
     lyrics: ParsedLyrics?,
     isLoading: Boolean,
     playbackPosition: Double,
+    isPlaying: Boolean,
     dynamicColor: Color,
     onSeekTo: (Double) -> Unit,
     modifier: Modifier = Modifier
@@ -815,17 +1088,19 @@ private fun NowPlayingLyricsView(
     val currentBgMode = LocalBgMode.current
     val isDark = com.yuka.musicplayer.ui.theme.LocalIsDarkTheme.current
     val cardBackground = if (currentBgMode == "BLUR") {
-        if (isDark) Color.Black.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.65f)
+        if (isDark) Color.Black.copy(alpha = 0.60f) else Color.White.copy(alpha = 0.70f)
     } else {
         m3SurfaceContainerLow()
     }
 
+    val smoothPosition = rememberSmoothPlaybackPosition(playbackPosition, isPlaying)
+
     Box(
         modifier = modifier
             .aspectRatio(1f)
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(26.dp))
             .background(cardBackground)
-            .border(0.8.dp, dynamicColor.copy(alpha = 0.25f), RoundedCornerShape(24.dp))
+            .border(0.8.dp, dynamicColor.copy(alpha = 0.22f), RoundedCornerShape(26.dp))
     ) {
         Column(
             modifier = Modifier
@@ -836,8 +1111,8 @@ private fun NowPlayingLyricsView(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(34.dp),
-                horizontalArrangement = Arrangement.Start,
+                    .height(32.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
@@ -854,15 +1129,46 @@ private fun NowPlayingLyricsView(
                         letterSpacing = 0.08.sp
                     )
                 }
+
+                if (lyrics?.isSynced == true) {
+                    val badgeLabel = if (lyrics.isWordSynced) "SYNCED • WORD" else "SYNCED"
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(dynamicColor.copy(alpha = 0.18f))
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = badgeLabel,
+                            color = dynamicColor,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = TerminalFont
+                        )
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
-            // Body Content
+            // Body Content with Top & Bottom Feather Vignette Mask
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .weight(1f)
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                0.00f to Color.Transparent,
+                                0.10f to Color.Black,
+                                0.88f to Color.Black,
+                                1.00f to Color.Transparent
+                            ),
+                            blendMode = BlendMode.DstIn
+                        )
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 if (isLoading) {
@@ -902,48 +1208,80 @@ private fun NowPlayingLyricsView(
                         )
                     }
                 } else if (lyrics.isSynced) {
-                    val activeIndex = LyricsHelper.findActiveLineIndex(lyrics.lines, playbackPosition)
+                    val activeIndex = LyricsHelper.findActiveLineIndex(lyrics.lines, smoothPosition)
                     val listState = rememberLazyListState()
 
                     LaunchedEffect(activeIndex) {
-                        if (activeIndex >= 0) {
+                        if (activeIndex >= 0 && !listState.isScrollInProgress) {
                             listState.animateScrollToItem(
                                 index = (activeIndex - 1).coerceAtLeast(0)
                             )
                         }
                     }
 
+                    // Check for breathing dots conditions
+                    val showIntroDots = lyrics.lines.isNotEmpty() &&
+                            smoothPosition < lyrics.lines.first().timeSec - 0.5 &&
+                            lyrics.lines.first().timeSec >= 3.0
+
+                    val showMidBreakDots = activeIndex >= 0 && activeIndex < lyrics.lines.size - 1 && run {
+                        val activeLine = lyrics.lines[activeIndex]
+                        val nextLine = lyrics.lines[activeIndex + 1]
+                        smoothPosition > activeLine.endTimeSec + 0.8 && (nextLine.timeSec - activeLine.endTimeSec >= 5.0)
+                    }
+
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(vertical = 24.dp, horizontal = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        contentPadding = PaddingValues(top = 28.dp, bottom = 48.dp, start = 8.dp, end = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        horizontalAlignment = Alignment.Start
                     ) {
+                        if (showIntroDots) {
+                            item {
+                                InterludeBreathingDots(dynamicColor = dynamicColor)
+                            }
+                        }
+
                         itemsIndexed(lyrics.lines) { index, line ->
                             val isActive = index == activeIndex
                             val distance = kotlin.math.abs(index - activeIndex)
-                            val targetScale = if (isActive) 1.05f else 0.96f
-                            val targetAlpha = when {
-                                isActive -> 1f
-                                distance == 1 -> 0.65f
-                                distance == 2 -> 0.38f
-                                else -> 0.22f
+
+                            val targetBlur = if (listState.isScrollInProgress) {
+                                0.dp
+                            } else {
+                                when {
+                                    isActive -> 0.dp
+                                    distance == 1 -> 0.8.dp
+                                    distance == 2 -> 2.0.dp
+                                    else -> 3.5.dp
+                                }
                             }
-                            val animScale by animateFloatAsState(
-                                targetValue = targetScale,
-                                animationSpec = spring(dampingRatio = 0.72f, stiffness = 420f),
-                                label = "lyricScale"
-                            )
+
+                            val safeBlur = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) targetBlur else 0.dp
+
+                            val targetAlpha = if (listState.isScrollInProgress) {
+                                0.80f
+                            } else {
+                                when {
+                                    isActive -> 1f
+                                    distance == 1 -> 0.55f
+                                    distance == 2 -> 0.32f
+                                    else -> 0.18f
+                                }
+                            }
+
+                            val targetScale = if (isActive) 1.0f else 0.94f
+
                             val animAlpha by animateFloatAsState(
                                 targetValue = targetAlpha,
-                                animationSpec = tween(durationMillis = 300),
+                                animationSpec = tween(durationMillis = 280),
                                 label = "lyricAlpha"
                             )
-                            val animBg by animateColorAsState(
-                                targetValue = if (isActive) dynamicColor.copy(alpha = 0.14f) else Color.Transparent,
-                                animationSpec = tween(durationMillis = 280),
-                                label = "lyricBg"
+                            val animScale by animateFloatAsState(
+                                targetValue = targetScale,
+                                animationSpec = spring(dampingRatio = 0.75f, stiffness = 400f),
+                                label = "lyricScale"
                             )
 
                             Box(
@@ -954,20 +1292,28 @@ private fun NowPlayingLyricsView(
                                         scaleY = animScale
                                         alpha = animAlpha
                                     }
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(animBg)
-                                    .clickable { onSeekTo(line.timeSec) }
-                                    .padding(vertical = 6.dp, horizontal = 10.dp),
-                                contentAlignment = Alignment.Center
+                                    .blur(safeBlur)
                             ) {
-                                Text(
-                                    text = line.text.ifEmpty { "♪" },
-                                    color = if (isActive) dynamicColor else com.yuka.musicplayer.ui.theme.m3OnSurface(),
-                                    fontSize = if (isActive) 18.sp else 15.sp,
-                                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                                    fontFamily = ModernSansFont,
-                                    textAlign = TextAlign.Center
-                                )
+                                if (line.words.isNotEmpty()) {
+                                    WordSyncedLyricLine(
+                                        line = line,
+                                        smoothPosition = smoothPosition,
+                                        isActive = isActive,
+                                        dynamicColor = dynamicColor,
+                                        onClick = { onSeekTo(line.timeSec) }
+                                    )
+                                } else {
+                                    StandardLyricLine(
+                                        line = line,
+                                        isActive = isActive,
+                                        dynamicColor = dynamicColor,
+                                        onClick = { onSeekTo(line.timeSec) }
+                                    )
+                                }
+                            }
+
+                            if (showMidBreakDots && index == activeIndex) {
+                                InterludeBreathingDots(dynamicColor = dynamicColor)
                             }
                         }
                     }
@@ -978,15 +1324,15 @@ private fun NowPlayingLyricsView(
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(textScrollState)
-                            .padding(vertical = 12.dp, horizontal = 8.dp),
+                            .padding(vertical = 14.dp, horizontal = 10.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
                             text = lyrics.plainText,
                             color = com.yuka.musicplayer.ui.theme.m3OnSurface().copy(alpha = 0.85f),
                             fontFamily = ModernSansFont,
-                            fontSize = 14.5.sp,
-                            lineHeight = 22.sp,
+                            fontSize = 15.sp,
+                            lineHeight = 23.sp,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -1021,6 +1367,11 @@ private fun TrackControlsSection(
     onCycleRepeat: () -> Unit,
     onOpenQueue: () -> Unit,
     onSeekTo: (Double) -> Unit,
+    outputBitDepth: Int = 0,
+    outputSampleRate: Int = 0,
+    isDacConnected: Boolean = false,
+    isPeqActive: Boolean = false,
+    onOpenPeq: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showVolumeModal by remember { mutableStateOf(false) }
@@ -1048,29 +1399,48 @@ private fun TrackControlsSection(
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
 
-        // 2. Left-Aligned Track Metadata (Bold Title & Subtle Artist/Album)
+        // 2. Left-Aligned Track Metadata (Bold Title with Inline Audio Info Button & Subtle Artist/Album)
         Column(
             horizontalAlignment = Alignment.Start,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp)
         ) {
-            @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-            Text(
-                text = track.title,
-                color = com.yuka.musicplayer.ui.theme.m3OnSurface(),
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = ModernSansFont,
-                textAlign = TextAlign.Start,
-                maxLines = 1,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .basicMarquee(
-                        iterations = Int.MAX_VALUE,
-                        delayMillis = 1500,
-                        velocity = 28.dp,
-                        spacing = androidx.compose.foundation.MarqueeSpacing(36.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+                Text(
+                    text = track.title,
+                    color = com.yuka.musicplayer.ui.theme.m3OnSurface(),
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = ModernSansFont,
+                    textAlign = TextAlign.Start,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .weight(1f)
+                        .basicMarquee(
+                            iterations = Int.MAX_VALUE,
+                            delayMillis = 1500,
+                            velocity = 28.dp,
+                            spacing = androidx.compose.foundation.MarqueeSpacing(36.dp)
+                        )
+                )
+
+                TactileBox(
+                    onClick = { showAudioSpecsModal = true },
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(dynamicColor.copy(alpha = 0.16f))
+                ) {
+                    GlyphInfo(
+                        color = dynamicColor,
+                        modifier = Modifier.size(14.dp)
                     )
-            )
+                }
+            }
 
             Spacer(modifier = Modifier.height(4.dp))
 
@@ -1098,72 +1468,6 @@ private fun TrackControlsSection(
                         spacing = androidx.compose.foundation.MarqueeSpacing(36.dp)
                     )
             )
-
-            Spacer(modifier = Modifier.height(6.dp))
-            val audiophileSpecs = remember(
-                track.codec,
-                track.sampleRateHz,
-                track.bitrateKbps,
-                track.isMqa,
-                track.isMqaStudio
-            ) {
-                buildList {
-                    val codecLabel = when {
-                        track.isMqaStudio -> "${track.codec} • MQA STUDIO"
-                        track.isMqa -> "${track.codec} • MQA"
-                        else -> track.codec.uppercase()
-                    }
-                    add(codecLabel)
-                    if (track.sampleRateHz > 0) {
-                        val khz = if (track.sampleRateHz % 1000 == 0) {
-                            "${track.sampleRateHz / 1000} kHz"
-                        } else {
-                            String.format(java.util.Locale.US, "%.1f kHz", track.sampleRateHz / 1000.0)
-                        }
-                        add(khz)
-                    }
-                    if (track.bitrateKbps > 0) {
-                        add("${track.bitrateKbps} kbps")
-                    }
-                }.joinToString("  •  ")
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(com.yuka.musicplayer.ui.theme.m3SubtleFill(0.08f))
-                        .clickable { showAudioSpecsModal = true }
-                        .padding(horizontal = 9.dp, vertical = 5.dp)
-                ) {
-                    Text(
-                        text = audiophileSpecs,
-                        color = dynamicColor.copy(alpha = 0.90f),
-                        fontFamily = TerminalFont,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 10.5.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                TactileBox(
-                    onClick = { showAudioSpecsModal = true },
-                    modifier = Modifier
-                        .size(26.dp)
-                        .clip(CircleShape)
-                        .background(dynamicColor.copy(alpha = 0.16f))
-                ) {
-                    GlyphInfo(
-                        color = dynamicColor,
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
-            }
         }
 
 
@@ -1181,15 +1485,33 @@ private fun TrackControlsSection(
         // 4. Centered Audiophile Telemetry String (Single-Line Dynamic Engine Readout with Tap-to-Cycle)
         var telemetryCycleIndex by remember { mutableIntStateOf(0) }
         val engineArchReadout = if (isHardwareVolumeActive) "32-BIT HARDWARE CHIP" else "64-BIT BIT-PERFECT DSP"
+        val outKhzStr = if (outputSampleRate > 0) {
+            if (outputSampleRate % 1000 == 0) "${outputSampleRate / 1000} kHz" else String.format(java.util.Locale.US, "%.1f kHz", outputSampleRate / 1000.0)
+        } else null
+        val inKhzStr = if (track.sampleRateHz > 0) {
+            if (track.sampleRateHz % 1000 == 0) "${track.sampleRateHz / 1000} kHz" else String.format(java.util.Locale.US, "%.1f kHz", track.sampleRateHz / 1000.0)
+        } else null
+
         val line1 = buildString {
-            append(track.codec.uppercase())
-            if (track.bitrateKbps > 0) append("  •  ${track.bitrateKbps} KBPS")
-            append("  •  $engineArchReadout")
-            if (track.isMqa) append("  •  MQA")
+            if (isDacConnected && outputBitDepth > 0 && outKhzStr != null) {
+                val inBit = if (track.bitDepth > 0) "${track.bitDepth}-BIT / " else ""
+                val inRate = inKhzStr ?: ""
+                append("IN: $inBit$inRate  →  OUT: $outputBitDepth-BIT / $outKhzStr (DIRECT USB)")
+            } else {
+                append(track.codec.uppercase())
+                if (track.bitDepth > 0) append("  •  ${track.bitDepth}-BIT")
+                if (track.bitrateKbps > 0) append("  •  ${track.bitrateKbps} KBPS")
+                append("  •  $engineArchReadout")
+                if (track.isMqa) append("  •  MQA")
+            }
         }
         val line2 = buildString {
             append(engineArchReadout)
-            append("  •  DIRECT USB  •  BIT-PERFECT")
+            if (isPeqActive) {
+                append("  •  PEQ: ON (10-BAND)")
+            } else {
+                append("  •  PEQ: OFF  •  DIRECT USB  •  BIT-PERFECT")
+            }
         }
 
         Box(
@@ -1297,18 +1619,15 @@ private fun TrackControlsSection(
                     .background(if (isRepeatActive) dynamicColor.copy(alpha = 0.22f) else Color.Transparent)
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    GlyphRepeat(
-                        color = if (isRepeatActive) dynamicColor else com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant().copy(alpha = 0.70f),
-                        modifier = Modifier.size(18.dp)
-                    )
                     if (repeatMode == RepeatMode.ONE) {
-                        Text(
-                            text = "1",
+                        GlyphRepeatOne(
                             color = dynamicColor,
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = TerminalFont,
-                            modifier = Modifier.padding(top = 1.dp)
+                            modifier = Modifier.size(18.dp)
+                        )
+                    } else {
+                        GlyphRepeat(
+                            color = if (isRepeatActive) dynamicColor else com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant().copy(alpha = 0.70f),
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
@@ -1392,7 +1711,11 @@ private fun TrackControlsSection(
                             .padding(horizontal = 8.dp, vertical = 6.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            GlyphVolume(color = if (isBitPerfect) dynamicColor else com.yuka.musicplayer.ui.theme.m3OnSurface(), modifier = Modifier.size(16.dp))
+                            if (volPercent == 0 && !isBitPerfect) {
+                                GlyphVolumeMute(color = com.yuka.musicplayer.ui.theme.m3OnSurface().copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+                            } else {
+                                GlyphVolume(color = if (isBitPerfect) dynamicColor else com.yuka.musicplayer.ui.theme.m3OnSurface(), modifier = Modifier.size(16.dp))
+                            }
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = if (isBitPerfect) "0 dBFS" else "$volPercent%",
@@ -1441,6 +1764,31 @@ private fun TrackControlsSection(
                         color = if (showLyrics) dynamicColor else com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
                         modifier = Modifier.size(20.dp)
                     )
+                }
+            }
+
+            // PEQ Button (50dp height aligned with Volume Pill, Lyrics, and Queue)
+            if (onOpenPeq != null) {
+                TactileBox(
+                    onClick = onOpenPeq,
+                    pressedScale = 0.90f,
+                    modifier = Modifier
+                        .size(50.dp)
+                        .clip(RoundedCornerShape(25.dp))
+                        .background(
+                            if (isPeqActive) dynamicColor.copy(alpha = 0.25f)
+                            else m3SurfaceContainer()
+                        )
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        GlyphEqualizer(
+                            color = if (isPeqActive) dynamicColor else com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
 

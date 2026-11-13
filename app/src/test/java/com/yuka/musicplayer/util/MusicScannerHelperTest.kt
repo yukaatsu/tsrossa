@@ -57,14 +57,30 @@ class MusicScannerHelperTest {
     }
 
     @Test
-    fun testNomediaFolderIsIgnored() {
+    fun testNomediaFolderInsideSelectedRootIsScanned() {
         val root = tempFolder.newFolder("MusicNomediaTest")
         val normalDir = File(root, "Normal").apply { mkdirs() }
         File(normalDir, "song1.flac").apply { createNewFile() }
 
-        val ignoredDir = File(root, "Ignored").apply { mkdirs() }
-        File(ignoredDir, ".nomedia").apply { createNewFile() }
-        File(ignoredDir, "secret.flac").apply { createNewFile() }
+        val audiophileDir = File(root, "Audiophile").apply { mkdirs() }
+        File(audiophileDir, ".nomedia").apply { createNewFile() }
+        File(audiophileDir, "hires.flac").apply { createNewFile() }
+
+        val scanned = MusicScannerHelper.scanMusicDirectory(root)
+        assertEquals(2, scanned.size)
+        val names = scanned.map { it.file.name }.toSet()
+        assertTrue(names.contains("song1.flac"))
+        assertTrue(names.contains("hires.flac"))
+    }
+
+    @Test
+    fun testHiddenDotDirectoryIsIgnored() {
+        val root = tempFolder.newFolder("HiddenDirTest")
+        val normalDir = File(root, "Normal").apply { mkdirs() }
+        File(normalDir, "song1.flac").apply { createNewFile() }
+
+        val hiddenDir = File(root, ".thumbnails").apply { mkdirs() }
+        File(hiddenDir, "thumb.flac").apply { createNewFile() }
 
         val scanned = MusicScannerHelper.scanMusicDirectory(root)
         assertEquals(1, scanned.size)

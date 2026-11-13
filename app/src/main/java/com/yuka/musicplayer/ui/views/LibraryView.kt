@@ -2,6 +2,11 @@ package com.yuka.musicplayer.ui.views
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -26,11 +31,13 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,6 +85,7 @@ fun LibraryView(
     sortField: SortField = SortField.TITLE,
     sortOrder: SortOrder = SortOrder.ASCENDING,
     sortMode: LibrarySortMode = LibrarySortMode.NAME_ASC,
+    isMusicDirectoryConfigured: Boolean = true,
     onCycleSort: () -> Unit = {},
     onSelectSort: ((LibrarySortMode) -> Unit)? = null,
     onSelectSortField: ((SortField, SortOrder) -> Unit)? = null,
@@ -362,13 +370,33 @@ fun LibraryView(
 
                 Spacer(modifier = Modifier.width(4.dp))
 
-                // Refresh Icon Button
+                // Refresh Icon Button with 360 rotation animation when scanning
+                val infiniteTransition = rememberInfiniteTransition(label = "rescanSpin")
+                val rescanRotation by infiniteTransition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 360f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 750, easing = LinearEasing)
+                    ),
+                    label = "rescanRotation"
+                )
+
                 TactileBox(
                     onClick = onRefresh,
                     pressedScale = 0.88f,
-                    modifier = Modifier.size(34.dp).clip(CircleShape)
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(if (isScanning) accent.copy(alpha = 0.16f) else Color.Transparent)
                 ) {
-                    GlyphRefresh(color = accent, modifier = Modifier.size(18.dp))
+                    GlyphRefresh(
+                        color = accent,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .graphicsLayer {
+                                rotationZ = if (isScanning) rescanRotation else 0f
+                            }
+                    )
                 }
             }
         }
@@ -543,7 +571,72 @@ fun LibraryView(
         Spacer(modifier = Modifier.height(6.dp))
 
         // 4. Track List with Fast Scroller
-        if (filteredItems.isEmpty()) {
+        if (!isMusicDirectoryConfigured) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(horizontal = 28.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(76.dp)
+                            .clip(CircleShape)
+                            .background(accent.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        GlyphFolderOpen(color = accent, modifier = Modifier.size(40.dp))
+                    }
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Text(
+                        text = "Set Your Music Directory",
+                        color = m3OnSurface(),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = ModernSansFont,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Choose the folder where your audio collection is stored to load your library.",
+                        color = m3OnSurfaceVariant(),
+                        fontSize = 13.sp,
+                        fontFamily = ModernSansFont,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 18.sp
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    TactileBox(
+                        onClick = onChangeDirectory,
+                        pressedScale = 0.94f,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .glassMorphic(
+                                backgroundColor = accent.copy(alpha = 0.22f),
+                                borderColor = accent.copy(alpha = 0.45f),
+                                shape = RoundedCornerShape(50)
+                            )
+                            .padding(horizontal = 20.dp, vertical = 12.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            GlyphFolder(color = accent, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Select Music Directory",
+                                color = accent,
+                                fontSize = 13.5.sp,
+                                fontFamily = ModernSansFont,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (filteredItems.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

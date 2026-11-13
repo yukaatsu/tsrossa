@@ -151,12 +151,15 @@ fun FilterSelectionModalSheet(
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = if (isSelected) "✓  " else "    ",
-                            color = accent,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
+                        Box(
+                            modifier = Modifier.size(22.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                GlyphCheck(color = accent, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = name,
                             color = if (isSelected) accent else m3OnSurface(),
