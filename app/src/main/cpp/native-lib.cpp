@@ -47,6 +47,7 @@ Java_com_yuka_musicplayer_audio_AudioEngine_pauseAudio(JNIEnv *env, jobject thiz
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_yuka_musicplayer_audio_AudioEngine_resumeAudio(JNIEnv *env, jobject thiz) {
+  ApiMutexLock lock(__func__);
   return resume_audio_internal() ? JNI_TRUE : JNI_FALSE;
 }
 

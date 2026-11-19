@@ -168,6 +168,61 @@ class UsbAudioController(context: Context) {
         }
     }
 
+    /**
+     * Force-reconnects the active USB DAC by discarding any stale UsbDeviceConnection/FD
+     * and obtaining a fresh FileDescriptor from UsbManager without prompting the user.
+     * Essential for Tier-2 self-healing after USB stall or kernel altsetting disassociation.
+     */
+    fun forceReconnectActiveDevice(): Boolean {
+        synchronized(usbLock) {
+            val deviceList = usbManager.deviceList
+            val audioDevice = deviceList.values.find { isAudioDevice(it) } ?: run {
+                log("forceReconnectActiveDevice: No audio device found in deviceList (${deviceList.size} devices).")
+                return false
+            }
+            if (!usbManager.hasPermission(audioDevice)) {
+                log("forceReconnectActiveDevice: Permission not granted for ${audioDevice.productName}. Falling back to scanAndRequestPermission.")
+                scanAndRequestPermission()
+                return false
+            }
+
+            log("forceReconnectActiveDevice: Forcing reconnect for ${audioDevice.productName} (${audioDevice.deviceName}) to recover from stall/stale FD...")
+            closeDevice()
+            try {
+                Thread.sleep(60)
+            } catch (_: InterruptedException) {}
+
+            try {
+                val conn = usbManager.openDevice(audioDevice)
+                if (conn != null) {
+                    usbDeviceConnection = conn
+                    openedDeviceName = audioDevice.deviceName
+                    val fd = conn.fileDescriptor
+                    log("forceReconnectActiveDevice: Opened fresh connection FD=$fd for ${audioDevice.productName}")
+                    val claimedInterfaceIds = mutableSetOf<Int>()
+                    for (i in 0 until audioDevice.interfaceCount) {
+                        val iface = audioDevice.getInterface(i)
+                        if (!claimedInterfaceIds.add(iface.id)) continue
+                        if (iface.interfaceClass == UsbConstants.USB_CLASS_AUDIO) {
+                            try {
+                                conn.claimInterface(iface, true)
+                            } catch (_: Exception) {}
+                        }
+                    }
+                    onDeviceReady?.invoke(fd)
+                    return true
+                } else {
+                    log("forceReconnectActiveDevice: usbManager.openDevice returned null!")
+                    return false
+                }
+            } catch (e: Exception) {
+                log("forceReconnectActiveDevice failed: ${e.message}")
+                closeDevice()
+                return false
+            }
+        }
+    }
+
     private fun isAudioDevice(device: UsbDevice): Boolean {
         for (i in 0 until device.interfaceCount) {
             if (device.getInterface(i).interfaceClass == UsbConstants.USB_CLASS_AUDIO) {

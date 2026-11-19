@@ -1,10 +1,48 @@
 package com.yuka.musicplayer.model
 
 import android.graphics.Bitmap
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import java.io.File
 
 enum class ViewState { LIBRARY, PLAYLIST, TRACK, SETTINGS }
+
+enum class LibraryTabMode(val displayName: String) {
+    ALL_SONGS("All Songs"),
+    FOLDERS("Folders")
+}
+
+enum class FolderSortField(val displayName: String) {
+    NAME("Folder Name"),
+    TRACK_COUNT("Track Count"),
+    DATE_MODIFIED("Date Modified")
+}
+
+@Immutable
+data class MusicFolderNode(
+    val directory: File,
+    val directoryPath: String = directory.path,
+    val relativePath: String,
+    val name: String,
+    val directMusicFiles: List<File>,
+    val recursivePlayableFiles: List<File> = emptyList(),
+    val directMusicCount: Int,
+    val recursiveMusicCount: Int,
+    val subfoldersCount: Int,
+    val lastModified: Long
+)
+
+@Immutable
+data class FolderBrowserSlice(
+    val currentDirectory: File,
+    val isRoot: Boolean,
+    val parentDirectory: File?,
+    val subfolders: List<MusicFolderNode>,
+    val directTracks: List<ScannedMusicItem>,
+    val allRecursivePlayableFiles: List<File> = emptyList(),
+    val totalDirectMusicCount: Int,
+    val totalRecursiveMusicCount: Int
+)
 
 enum class PlaybackSource { LIBRARY, PLAYLIST }
 
@@ -89,12 +127,14 @@ fun sortScannedMusicItems(items: List<ScannedMusicItem>, mode: LibrarySortMode):
     }
 }
 
+@Immutable
 data class AltSettingInfo(
     val interfaceNum: Int,
     val altSetting: Int,
     val subframeSize: Int
 )
 
+@Immutable
 data class RefusedTrackEntry(
     val filename: String,
     val bitDepth: Int,
@@ -102,6 +142,7 @@ data class RefusedTrackEntry(
     val reason: String
 )
 
+@Immutable
 data class TrackInfo(
     val file: File,
     val title: String,

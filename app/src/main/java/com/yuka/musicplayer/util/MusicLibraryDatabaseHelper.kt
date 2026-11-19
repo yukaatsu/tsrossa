@@ -64,70 +64,96 @@ class MusicLibraryDatabaseHelper private constructor(context: Context) :
         onCreate(db)
     }
 
+    private fun resolveRootPath(rootDir: File): String {
+        return runCatching { rootDir.canonicalPath }.getOrDefault(rootDir.absolutePath)
+    }
+
     /**
      * Loads all cached tracks for [rootDir] immediately from SQLite.
      */
     fun getCachedTracksForRoot(rootDir: File): List<ScannedMusicItem> {
-        val rootPath = rootDir.absolutePath
+        val rootPath = resolveRootPath(rootDir)
+        val rawPath = rootDir.absolutePath
         val result = ArrayList<ScannedMusicItem>(256)
         val db = readableDatabase
-        db.query(
-            TABLE_TRACKS,
-            null,
-            "root_path = ?",
-            arrayOf(rootPath),
-            null,
-            null,
-            null
-        ).use { cursor ->
-            val idxFilePath = cursor.getColumnIndexOrThrow("file_path")
-            val idxSupported = cursor.getColumnIndexOrThrow("is_supported")
-            val idxFormat = cursor.getColumnIndexOrThrow("format_label")
-            val idxBreadcrumb = cursor.getColumnIndexOrThrow("breadcrumb")
-            val idxTitle = cursor.getColumnIndexOrThrow("title")
-            val idxArtist = cursor.getColumnIndexOrThrow("artist")
-            val idxAlbum = cursor.getColumnIndexOrThrow("album")
-            val idxAlbumArtist = cursor.getColumnIndexOrThrow("album_artist")
-            val idxGenre = cursor.getColumnIndexOrThrow("genre")
-            val idxTrackNum = cursor.getColumnIndexOrThrow("track_number")
-            val idxDuration = cursor.getColumnIndexOrThrow("duration_ms")
-            val idxYear = cursor.getColumnIndexOrThrow("year")
-            val idxComposer = cursor.getColumnIndexOrThrow("composer")
-            val idxFileSize = cursor.getColumnIndexOrThrow("file_size")
-            val idxSampleRate = cursor.getColumnIndexOrThrow("sample_rate")
-            val idxBitDepth = cursor.getColumnIndexOrThrow("bit_depth")
-            val idxBitrate = cursor.getColumnIndexOrThrow("bitrate_kbps")
-            val idxDateAdded = cursor.getColumnIndexOrThrow("date_added")
-            val idxDateModified = cursor.getColumnIndexOrThrow("date_modified")
+        
+        fun queryFor(path: String) {
+            db.query(
+                TABLE_TRACKS,
+                null,
+                "root_path = ?",
+                arrayOf(path),
+                null,
+                null,
+                null
+            ).use { cursor ->
+                val idxFilePath = cursor.getColumnIndexOrThrow("file_path")
+                val idxSupported = cursor.getColumnIndexOrThrow("is_supported")
+                val idxFormat = cursor.getColumnIndexOrThrow("format_label")
+                val idxBreadcrumb = cursor.getColumnIndexOrThrow("breadcrumb")
+                val idxTitle = cursor.getColumnIndexOrThrow("title")
+                val idxArtist = cursor.getColumnIndexOrThrow("artist")
+                val idxAlbum = cursor.getColumnIndexOrThrow("album")
+                val idxAlbumArtist = cursor.getColumnIndexOrThrow("album_artist")
+                val idxGenre = cursor.getColumnIndexOrThrow("genre")
+                val idxTrackNum = cursor.getColumnIndexOrThrow("track_number")
+                val idxDuration = cursor.getColumnIndexOrThrow("duration_ms")
+                val idxYear = cursor.getColumnIndexOrThrow("year")
+                val idxComposer = cursor.getColumnIndexOrThrow("composer")
+                val idxFileSize = cursor.getColumnIndexOrThrow("file_size")
+                val idxSampleRate = cursor.getColumnIndexOrThrow("sample_rate")
+                val idxBitDepth = cursor.getColumnIndexOrThrow("bit_depth")
+                val idxBitrate = cursor.getColumnIndexOrThrow("bitrate_kbps")
+                val idxDateAdded = cursor.getColumnIndexOrThrow("date_added")
+                val idxDateModified = cursor.getColumnIndexOrThrow("date_modified")
 
-            while (cursor.moveToNext()) {
-                val path = cursor.getString(idxFilePath)
-                result.add(
-                    ScannedMusicItem.createWithPrecomputedDisplay(
-                        file = File(path),
-                        isSupported = cursor.getInt(idxSupported) == 1,
-                        formatLabel = cursor.getString(idxFormat),
-                        breadcrumb = cursor.getString(idxBreadcrumb),
-                        title = cursor.getString(idxTitle),
-                        artist = cursor.getString(idxArtist),
-                        album = cursor.getString(idxAlbum),
-                        albumArtist = cursor.getString(idxAlbumArtist),
-                        genre = cursor.getString(idxGenre),
-                        trackNumber = cursor.getInt(idxTrackNum),
-                        durationMs = cursor.getLong(idxDuration),
-                        year = cursor.getInt(idxYear),
-                        composer = cursor.getString(idxComposer),
-                        fileSize = cursor.getLong(idxFileSize),
-                        sampleRateHz = cursor.getInt(idxSampleRate),
-                        bitDepth = cursor.getInt(idxBitDepth),
-                        bitrateKbps = cursor.getInt(idxBitrate),
-                        dateAdded = cursor.getLong(idxDateAdded),
-                        dateModified = cursor.getLong(idxDateModified)
+                while (cursor.moveToNext()) {
+                    val filePath = cursor.getString(idxFilePath)
+                    result.add(
+                        ScannedMusicItem.createWithPrecomputedDisplay(
+                            file = File(filePath),
+                            isSupported = cursor.getInt(idxSupported) == 1,
+                            formatLabel = cursor.getString(idxFormat),
+                            breadcrumb = cursor.getString(idxBreadcrumb),
+                            title = cursor.getString(idxTitle),
+                            artist = cursor.getString(idxArtist),
+                            album = cursor.getString(idxAlbum),
+                            albumArtist = cursor.getString(idxAlbumArtist),
+                            genre = cursor.getString(idxGenre),
+                            trackNumber = cursor.getInt(idxTrackNum),
+                            durationMs = cursor.getLong(idxDuration),
+                            year = cursor.getInt(idxYear),
+                            composer = cursor.getString(idxComposer),
+                            fileSize = cursor.getLong(idxFileSize),
+                            sampleRateHz = cursor.getInt(idxSampleRate),
+                            bitDepth = cursor.getInt(idxBitDepth),
+                            bitrateKbps = cursor.getInt(idxBitrate),
+                            dateAdded = cursor.getLong(idxDateAdded),
+                            dateModified = cursor.getLong(idxDateModified)
+                        )
                     )
-                )
+                }
             }
         }
+
+        queryFor(rootPath)
+        if (result.isEmpty() && rawPath != rootPath) {
+            queryFor(rawPath)
+        }
         return result
+    }
+
+    /**
+     * Fast count of cached tracks for [rootDir] without parsing rows.
+     */
+    fun getCachedTrackCountForRoot(rootDir: File): Int {
+        val rootPath = resolveRootPath(rootDir)
+        val rawPath = rootDir.absolutePath
+        val db = readableDatabase
+        val query = "SELECT COUNT(*) FROM $TABLE_TRACKS WHERE root_path = ? OR root_path = ?"
+        return db.rawQuery(query, arrayOf(rootPath, rawPath)).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
     }
 
     /**
@@ -139,7 +165,7 @@ class MusicLibraryDatabaseHelper private constructor(context: Context) :
         pathsToDelete: Collection<String>
     ) {
         if (itemsToUpsert.isEmpty() && pathsToDelete.isEmpty()) return
-        val rootPath = rootDir.absolutePath
+        val rootPath = resolveRootPath(rootDir)
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -182,11 +208,12 @@ class MusicLibraryDatabaseHelper private constructor(context: Context) :
      * Used for full manual library rescan to eliminate stale or ghost entries.
      */
     fun replaceAllTracksForRoot(rootDir: File, freshItems: List<ScannedMusicItem>) {
-        val rootPath = rootDir.absolutePath
+        val rootPath = resolveRootPath(rootDir)
+        val rawPath = rootDir.absolutePath
         val db = writableDatabase
         db.beginTransaction()
         try {
-            db.delete(TABLE_TRACKS, "root_path = ?", arrayOf(rootPath))
+            db.delete(TABLE_TRACKS, "root_path = ? OR root_path = ?", arrayOf(rootPath, rawPath))
             for (item in freshItems) {
                 val cv = ContentValues().apply {
                     put("file_path", item.file.absolutePath)

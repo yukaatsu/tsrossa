@@ -7,6 +7,11 @@ import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import com.yuka.musicplayer.util.isAllFilesAccessGranted
+import com.yuka.musicplayer.util.openAllFilesAccessSettings
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -152,13 +157,7 @@ fun FolderPickerDialog(
 
     var browsingDir by remember(visible, currentPath) {
         val initial = if (currentPath.exists() && currentPath.isDirectory && currentPath.canRead()) {
-            val hasSubdirs = currentPath.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }?.isNotEmpty() == true
-            val hasAudio = currentPath.listFiles { f -> f.isFile && f.extension.lowercase() in AUDIO_EXTENSIONS }?.isNotEmpty() == true
-            if (!hasSubdirs && !hasAudio) {
-                Environment.getExternalStorageDirectory()?.takeIf { it.exists() && it.canRead() } ?: currentPath
-            } else {
-                currentPath
-            }
+            currentPath
         } else {
             Environment.getExternalStorageDirectory()?.takeIf { it.exists() && it.canRead() }
                 ?: availableRoots.firstOrNull()?.directory
@@ -193,8 +192,12 @@ fun FolderPickerDialog(
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             }
+            val sp = context.getSharedPreferences("music_player_prefs", Context.MODE_PRIVATE)
+            sp.edit().putString("music_root_tree_uri", uri.toString()).apply()
+
             val resolved = resolvePhysicalPathFromUri(uri)
             if (resolved != null) {
+                sp.edit().putString("music_root_tree_path", resolved).apply()
                 val f = File(resolved)
                 if (f.exists() && f.isDirectory) {
                     onSelectDirectory(f)
@@ -203,26 +206,62 @@ fun FolderPickerDialog(
         }
     }
 
-    val subdirectories = remember(browsingDir) {
-        runCatching {
-            if (browsingDir.exists() && browsingDir.canRead() && browsingDir.isDirectory) {
-                browsingDir.listFiles { file ->
-                    file.isDirectory && !file.name.startsWith(".") && file.canRead()
-                }?.sortedBy { it.name.lowercase() } ?: emptyList()
-            } else {
-                emptyList()
+    var allFilesGranted by remember { mutableStateOf(isAllFilesAccessGranted(context)) }
+    var resumeRefreshNonce by remember { mutableIntStateOf(0) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                allFilesGranted = isAllFilesAccessGranted(context)
+                resumeRefreshNonce++
             }
-        }.getOrDefault(emptyList())
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
-    val audioFileCountInCurrentDir = remember(browsingDir) {
-        runCatching {
-            if (browsingDir.exists() && browsingDir.canRead() && browsingDir.isDirectory) {
-                browsingDir.listFiles { f ->
-                    f.isFile && f.extension.lowercase() in AUDIO_EXTENSIONS
-                }?.size ?: 0
-            } else 0
-        }.getOrDefault(0)
+    val subdirectories by produceState<List<File>>(initialValue = emptyList(), key1 = browsingDir, key2 = resumeRefreshNonce) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                if (browsingDir.exists() && browsingDir.canRead() && browsingDir.isDirectory) {
+                    browsingDir.listFiles { file ->
+                        file.isDirectory && !file.name.startsWith(".") && file.canRead()
+                    }?.sortedBy { it.name.lowercase() } ?: emptyList()
+                } else {
+                    emptyList()
+                }
+            }.getOrDefault(emptyList())
+        }
+    }
+
+    val audioFileCountInCurrentDir by produceState<Int>(initialValue = 0, key1 = browsingDir, key2 = resumeRefreshNonce) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                if (browsingDir.exists() && browsingDir.canRead() && browsingDir.isDirectory) {
+                    val direct = browsingDir.listFiles { f ->
+                        f.isFile && f.extension.lowercase() in AUDIO_EXTENSIONS
+                    }?.size ?: 0
+                    if (direct > 0) {
+                        direct
+                    } else {
+                        var msCount = 0
+                        val cr = context.contentResolver
+                        val projection = arrayOf(MediaStore.Audio.Media._ID)
+                        val selection = "${MediaStore.Audio.Media.DATA} LIKE ? ESCAPE '\\' AND ${MediaStore.Audio.Media.DATA} NOT LIKE ? ESCAPE '\\'"
+                        val dirPath = browsingDir.absolutePath.trimEnd('/', '\\')
+                        val escapedPath = com.yuka.musicplayer.util.MusicScannerHelper.escapeSqlLike(dirPath)
+                        val args = arrayOf("$escapedPath/%", "$escapedPath/%/%")
+                        cr.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, selection, args, null)?.use {
+                            msCount = it.count
+                        }
+                        msCount
+                    }
+                } else 0
+            }.getOrDefault(0)
+        }
     }
 
     val activeRootVolume = remember(browsingDir, availableRoots) {
@@ -345,6 +384,52 @@ fun FolderPickerDialog(
                             color = accent,
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.SemiBold,
+                            fontFamily = ModernSansFont
+                        )
+                    }
+                }
+            }
+
+            // Android 11+ All Files Access Recommendation Banner
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !allFilesGranted) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFFFF9100).copy(alpha = 0.12f))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text(
+                            text = "Android 11+ Full Access Recommended",
+                            color = Color(0xFFFF9100),
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = ModernSansFont
+                        )
+                        Text(
+                            text = "Enable 'All Files Access' to ensure folders with deleted .nomedia and direct FLAC files are never hidden by Android system storage.",
+                            color = m3OnSurfaceVariant(),
+                            fontSize = 10.5.sp,
+                            lineHeight = 14.sp,
+                            fontFamily = ModernSansFont
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Color(0xFFFF9100).copy(alpha = 0.22f))
+                            .clickable { openAllFilesAccessSettings(context) }
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "Enable",
+                            color = Color(0xFFFF9100),
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
                             fontFamily = ModernSansFont
                         )
                     }

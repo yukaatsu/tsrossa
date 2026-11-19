@@ -132,6 +132,7 @@ import com.yuka.musicplayer.ui.theme.SakuraPink
 import com.yuka.musicplayer.ui.theme.VividViolet
 import com.yuka.musicplayer.ui.theme.SubtleMint
 import com.yuka.musicplayer.ui.dialogs.WarmupConfirmDialog
+import com.yuka.musicplayer.ui.dialogs.PeqDspSwitchNoticeDialog
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -141,27 +142,9 @@ import kotlin.math.roundToInt
 
 @Composable
 fun rememberIsKeyboardOpen(): Boolean {
-    val view = androidx.compose.ui.platform.LocalView.current
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
-    var isKeyboardVisibleByLayout by remember { mutableStateOf(false) }
-
-    DisposableEffect(view) {
-        val listener = android.view.ViewTreeObserver.OnGlobalLayoutListener {
-            val rect = android.graphics.Rect()
-            view.getWindowVisibleDisplayFrame(rect)
-            val screenHeight = view.rootView.height
-            val keypadHeight = screenHeight - rect.bottom
-            val rootInsets = androidx.core.view.ViewCompat.getRootWindowInsets(view)
-            val imeVisibleByInsets = rootInsets?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
-            isKeyboardVisibleByLayout = imeVisibleByInsets || (screenHeight > 0 && keypadHeight > screenHeight * 0.15)
-        }
-        view.viewTreeObserver.addOnGlobalLayoutListener(listener)
-        onDispose {
-            view.viewTreeObserver.removeOnGlobalLayoutListener(listener)
-        }
-    }
-    return isKeyboardVisibleByLayout || imeBottom > 0
+    return imeBottom > 0
 }
 
 class MainActivity : ComponentActivity() {
@@ -277,10 +260,12 @@ fun KewApp(audioEngine: AudioEngine) {
     val permState = com.yuka.musicplayer.util.rememberAppPermissionState(context)
     val isNotificationGranted = permState.isNotificationGranted
     val isStorageGranted = permState.isStorageGranted
+    val isAllFilesAccessGranted = permState.isAllFilesAccessGranted
     val isDndGranted = permState.isDndGranted
     val isBatteryOptimizationIgnored = permState.isBatteryOptimizationIgnored
     val requestNotificationPermission = permState.requestNotificationPermission
     val requestStoragePermission = permState.requestStoragePermission
+    val requestAllFilesAccessPermission = permState.requestAllFilesAccessPermission
     val requestDndPermission = permState.requestDndPermission
     val requestBatteryOptimizationPermission = permState.requestBatteryOptimizationPermission
 
@@ -308,6 +293,9 @@ fun KewApp(audioEngine: AudioEngine) {
     }
     var surfaceStyle by remember {
         mutableStateOf(sharedPref.getString("surface_style", "BLUR_OPACITY") ?: "BLUR_OPACITY")
+    }
+    var modalBlurEnabled by remember {
+        mutableStateOf(sharedPref.getBoolean("modal_blur_enabled", true))
     }
     var isNowPlayingExpanded by remember {
         mutableStateOf(
@@ -373,44 +361,12 @@ fun KewApp(audioEngine: AudioEngine) {
                 context.contentResolver.openOutputStream(uri)?.use { stream ->
                     stream.write(pendingPeqExportJson!!.toByteArray(Charsets.UTF_8))
                 }
-                Toast.makeText(context, "File preset PEQ berhasil disimpan", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "PEQ preset file saved", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                Toast.makeText(context, "Gagal menyimpan file preset: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Failed to save preset file: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
         pendingPeqExportJson = null
-    }
-
-    val importPeqJsonLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            try {
-                val rawText = context.contentResolver.openInputStream(uri)?.use { stream ->
-                    stream.bufferedReader().use { it.readText() }
-                } ?: ""
-                val (updatedList, newlyImported) = PeqPreferencesHelper.importUserPresets(sharedPref, rawText)
-                if (newlyImported.isNotEmpty()) {
-                    userPeqPresets = updatedList
-                    val active = newlyImported.first()
-                    val updatedConfig = peqConfig.copy(
-                        enabled = true,
-                        selectedPresetId = active.id,
-                        preampDb = active.preampDb,
-                        autoPreampEnabled = active.autoPreampEnabled,
-                        bands = active.bands
-                    )
-                    peqConfig = updatedConfig
-                    PeqPreferencesHelper.save(sharedPref, updatedConfig)
-                    PeqPreferencesHelper.applyToEngine(audioEngine, updatedConfig)
-                    Toast.makeText(context, "Berhasil meng-import ${newlyImported.size} preset ('${active.name}')", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "Format file preset PEQ tidak dikenali", Toast.LENGTH_SHORT).show()
-                }
-            } catch (e: Exception) {
-                Toast.makeText(context, "Gagal membaca file: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
-        }
     }
 
     // Screen Pinning / Lock Task Mode State
@@ -571,6 +527,7 @@ fun KewApp(audioEngine: AudioEngine) {
     }
 
     var currentTrack by remember { mutableStateOf<TrackInfo?>(com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack) }
+    var isPlaying by remember { mutableStateOf(com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying || audioEngine.isPlaying()) }
     val isNowPlayingVisible = isNowPlayingExpanded && currentTrack != null
 
     androidx.activity.compose.BackHandler(enabled = viewState == ViewState.SETTINGS && !isNowPlayingVisible) {
@@ -631,32 +588,164 @@ fun KewApp(audioEngine: AudioEngine) {
 
     var searchQuery by remember { mutableStateOf("") }
 
+    fun resolveConnectedDacProductName(): String {
+        if (!isDacConnected) return ""
+        return try {
+            val info = org.json.JSONObject(audioEngine.getDacInfo())
+            info.optString("productName", "").trim()
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    fun getDefaultVolumeForMode(isDac: Boolean, @Suppress("UNUSED_PARAMETER") isHwVol: Boolean = false): Float = when {
+        isDac -> 0.50f   // Safe comfortable reference for BOTH Hybrid Hardware UAC & 64-bit DSP (NEVER 100% blast!)
+        else -> 0.05f    // Else = 5%
+    }
+
+    fun buildVolumePrefKey(dacName: String, isDac: Boolean): String {
+        if (!isDac || dacName.isBlank()) return "vol_mode_internal_else"
+        val cleanName = dacName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+        return "vol_dac_$cleanName"
+    }
+
+    fun loadSavedVolumeForDac(dacName: String, isDac: Boolean): Float {
+        val fallback = getDefaultVolumeForMode(isDac, false)
+        if (!isDac || dacName.isBlank()) return fallback
+        val unifiedKey = buildVolumePrefKey(dacName, true)
+        if (sharedPref.contains(unifiedKey)) {
+            return sharedPref.getFloat(unifiedKey, fallback).coerceIn(0f, 1f)
+        }
+        val cleanName = dacName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+        val legacyDspKey = "vol_dac_${cleanName}_dsp64"
+        if (sharedPref.contains(legacyDspKey)) {
+            return sharedPref.getFloat(legacyDspKey, fallback).coerceIn(0f, 1f)
+        }
+        return fallback
+    }
+
     var isHardwareVolumeActive by remember { mutableStateOf(false) }
     var isHardwareVolumeSupported by remember { mutableStateOf(false) }
     var isHardwareVolumeEnabled by remember {
         mutableStateOf(sharedPref.getBoolean("dac_hw_volume_enabled", false))
     }
 
-    val onToggleHardwareVolume: (Boolean) -> Unit = remember {
-        { enabled ->
-            isHardwareVolumeEnabled = enabled
-            sharedPref.edit().putBoolean("dac_hw_volume_enabled", enabled).apply()
-            audioEngine.setHardwareVolumeEnabled(enabled)
+    var activeVolumePrefKey by remember {
+        val initDacName = resolveConnectedDacProductName()
+        mutableStateOf(buildVolumePrefKey(initDacName, isDacConnected))
+    }
+
+    var currentVolume by remember {
+        val initDacName = resolveConnectedDacProductName()
+        mutableFloatStateOf(loadSavedVolumeForDac(initDacName, isDacConnected))
+    }
+
+    var isProgrammaticVolumeSwitch by remember { mutableStateOf(false) }
+
+    var showPeqDspNoticeDialog by remember { mutableStateOf(false) }
+    var peqDspNoticeMessage by remember { mutableStateOf("") }
+
+    val applyVolumeModeAtomic: (Boolean) -> Unit = remember {
+        { enableHardwareUac ->
+            isHardwareVolumeEnabled = enableHardwareUac
+            sharedPref.edit().putBoolean("dac_hw_volume_enabled", enableHardwareUac).apply()
+
+            // Preserve the user's exact volume level across Hybrid Hardware UAC <-> 64-Bit DSP switches!
+            // C++ Attenuate-First / URB-Drain Handshake guarantees zero 100% volume spike in both directions.
+            val preservedVol = currentVolume.coerceIn(0f, 1f)
+            audioEngine.setSoftwareVolume(preservedVol)
+            audioEngine.setHardwareVolumeEnabled(enableHardwareUac)
             isHardwareVolumeActive = audioEngine.isHardwareVolumeActive()
             isHardwareVolumeSupported = audioEngine.isHardwareVolumeSupported()
         }
     }
 
-    LaunchedEffect(isHardwareVolumeEnabled) {
-        audioEngine.setHardwareVolumeEnabled(isHardwareVolumeEnabled)
+    val onToggleHardwareVolume: (Boolean) -> Unit = remember {
+        { enabled ->
+            if (enabled && peqConfig.enabled) {
+                peqDspNoticeMessage = "Hardware UAC mode cannot be enabled while Parametric Equalizer (PEQ) is active. Turn off PEQ first in the DSP menu to use Hardware UAC."
+                showPeqDspNoticeDialog = true
+            } else {
+                applyVolumeModeAtomic(enabled)
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
+        audioEngine.setSoftwareVolume(currentVolume)
         audioEngine.setHardwareVolumeEnabled(isHardwareVolumeEnabled)
         while(true) {
             isHardwareVolumeActive = audioEngine.isHardwareVolumeActive()
             isHardwareVolumeSupported = audioEngine.isHardwareVolumeSupported()
             delay(500)
+        }
+    }
+
+    LaunchedEffect(isDacConnected) {
+        val dacName = resolveConnectedDacProductName()
+        val newKey = buildVolumePrefKey(dacName, isDacConnected)
+        if (activeVolumePrefKey != newKey) {
+            activeVolumePrefKey = newKey
+            val targetVol = loadSavedVolumeForDac(dacName, isDacConnected)
+            isProgrammaticVolumeSwitch = true
+            currentVolume = targetVol
+            audioEngine.setSoftwareVolume(targetVol)
+        }
+    }
+
+    var volumeSaveJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    LaunchedEffect(currentVolume) {
+        audioEngine.setSoftwareVolume(currentVolume)
+        if (isProgrammaticVolumeSwitch) {
+            isProgrammaticVolumeSwitch = false
+            return@LaunchedEffect
+        }
+        val keyToSave = activeVolumePrefKey
+        val canPersistForDac = isDacConnected && keyToSave.startsWith("vol_dac_")
+        volumeSaveJob?.cancel()
+        volumeSaveJob = coroutineScope.launch {
+            kotlinx.coroutines.delay(350L)
+            if (canPersistForDac) {
+                sharedPref.edit().putFloat(keyToSave, currentVolume).apply()
+            }
+            sharedPref.edit().putFloat("last_volume", currentVolume).apply()
+        }
+    }
+
+    val importPeqJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val rawText = context.contentResolver.openInputStream(uri)?.use { stream ->
+                    stream.bufferedReader().use { it.readText() }
+                } ?: ""
+                val (updatedList, newlyImported) = PeqPreferencesHelper.importUserPresets(sharedPref, rawText)
+                if (newlyImported.isNotEmpty()) {
+                    userPeqPresets = updatedList
+                    val active = newlyImported.first()
+                    val updatedConfig = peqConfig.copy(
+                        enabled = true,
+                        selectedPresetId = active.id,
+                        preampDb = active.preampDb,
+                        autoPreampEnabled = active.autoPreampEnabled,
+                        bands = active.bands
+                    )
+                    if (isHardwareVolumeEnabled) {
+                        applyVolumeModeAtomic(false)
+                        peqDspNoticeMessage = "Audio mode automatically switched to Universal 64-Bit DSP because Parametric Equalizer (PEQ) was enabled. Hardware UAC mode is disabled to process digital audio filters bit-accurately."
+                        showPeqDspNoticeDialog = true
+                    }
+                    peqConfig = updatedConfig
+                    PeqPreferencesHelper.save(sharedPref, updatedConfig)
+                    PeqPreferencesHelper.applyToEngine(audioEngine, updatedConfig)
+                    Toast.makeText(context, "Imported ${newlyImported.size} preset(s) ('${active.name}')", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Unrecognized PEQ preset file format", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to read file: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -669,13 +758,14 @@ fun KewApp(audioEngine: AudioEngine) {
 
     val defaultMusicDir = remember {
         val savedPath = sharedPref.getString("music_root_directory", null)
-        if (savedPath != null && File(savedPath).exists()) {
+        val rawDir = if (savedPath != null && File(savedPath).exists()) {
             File(savedPath)
         } else {
             val standardMusic = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
             if (standardMusic != null && standardMusic.exists()) standardMusic
             else File(Environment.getExternalStorageDirectory(), "Music")
         }
+        com.yuka.musicplayer.util.MusicScannerHelper.canonicalizeFile(rawDir)
     }
 
     var musicRootDirectory by remember { mutableStateOf(defaultMusicDir) }
@@ -761,19 +851,45 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
     var libraryRefreshTrigger by remember { mutableIntStateOf(0) }
+    var lastKnownDirectoryFingerprint by remember { mutableLongStateOf(0L) }
+    val dirObserverLifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(dirObserverLifecycleOwner, musicRootDirectory, isMusicDirectoryConfigured, isStorageGranted, isAllFilesAccessGranted) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                val hasAccess = isStorageGranted || isAllFilesAccessGranted
+                if (isMusicDirectoryConfigured && hasAccess && musicRootDirectory.exists() && !isScanningLibrary) {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        val currentFp = com.yuka.musicplayer.util.MusicScannerHelper.computeDirectoryStructureFingerprint(musicRootDirectory)
+                        if (lastKnownDirectoryFingerprint != 0L && currentFp != lastKnownDirectoryFingerprint) {
+                            withContext(Dispatchers.Main) {
+                                libraryRefreshTrigger++
+                            }
+                        }
+                        lastKnownDirectoryFingerprint = currentFp
+                    }
+                }
+            }
+        }
+        dirObserverLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            dirObserverLifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     // Two-stage Library Loader & Force Full Rescan Engine:
     // If user has not configured music directory yet, stay empty until user sets it.
     // If manual force rescan is requested (from Rescan button or FolderPickerDialog):
     // Perform full filesystem scan, atomically replace SQLite tracks for this root, and show confirmation Toast.
     // Otherwise, fast incremental startup scan from SQLite cache.
-    LaunchedEffect(musicRootDirectory, isStorageGranted, isMusicDirectoryConfigured, libraryRefreshTrigger) {
+    LaunchedEffect(musicRootDirectory, isStorageGranted, isAllFilesAccessGranted, isMusicDirectoryConfigured, libraryRefreshTrigger) {
         if (!isMusicDirectoryConfigured) {
             scannedLibraryItems = emptyList()
             isScanningLibrary = false
             return@LaunchedEffect
         }
-        if (isStorageGranted) {
+        val effectiveStorageGranted = isStorageGranted || isAllFilesAccessGranted
+        if (effectiveStorageGranted) {
             val isManualForceRescan = forceFullRescanRequested
             forceFullRescanRequested = false
 
@@ -785,8 +901,13 @@ fun KewApp(audioEngine: AudioEngine) {
                         isScanningLibrary = true
                     }
                     val startTime = android.os.SystemClock.elapsedRealtime()
-                    val freshItems = com.yuka.musicplayer.util.MusicScannerHelper.scanMusicDirectory(musicRootDirectory)
+                    val freshItems = com.yuka.musicplayer.util.MusicScannerHelper.scanMusicDirectory(
+                        rootDir = musicRootDirectory,
+                        context = context,
+                        isForceRescan = true
+                    )
                     db.replaceAllTracksForRoot(musicRootDirectory, freshItems)
+                    lastKnownDirectoryFingerprint = com.yuka.musicplayer.util.MusicScannerHelper.computeDirectoryStructureFingerprint(musicRootDirectory)
                     val elapsed = android.os.SystemClock.elapsedRealtime() - startTime
                     if (elapsed < 450L) {
                         delay(450L - elapsed)
@@ -826,6 +947,7 @@ fun KewApp(audioEngine: AudioEngine) {
                         rootDir = musicRootDirectory,
                         cachedItems = cached.takeIf { it.isNotEmpty() }
                     )
+                    lastKnownDirectoryFingerprint = com.yuka.musicplayer.util.MusicScannerHelper.computeDirectoryStructureFingerprint(musicRootDirectory)
                     if (scanResult.hasChanges || cached.isEmpty()) {
                         val sortedFresh = com.yuka.musicplayer.model.sortScannedItemsByField(
                             scanResult.items,
@@ -893,10 +1015,7 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
 
-    // Unified Modal Cycle (Donation & Discord: First-Install Guarantee + Randomized Reopen 2..4x, #BUG 1)
-    val modalCycleLifecycleOwner = LocalLifecycleOwner.current
-    var wasAppStopped by remember { mutableStateOf(false) }
-
+    // Unified Modal Cycle (Donation & Discord: First-Install Guarantee + Randomized Reopen 2..4x, #BUG 1 & #BUG 2)
     fun pickNextRandomModal(prefs: android.content.SharedPreferences): String {
         val lastType = prefs.getString("modal_cycle_last_type", "") ?: ""
         val streak = prefs.getInt("modal_cycle_streak_count", 0)
@@ -934,30 +1053,15 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
 
-    // Cold Start modal cycle check
+    // Cold Start modal cycle check - only runs once per app process launch! (#BUG 2)
     LaunchedEffect(Unit) {
-        advanceReopenModalCycle(sharedPref)
-    }
-
-    // Warm Reopen (ON_STOP -> ON_START)
-    DisposableEffect(modalCycleLifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
-                wasAppStopped = true
-            } else if (event == androidx.lifecycle.Lifecycle.Event.ON_START) {
-                if (wasAppStopped) {
-                    wasAppStopped = false
-                    advanceReopenModalCycle(sharedPref)
-                }
-            }
-        }
-        modalCycleLifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            modalCycleLifecycleOwner.lifecycle.removeObserver(observer)
+        if (!com.yuka.musicplayer.audio.AudioPlayerManager.hasEvaluatedStartupModalSession) {
+            com.yuka.musicplayer.audio.AudioPlayerManager.hasEvaluatedStartupModalSession = true
+            advanceReopenModalCycle(sharedPref)
         }
     }
 
-    // Unified First-Install Dual Welcome + Randomized Reopen Modal Orchestrator (#BUG 1)
+    // Unified First-Install Dual Welcome + Randomized Reopen Modal Orchestrator (#BUG 1 & #BUG 2)
     LaunchedEffect(
         isStorageGranted,
         isMusicDirectoryConfigured,
@@ -974,6 +1078,12 @@ fun KewApp(audioEngine: AudioEngine) {
         }
         // Jangan tampilkan modal baru jika salah satu modal sedang aktif terbuka
         if (showDonationModal || showDiscordModal) {
+            return@LaunchedEffect
+        }
+
+        // Playback Guard (#BUG 2): Jangan pernah munculkan modal jika lagu sedang diputar atau sedang ada track aktif
+        if (isPlaying || audioEngine.isPlaying() || com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying || currentTrack != null) {
+            reopenActiveModalType = null
             return@LaunchedEffect
         }
 
@@ -1015,7 +1125,6 @@ fun KewApp(audioEngine: AudioEngine) {
         }
     }
 
-    var isPlaying by remember { mutableStateOf(com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying || audioEngine.isPlaying()) }
     var pausedByTransientLoss by remember { mutableStateOf(false) }
     var playbackPosition by remember { mutableStateOf(0.0) }
     var playJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -1023,84 +1132,6 @@ fun KewApp(audioEngine: AudioEngine) {
     var metadataJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var prepareJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var playTrackRef by remember { mutableStateOf<((File, Boolean, Boolean) -> Unit)?>(null) }
-    fun resolveConnectedDacProductName(): String {
-        if (!isDacConnected) return ""
-        return try {
-            val info = org.json.JSONObject(audioEngine.getDacInfo())
-            info.optString("productName", "").trim()
-        } catch (_: Exception) {
-            ""
-        }
-    }
-
-    fun getDefaultVolumeForMode(isDac: Boolean, isHwVol: Boolean): Float = when {
-        isDac && isHwVol -> 1.00f   // 32-bit Hardware Chip = 100%
-        isDac && !isHwVol -> 0.50f  // 64-bit Bit-Perfect DSP = 50% (audiophile comfortable reference)
-        else -> 0.05f               // Else = 5%
-    }
-
-    fun buildVolumePrefKey(dacName: String, isDac: Boolean, isHwVol: Boolean): String {
-        if (!isDac || dacName.isBlank()) return "vol_mode_internal_else"
-        val cleanName = dacName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
-        val modeTag = if (isHwVol) "hw32" else "dsp64"
-        return "vol_dac_${cleanName}_$modeTag"
-    }
-
-    var activeVolumePrefKey by remember {
-        val initDacName = resolveConnectedDacProductName()
-        mutableStateOf(buildVolumePrefKey(initDacName, isDacConnected, isHardwareVolumeActive))
-    }
-
-    var currentVolume by remember {
-        val initDacName = resolveConnectedDacProductName()
-        val key = buildVolumePrefKey(initDacName, isDacConnected, isHardwareVolumeActive)
-        val fallback = getDefaultVolumeForMode(isDacConnected, isHardwareVolumeActive)
-        mutableFloatStateOf(
-            if (isDacConnected && initDacName.isNotBlank() && sharedPref.contains(key)) {
-                sharedPref.getFloat(key, fallback).coerceIn(0f, 1f)
-            } else {
-                fallback
-            }
-        )
-    }
-
-    var isProgrammaticVolumeSwitch by remember { mutableStateOf(false) }
-
-    LaunchedEffect(isDacConnected, isHardwareVolumeActive) {
-        val dacName = resolveConnectedDacProductName()
-        val newKey = buildVolumePrefKey(dacName, isDacConnected, isHardwareVolumeActive)
-        if (activeVolumePrefKey != newKey) {
-            activeVolumePrefKey = newKey
-            val fallback = getDefaultVolumeForMode(isDacConnected, isHardwareVolumeActive)
-            val targetVol = if (isDacConnected && dacName.isNotBlank() && sharedPref.contains(newKey)) {
-                sharedPref.getFloat(newKey, fallback).coerceIn(0f, 1f)
-            } else {
-                fallback
-            }
-            isProgrammaticVolumeSwitch = true
-            currentVolume = targetVol
-            audioEngine.setSoftwareVolume(targetVol)
-        }
-    }
-
-    var volumeSaveJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    LaunchedEffect(currentVolume) {
-        audioEngine.setSoftwareVolume(currentVolume)
-        if (isProgrammaticVolumeSwitch) {
-            isProgrammaticVolumeSwitch = false
-            return@LaunchedEffect
-        }
-        val keyToSave = activeVolumePrefKey
-        val canPersistForDac = isDacConnected && keyToSave.startsWith("vol_dac_")
-        volumeSaveJob?.cancel()
-        volumeSaveJob = coroutineScope.launch {
-            kotlinx.coroutines.delay(350L)
-            if (canPersistForDac) {
-                sharedPref.edit().putFloat(keyToSave, currentVolume).apply()
-            }
-            sharedPref.edit().putFloat("last_volume", currentVolume).apply()
-        }
-    }
 
     LaunchedEffect(isPlaying) {
         com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying = isPlaying
@@ -1137,6 +1168,13 @@ fun KewApp(audioEngine: AudioEngine) {
         com.yuka.musicplayer.audio.AudioPlayerManager.onDacReady = { dacName ->
             coroutineScope.launch(Dispatchers.Main) {
                 isDacConnected = true
+                val resolvedName = dacName.ifBlank { resolveConnectedDacProductName() }
+                val newKey = buildVolumePrefKey(resolvedName, true)
+                activeVolumePrefKey = newKey
+                val savedVol = loadSavedVolumeForDac(resolvedName, true)
+                isProgrammaticVolumeSwitch = true
+                currentVolume = savedVol
+                audioEngine.setSoftwareVolume(savedVol)
                 audioEngine.setHardwareVolumeEnabled(isHardwareVolumeEnabled)
                 isHardwareVolumeActive = audioEngine.isHardwareVolumeActive()
                 isHardwareVolumeSupported = audioEngine.isHardwareVolumeSupported()
@@ -1160,10 +1198,12 @@ fun KewApp(audioEngine: AudioEngine) {
             }
         }
         audioEngine.onUsbStallFaultCallback = {
-            // C++ reported a hard stall. Re-init the DAC.
+            // C++ reported a hard stall. Re-init the DAC with fresh FD to recover
             audioEngine.pauseAudio()
             isPlaying = false
-            usbAudioController.scanAndRequestPermission()
+            coroutineScope.launch(Dispatchers.IO) {
+                usbAudioController.forceReconnectActiveDevice()
+            }
         }
         audioEngine.onDeviceForceDisconnectedCallback = {
             // C++ reported surprise removal (hotplug).
@@ -1300,7 +1340,8 @@ fun KewApp(audioEngine: AudioEngine) {
         recordHistory: Boolean = true,
         source: PlaybackSource? = null,
         playlistId: String? = activePlayingPlaylistId ?: com.yuka.musicplayer.audio.AudioPlayerManager.activePlayingPlaylistId ?: selectedPlaylistId.ifEmpty { null },
-        targetSource: PlaybackSource? = null
+        targetSource: PlaybackSource? = null,
+        initialSeekSeconds: Double = -1.0
     ) {
         val resolvedSource = targetSource ?: source ?: com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource
         val resolvedPlaylistId = playlistId ?: (if (resolvedSource == PlaybackSource.PLAYLIST) (activePlayingPlaylistId ?: com.yuka.musicplayer.audio.AudioPlayerManager.activePlayingPlaylistId ?: selectedPlaylistId.ifEmpty { null }) else null)
@@ -1379,7 +1420,7 @@ fun KewApp(audioEngine: AudioEngine) {
         currentTrack = initialTrack
         com.yuka.musicplayer.audio.AudioPlayerManager.currentTrack = initialTrack
         com.yuka.musicplayer.audio.AudioPlayerManager.notifyStateChanged()
-        playbackPosition = 0.0
+        playbackPosition = if (initialSeekSeconds > 0.0) initialSeekSeconds else 0.0
 
         val currentPlayId = ++playRequestId
         // 1. Play audio INSTANTLY (without waiting for metadata extraction)
@@ -1387,21 +1428,34 @@ fun KewApp(audioEngine: AudioEngine) {
         playJob = coroutineScope.launch(Dispatchers.IO) {
             var result = audioEngine.playAudio(file.absolutePath)
             
-            // Retry once on transient negotiation failure
+            // Self-Healing Retry on USB negotiation failure (-3):
+            // Reopen UsbDeviceConnection to obtain a fresh kernel usbdevfs FD before retrying playAudio
             if (result == -3) {
-                delay(200)
+                com.yuka.musicplayer.utils.AppLogger.w(
+                    "USB",
+                    "playAudio returned -3 (USB negotiation failed). Triggering self-healing DAC FD reopen..."
+                )
+                val reconnected = usbAudioController.forceReconnectActiveDevice()
+                delay(if (reconnected) 120L else 200L)
                 result = audioEngine.playAudio(file.absolutePath)
             }
             
             when {
                 result == 0 -> {
                     if (currentPlayId != playRequestId) return@launch
+                    if (initialSeekSeconds > 0.0) {
+                        // Restore exact paused timestamp during the initial anti-pop silence pre-roll
+                        audioEngine.seekTo(initialSeekSeconds)
+                    }
                     // Success
                     com.yuka.musicplayer.utils.AppLogger.i("AUDIO", "playAudio SUCCESS: ${file.name}")
                     withContext(Dispatchers.Main) {
                         if (currentPlayId != playRequestId) return@withContext
                         isPlaying = true
                         com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying = true
+                        if (initialSeekSeconds > 0.0) {
+                            playbackPosition = initialSeekSeconds
+                        }
                         formatIncompatibleError = null
                         isHardwareVolumeActive = audioEngine.isHardwareVolumeActive()
                         isHardwareVolumeSupported = audioEngine.isHardwareVolumeSupported()
@@ -1430,8 +1484,12 @@ fun KewApp(audioEngine: AudioEngine) {
                         isPlaying = false
                         com.yuka.musicplayer.audio.AudioPlayerManager.isPlaying = false
                         val lastUsbDiag = audioEngine.getLastUsbDiagnostic()
+                        val isAndroid11Plus = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                        val isAllFilesMissing = isAndroid11Plus && !com.yuka.musicplayer.util.isAllFilesAccessGranted(context)
                         val isPermissionIssue = lastUsbDiag.contains("Permission denied", ignoreCase = true) || !checkStoragePermission(context)
-                        val errorMsg = if (isPermissionIssue) {
+                        val errorMsg = if (isAllFilesMissing && (!file.canRead() || isPermissionIssue)) {
+                            "Cannot read file. Please grant 'All Files Access' in Android Settings to bypass Samsung .nomedia restriction."
+                        } else if (isPermissionIssue) {
                             "Permission denied! Enable 'Music & Audio Access' for tsrossa in Android Settings."
                         } else {
                             "Failed to open audio file. Ensure it is a valid FLAC or WAV file."
@@ -1598,13 +1656,21 @@ fun KewApp(audioEngine: AudioEngine) {
                     playbackPosition = audioEngine.getPosition()
                     isPlaying = false
                 } else {
-                    val resumed = audioEngine.resumeAudio()
+                    val dur = currentTrack?.durationSeconds ?: 0.0
+                    val savedResumePos = if (playbackPosition > 0.5 && (dur <= 0.0 || playbackPosition < dur - 1.0)) {
+                        playbackPosition
+                    } else {
+                        -1.0
+                    }
+                    val resumed = withContext(Dispatchers.IO) {
+                        audioEngine.resumeAudio()
+                    }
                     if (resumed) {
                         isPlaying = true
                     } else {
                         val activeSource = com.yuka.musicplayer.audio.AudioPlayerManager.currentPlaybackSource
                         currentTrack?.file?.let { file ->
-                            playTrack(file, false, source = activeSource)
+                            playTrack(file, false, source = activeSource, initialSeekSeconds = savedResumePos)
                         } ?: run {
                             val active = getActiveTrackList(activeSource)
                             if (active.isNotEmpty()) {
@@ -1725,6 +1791,7 @@ fun KewApp(audioEngine: AudioEngine) {
         com.yuka.musicplayer.ui.theme.LocalBgMode provides bgMode,
         com.yuka.musicplayer.ui.theme.LocalIsDarkTheme provides (themeMode != "LIGHT"),
         com.yuka.musicplayer.ui.theme.LocalSurfaceStyle provides surfaceStyle,
+        com.yuka.musicplayer.ui.theme.LocalModalBlurEnabled provides modalBlurEnabled,
         com.yuka.musicplayer.ui.theme.LocalModalBlurCount provides modalBlurCount
     ) {
         KewMobileTheme(isDarkTheme = themeMode != "LIGHT") {
@@ -1754,12 +1821,27 @@ fun KewApp(audioEngine: AudioEngine) {
                     isPlaying = false
                     pausedByTransientLoss = false
                 } else {
-                    val resumed = audioEngine.resumeAudio()
-                    if (resumed) {
-                        isPlaying = true
+                    val dur = currentTrack?.durationSeconds ?: 0.0
+                    val savedResumePos = if (playbackPosition > 0.5 && (dur <= 0.0 || playbackPosition < dur - 1.0)) {
+                        playbackPosition
                     } else {
-                        currentTrack?.file?.let { file ->
-                            playTrack(file, false, source = currentPlaybackSource)
+                        -1.0
+                    }
+                    coroutineScope.launch(Dispatchers.IO) {
+                        val resumed = audioEngine.resumeAudio()
+                        withContext(Dispatchers.Main) {
+                            if (resumed) {
+                                isPlaying = true
+                            } else {
+                                currentTrack?.file?.let { file ->
+                                    playTrack(
+                                        file = file,
+                                        isAutoAdvance = false,
+                                        source = currentPlaybackSource,
+                                        initialSeekSeconds = savedResumePos
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1992,10 +2074,12 @@ fun KewApp(audioEngine: AudioEngine) {
             },
             isNotificationGranted = isNotificationGranted,
             isStorageGranted = isStorageGranted,
+            isAllFilesAccessGranted = isAllFilesAccessGranted,
             isDndGranted = isDndGranted,
             isBatteryOptimizationIgnored = isBatteryOptimizationIgnored,
             onRequestNotification = requestNotificationPermission,
             onRequestStorage = requestStoragePermission,
+            onRequestAllFilesAccess = requestAllFilesAccessPermission,
             onRequestDnd = requestDndPermission,
             onRequestBatteryOptimization = requestBatteryOptimizationPermission,
             onCompletePermissions = modalActionHandler::onCompletePermissions,
@@ -2183,10 +2267,12 @@ fun KewApp(audioEngine: AudioEngine) {
                 },
                 isNotificationGranted = isNotificationGranted,
                 isStorageGranted = isStorageGranted,
+                isAllFilesAccessGranted = isAllFilesAccessGranted,
                 isDndGranted = isDndGranted,
                 isBatteryOptimizationIgnored = isBatteryOptimizationIgnored,
                 onRequestNotification = requestNotificationPermission,
                 onRequestStorage = requestStoragePermission,
+                onRequestAllFilesAccess = requestAllFilesAccessPermission,
                 onRequestDnd = requestDndPermission,
                 onRequestBatteryOptimization = requestBatteryOptimizationPermission,
                 onOpenPermissionDialog = { showPermissionDialog = true },
@@ -2212,6 +2298,11 @@ fun KewApp(audioEngine: AudioEngine) {
                     surfaceStyle = newStyle
                     sharedPref.edit().putString("surface_style", newStyle).apply()
                 },
+                modalBlurEnabled = modalBlurEnabled,
+                onModalBlurEnabledChange = { enabled ->
+                    modalBlurEnabled = enabled
+                    sharedPref.edit().putBoolean("modal_blur_enabled", enabled).apply()
+                },
                 makeFolderAsPlaylist = makeFolderAsPlaylist,
                 onMakeFolderAsPlaylistChange = { enabled ->
                     makeFolderAsPlaylist = enabled
@@ -2228,6 +2319,11 @@ fun KewApp(audioEngine: AudioEngine) {
             config = peqConfig,
             userPresets = userPeqPresets,
             onConfigChange = { newConfig ->
+                if (newConfig.enabled && !peqConfig.enabled && isHardwareVolumeEnabled) {
+                    applyVolumeModeAtomic(false)
+                    peqDspNoticeMessage = "Audio mode automatically switched to Universal 64-Bit DSP because Parametric Equalizer (PEQ) was enabled. Hardware UAC mode is disabled to process digital audio filters bit-accurately."
+                    showPeqDspNoticeDialog = true
+                }
                 peqConfig = newConfig
                 PeqPreferencesHelper.save(sharedPref, newConfig)
                 PeqPreferencesHelper.applyToEngine(audioEngine, newConfig)
@@ -2243,7 +2339,7 @@ fun KewApp(audioEngine: AudioEngine) {
                 val updatedConfig = peqConfig.copy(selectedPresetId = saved.id)
                 peqConfig = updatedConfig
                 PeqPreferencesHelper.save(sharedPref, updatedConfig)
-                Toast.makeText(context, "Preset '${saved.name}' disimpan", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Preset '${saved.name}' saved", Toast.LENGTH_SHORT).show()
             },
             onDeleteUserPreset = { presetId ->
                 val deletedName = userPeqPresets.find { it.id == presetId }?.name ?: "Preset"
@@ -2254,7 +2350,7 @@ fun KewApp(audioEngine: AudioEngine) {
                     peqConfig = updatedConfig
                     PeqPreferencesHelper.save(sharedPref, updatedConfig)
                 }
-                Toast.makeText(context, "Preset '$deletedName' dihapus", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Preset '$deletedName' deleted", Toast.LENGTH_SHORT).show()
             },
             onImportPresetsText = { rawText ->
                 val (updatedList, newlyImported) = PeqPreferencesHelper.importUserPresets(sharedPref, rawText)
@@ -2268,13 +2364,18 @@ fun KewApp(audioEngine: AudioEngine) {
                         autoPreampEnabled = active.autoPreampEnabled,
                         bands = active.bands
                     )
+                    if (isHardwareVolumeEnabled) {
+                        applyVolumeModeAtomic(false)
+                        peqDspNoticeMessage = "Audio mode automatically switched to Universal 64-Bit DSP because Parametric Equalizer (PEQ) was enabled. Hardware UAC mode is disabled to process digital audio filters bit-accurately."
+                        showPeqDspNoticeDialog = true
+                    }
                     peqConfig = updatedConfig
                     PeqPreferencesHelper.save(sharedPref, updatedConfig)
                     PeqPreferencesHelper.applyToEngine(audioEngine, updatedConfig)
-                    Toast.makeText(context, "Berhasil meng-import ${newlyImported.size} preset ('${active.name}')", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Imported ${newlyImported.size} preset(s) ('${active.name}')", Toast.LENGTH_SHORT).show()
                     newlyImported.size
                 } else {
-                    Toast.makeText(context, "Format kode preset PEQ tidak valid", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Invalid PEQ preset code format", Toast.LENGTH_SHORT).show()
                     0
                 }
             },
@@ -2288,6 +2389,12 @@ fun KewApp(audioEngine: AudioEngine) {
             onDismissRequest = { showPeqModal = false }
         )
 
+        PeqDspSwitchNoticeDialog(
+            visible = showPeqDspNoticeDialog,
+            message = peqDspNoticeMessage,
+            onDismissRequest = { showPeqDspNoticeDialog = false }
+        )
+
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             AppScreenContent(
                 viewState = viewState,
@@ -2298,6 +2405,8 @@ fun KewApp(audioEngine: AudioEngine) {
                 scannedItems = scannedLibraryItems,
                 isScanningLibrary = isScanningLibrary,
                 isMusicDirectoryConfigured = isMusicDirectoryConfigured,
+                isAllFilesAccessGranted = isAllFilesAccessGranted,
+                onRequestAllFilesAccess = requestAllFilesAccessPermission,
                 onChangeDirectory = { showFolderPickerDialog = true },
                 currentTrack = currentTrack,
                 playlistSet = playlistSet,
@@ -2332,6 +2441,27 @@ fun KewApp(audioEngine: AudioEngine) {
                 },
                 onBulkDelete = { files ->
                     tracksToDelete = files
+                },
+                onPlayFolderTracks = { files, shuffle ->
+                    val playable = files.filter { com.yuka.musicplayer.util.MusicScannerHelper.isSupportedAudioFile(it) }
+                    if (playable.isNotEmpty()) {
+                        playbackLibraryFiles = playable
+                        currentPlaybackSourceStr = PlaybackSource.LIBRARY.name
+                        if (shuffle) {
+                            isShuffleEnabled = true
+                            val randomTrack = playable.random()
+                            playTrack(randomTrack, false, source = PlaybackSource.LIBRARY)
+                            val trackUnit = if (playable.size == 1) "track" else "tracks"
+                            Toast.makeText(context, "Shuffle Folder (${playable.size} $trackUnit)", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val firstTrack = playable.first()
+                            playTrack(firstTrack, false, source = PlaybackSource.LIBRARY)
+                            val trackUnit = if (playable.size == 1) "track" else "tracks"
+                            Toast.makeText(context, "Play Folder (${playable.size} $trackUnit)", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        Toast.makeText(context, "No supported audio files in this folder", Toast.LENGTH_SHORT).show()
+                    }
                 },
                 onRefreshLibrary = refreshLibrary,
                 onLibraryModalOpenChanged = { isLibraryLocalModalOpen = it },
@@ -2635,12 +2765,19 @@ fun KewApp(audioEngine: AudioEngine) {
         currentPath = musicRootDirectory,
         onDismissRequest = { showFolderPickerDialog = false },
         onSelectDirectory = { dir ->
+            val canonDir = com.yuka.musicplayer.util.MusicScannerHelper.canonicalizeFile(dir)
             isMusicDirectoryConfigured = true
-            musicRootDirectory = dir
-            sharedPref.edit()
-                .putString("music_root_directory", dir.absolutePath)
+            musicRootDirectory = canonDir
+            val existingTree = sharedPref.getString("music_root_tree_uri", null)
+            val treePath = sharedPref.getString("music_root_tree_path", null)
+            val editor = sharedPref.edit()
+                .putString("music_root_directory", canonDir.absolutePath)
                 .putBoolean("music_directory_configured", true)
-                .apply()
+            if (existingTree != null && treePath != null && treePath != canonDir.absolutePath) {
+                editor.remove("music_root_tree_uri")
+                editor.remove("music_root_tree_path")
+            }
+            editor.apply()
             showFolderPickerDialog = false
             forceFullRescanRequested = true
             libraryRefreshTrigger++

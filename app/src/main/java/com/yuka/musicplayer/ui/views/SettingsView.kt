@@ -59,10 +59,12 @@ fun SettingsView(
     onThemeModeChange: (String) -> Unit = {},
     isNotificationGranted: Boolean = true,
     isStorageGranted: Boolean = true,
+    isAllFilesAccessGranted: Boolean = true,
     isDndGranted: Boolean = false,
     isBatteryOptimizationIgnored: Boolean = true,
     onRequestNotification: () -> Unit = {},
     onRequestStorage: () -> Unit = {},
+    onRequestAllFilesAccess: () -> Unit = {},
     onRequestDnd: () -> Unit = {},
     onRequestBatteryOptimization: () -> Unit = {},
     onOpenPermissionDialog: () -> Unit = {},
@@ -79,6 +81,8 @@ fun SettingsView(
     onBackFromRoot: () -> Unit = {},
     surfaceStyle: String = "BLUR_OPACITY",
     onSurfaceStyleChange: (String) -> Unit = {},
+    modalBlurEnabled: Boolean = true,
+    onModalBlurEnabledChange: (Boolean) -> Unit = {},
     makeFolderAsPlaylist: Boolean = false,
     onMakeFolderAsPlaylistChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
@@ -262,7 +266,9 @@ fun SettingsView(
                             themeMode = themeMode,
                             onThemeModeChange = onThemeModeChange,
                             surfaceStyle = surfaceStyle,
-                            onSurfaceStyleChange = onSurfaceStyleChange
+                            onSurfaceStyleChange = onSurfaceStyleChange,
+                            modalBlurEnabled = modalBlurEnabled,
+                            onModalBlurEnabledChange = onModalBlurEnabledChange
                         )
 
                         TypographyHapticsSection(
@@ -299,10 +305,12 @@ fun SettingsView(
                         PermissionsSettingsSection(
                             isNotificationGranted = isNotificationGranted,
                             isStorageGranted = isStorageGranted,
+                            isAllFilesAccessGranted = isAllFilesAccessGranted,
                             isDndGranted = isDndGranted,
                             isBatteryOptimizationIgnored = isBatteryOptimizationIgnored,
                             onRequestNotification = onRequestNotification,
                             onRequestStorage = onRequestStorage,
+                            onRequestAllFilesAccess = onRequestAllFilesAccess,
                             onRequestDnd = onRequestDnd,
                             onRequestBatteryOptimization = onRequestBatteryOptimization,
                             onOpenPermissionDialog = onOpenPermissionDialog

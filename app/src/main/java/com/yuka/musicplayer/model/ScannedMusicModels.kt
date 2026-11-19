@@ -28,7 +28,9 @@ data class ScannedMusicItem(
     val dateModified: Long = 0L,
     val displayTitle: String = "",
     val displayArtist: String = "",
-    val secondaryMetadata: String = ""
+    val secondaryMetadata: String = "",
+    val filePath: String = file.absolutePath,
+    val parentPath: String = file.parent ?: ""
 ) {
     companion object {
         fun formatSizeShort(bytes: Long): String {

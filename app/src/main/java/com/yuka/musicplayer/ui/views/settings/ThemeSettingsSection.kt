@@ -30,7 +30,9 @@ fun ThemeSettingsSection(
     themeMode: String = "DARK",
     onThemeModeChange: (String) -> Unit = {},
     surfaceStyle: String = "BLUR_OPACITY",
-    onSurfaceStyleChange: (String) -> Unit = {}
+    onSurfaceStyleChange: (String) -> Unit = {},
+    modalBlurEnabled: Boolean = true,
+    onModalBlurEnabledChange: (Boolean) -> Unit = {}
 ) {
     SettingsCard(title = "Theme & Display") {
         Text(
@@ -145,5 +147,14 @@ fun ThemeSettingsSection(
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        SettingsToggleRow(
+            title = "Modal Backdrop Blur",
+            subtitle = "Blur background screen when opening modals and bottom sheets",
+            isChecked = modalBlurEnabled,
+            onCheckedChange = onModalBlurEnabledChange
+        )
     }
 }

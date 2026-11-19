@@ -3,15 +3,41 @@ package com.yuka.musicplayer.util
 import android.Manifest
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.storage.StorageManager
+import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import java.io.File
 
+/**
+ * Checks whether full direct filesystem access (bypassing Android 11+ FUSE .nomedia filtering)
+ * is granted. On Android 11+ (API 30+), this checks Environment.isExternalStorageManager().
+ * On Android 10 and below, standard READ_EXTERNAL_STORAGE already provides direct filesystem access.
+ */
+fun isAllFilesAccessGranted(context: Context): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        Environment.isExternalStorageManager()
+    } else {
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+}
+
+/**
+ * Checks whether storage permission (either All Files Access or basic media access) is granted.
+ * On Android 11+, if MANAGE_EXTERNAL_STORAGE is active, returns true immediately.
+ */
 fun checkStoragePermission(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
+        return true
+    }
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         ContextCompat.checkSelfPermission(
             context,
@@ -22,6 +48,52 @@ fun checkStoragePermission(context: Context): Boolean {
             context,
             Manifest.permission.READ_EXTERNAL_STORAGE
         ) == PackageManager.PERMISSION_GRANTED
+    }
+}
+
+/**
+ * Builds an Intent to direct the user to the All Files Access management screen.
+ */
+fun buildAllFilesAccessIntent(context: Context): Intent {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.fromParts("package", context.packageName, null)
+        )
+    } else {
+        Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", context.packageName, null)
+        )
+    }
+}
+
+/**
+ * Opens the All Files Access settings with fallback support for custom OEM ROMs.
+ */
+fun openAllFilesAccessSettings(context: Context) {
+    runCatching {
+        val intent = buildAllFilesAccessIntent(context).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    }.onFailure {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                val fallbackIntent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(fallbackIntent)
+            }.onFailure {
+                runCatching {
+                    val appSettingsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", context.packageName, null)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(appSettingsIntent)
+                }
+            }
+        }
     }
 }
 

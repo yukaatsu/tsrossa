@@ -20,12 +20,11 @@ class PeqModelsTest {
         assertEquals(8000.0f, defaultBands[8].freqHz, 0.1f)
         assertEquals(16000.0f, defaultBands[9].freqHz, 0.1f)
 
-        // Proportional 1-octave Q: 0.707 for Shelf (bands 0 & 9), 0.85 for Bass (bands 1 & 2), 1.05 for Mid/High (bands 3-8)
+        // True 1-Octave Constant-Q: 0.707 for Butterworth Shelf (bands 0 & 9), 1.41 for Peaking (bands 1..8)
         assertEquals(0.707f, defaultBands[0].q, 0.01f)
-        assertEquals(0.85f, defaultBands[1].q, 0.01f)
-        assertEquals(0.85f, defaultBands[2].q, 0.01f)
-        assertEquals(1.05f, defaultBands[3].q, 0.01f)
-        assertEquals(1.05f, defaultBands[5].q, 0.01f)
+        for (i in 1..8) {
+            assertEquals("Band $i must use 1-octave Constant-Q 1.41", 1.41f, defaultBands[i].q, 0.01f)
+        }
         assertEquals(0.707f, defaultBands[9].q, 0.01f)
 
         // All gains should be 0 dB by default
@@ -61,10 +60,10 @@ class PeqModelsTest {
             autoPreampEnabled = true,
             bands = bands
         )
-        // Auto preamp uses 85% peak factor + 0.6 dB phase-rotation margin: -(6.0 * 0.85 + 0.6) = -5.7 dB
-        assertEquals(-5.7f, config.effectivePreampDb, 0.3f)
+        // 100% Exact Peak Headroom Compensation + 0.2 dB inter-sample margin: -(6.0 + 0.2) = -6.2 dB
+        assertEquals(-6.2f, config.effectivePreampDb, 0.25f)
 
-        // For massive +12.0 dB boost: clamped to -10.0 dB maximum headroom attenuation
+        // For massive +12.0 dB boost: full 100% compensation -(12.0 + 0.2) = -12.2 dB (no -10 dB premature clamp!)
         val extremeBands = PeqConfiguration.createDefaultBands().mapIndexed { i, b ->
             if (i == 5) b.copy(gainDb = 12.0f) else b
         }
@@ -74,9 +73,9 @@ class PeqModelsTest {
             autoPreampEnabled = true,
             bands = extremeBands
         )
-        assertEquals(-10.0f, extremeConfig.effectivePreampDb, 0.1f)
+        assertEquals(-12.2f, extremeConfig.effectivePreampDb, 0.3f)
 
-        // For pure cut (Band 5 at -3.0 dB), apply 0.6 dB phase rotation headroom
+        // For pure cut (Band 5 at -3.0 dB), zero unnecessary volume cut (0.0 dB!)
         val cutBands = PeqConfiguration.createDefaultBands().mapIndexed { i, b ->
             if (i == 5) b.copy(gainDb = -3.0f) else b
         }
@@ -86,7 +85,7 @@ class PeqModelsTest {
             autoPreampEnabled = true,
             bands = cutBands
         )
-        assertEquals(-0.6f, cutConfig.effectivePreampDb, 0.01f)
+        assertEquals(0.0f, cutConfig.effectivePreampDb, 0.01f)
     }
 
     @Test
@@ -408,5 +407,36 @@ class PeqModelsTest {
         assertEquals("Moondrop Chu II Vocal", parsedBundle[0].name)
         assertEquals("Bass Cannon", parsedBundle[1].name)
         assertEquals(6.0f, parsedBundle[1].bands[1].gainDb, 0.01f)
+    }
+
+    @Test
+    fun testPeqGain01DbStepPrecisionAndEnglishAcousticRoles() {
+        fun stepGain01(current: Float, delta: Float): Float {
+            return (kotlin.math.round((current + delta) * 10f) / 10f).coerceIn(-12.0f, 12.0f)
+        }
+
+        // Verify 0.1 dB increments & decrements without floating-point drift
+        var g = 0.0f
+        g = stepGain01(g, 0.1f)
+        assertEquals(0.1f, g, 0.0001f)
+        g = stepGain01(g, 0.1f)
+        assertEquals(0.2f, g, 0.0001f)
+        g = stepGain01(g, 0.1f)
+        assertEquals(0.3f, g, 0.0001f)
+        g = stepGain01(g, -0.1f)
+        assertEquals(0.2f, g, 0.0001f)
+
+        // Verify clamping at ±12.0 dB
+        assertEquals(12.0f, stepGain01(12.0f, 0.1f), 0.0001f)
+        assertEquals(-12.0f, stepGain01(-12.0f, -0.1f), 0.0001f)
+
+        // Verify all 10 acoustic roles are localized in English
+        assertEquals(10, ACOUSTIC_ROLES.size)
+        for (role in ACOUSTIC_ROLES) {
+            assertTrue(role.description.isNotBlank())
+            assertFalse("Acoustic description should be English: ${role.description}", role.description.contains("Getaran"))
+            assertFalse("Acoustic description should be English: ${role.description}", role.description.contains("Turunkan"))
+            assertFalse("Acoustic description should be English: ${role.description}", role.description.contains("vokal penyanyi"))
+        }
     }
 }

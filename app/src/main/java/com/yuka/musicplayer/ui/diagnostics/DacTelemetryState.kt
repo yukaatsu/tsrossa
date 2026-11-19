@@ -1,6 +1,7 @@
 package com.yuka.musicplayer.ui.diagnostics
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -15,7 +16,8 @@ import org.json.JSONArray
 /**
  * Encapsulates live USB DAC hardware telemetry state & continuous polling loop.
  */
-class DacTelemetryState(
+@Immutable
+data class DacTelemetryState(
     val uacVersion: Int,
     val claimedInterfaces: String,
     val negotiatedSampleRate: Int,
@@ -116,22 +118,41 @@ fun rememberDacTelemetry(
         }
     }
 
-    return DacTelemetryState(
-        uacVersion = uacVersion,
-        claimedInterfaces = claimedInterfaces,
-        negotiatedSampleRate = negotiatedSampleRate,
-        negotiatedBitDepth = negotiatedBitDepth,
-        sourceSampleRate = sourceSampleRate,
-        sourceBitDepth = sourceBitDepth,
-        outputBitDepth = outputBitDepth,
-        outputSampleRate = outputSampleRate,
-        recentErrorCount = recentErrorCount,
-        isSampleRateUnverified = isSampleRateUnverified,
-        isDeviceWedged = isDeviceWedged,
-        isHardwareVolumeLockedBySystem = isHardwareVolumeLockedBySystem,
-        isForceSoftwareVolume = isForceSoftwareVolume,
-        supportedBitDepths = supportedBitDepths,
-        supportedSampleRates = supportedSampleRates,
-        refusedTrackHistory = refusedTrackHistory
-    )
+    return remember(
+        uacVersion,
+        claimedInterfaces,
+        negotiatedSampleRate,
+        negotiatedBitDepth,
+        sourceSampleRate,
+        sourceBitDepth,
+        outputBitDepth,
+        outputSampleRate,
+        recentErrorCount,
+        isSampleRateUnverified,
+        isDeviceWedged,
+        isHardwareVolumeLockedBySystem,
+        isForceSoftwareVolume,
+        supportedBitDepths,
+        supportedSampleRates,
+        refusedTrackHistory
+    ) {
+        DacTelemetryState(
+            uacVersion = uacVersion,
+            claimedInterfaces = claimedInterfaces,
+            negotiatedSampleRate = negotiatedSampleRate,
+            negotiatedBitDepth = negotiatedBitDepth,
+            sourceSampleRate = sourceSampleRate,
+            sourceBitDepth = sourceBitDepth,
+            outputBitDepth = outputBitDepth,
+            outputSampleRate = outputSampleRate,
+            recentErrorCount = recentErrorCount,
+            isSampleRateUnverified = isSampleRateUnverified,
+            isDeviceWedged = isDeviceWedged,
+            isHardwareVolumeLockedBySystem = isHardwareVolumeLockedBySystem,
+            isForceSoftwareVolume = isForceSoftwareVolume,
+            supportedBitDepths = supportedBitDepths,
+            supportedSampleRates = supportedSampleRates,
+            refusedTrackHistory = refusedTrackHistory
+        )
+    }
 }

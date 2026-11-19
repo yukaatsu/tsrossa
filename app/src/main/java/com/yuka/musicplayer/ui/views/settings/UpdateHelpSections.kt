@@ -272,7 +272,7 @@ fun DeveloperInfoSection(
                     GlyphDiscord(color = accent, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Discord Server (Lapor Bug & Komunitas)",
+                        text = "Discord Server (Bug Reports & Community)",
                         color = accent,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold,
@@ -300,7 +300,7 @@ fun DonationSupportSection(
                 .padding(14.dp)
         ) {
             Text(
-                text = "Dukung kelanjutan pengembangan tsrossa & bit-perfect USB DAC audio engine. Kamu juga bisa merequest fitur baru agar diprioritaskan melalui pesan donasi!",
+                text = "Support the ongoing development of tsrossa and its bit-perfect USB DAC audio engine. You can also submit priority feature requests with your donation message!",
                 color = com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
                 fontFamily = ModernSansFont,
                 fontSize = 11.5.sp,
@@ -327,7 +327,7 @@ fun DonationSupportSection(
                     GlyphChatTeardropText(color = accent, modifier = Modifier.size(17.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Lihat Supporter Wall & Request Fitur",
+                        text = "View Supporter Wall & Feature Requests",
                         color = accent,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold,
@@ -368,7 +368,7 @@ fun DonationSupportSection(
                     GlyphBagiBagi(color = accent, modifier = Modifier.size(17.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Buka Bagi-Bagi (bagibagi.co/Yukaatsu)",
+                        text = "Open Bagi-Bagi (bagibagi.co/Yukaatsu)",
                         color = com.yuka.musicplayer.ui.theme.m3OnSurface(),
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.SemiBold,

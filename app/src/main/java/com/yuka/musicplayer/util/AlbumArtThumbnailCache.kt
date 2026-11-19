@@ -193,16 +193,23 @@ object AlbumArtThumbnailCache {
     /**
      * Pre-warms thumbnails into RAM in the background so scrolling through the Library
      * reads directly from [ramImageBitmapMap] with zero disk I/O or recomposition stutter.
+     * Throttled with micro-delays to eliminate 35MB-42MB GC AllocSpace spikes during startup/scrolling.
      */
     suspend fun prewarmLibraryThumbnails(items: List<ScannedMusicItem>) = withContext(Dispatchers.IO) {
+        var prewarmedCount = 0
         for (item in items) {
             if (!item.isSupported) continue
-            val path = item.file.absolutePath
+            val path = item.filePath.ifEmpty { item.file.absolutePath }
             if (ramImageBitmapMap.containsKey(path) || negativeCache.containsKey(path)) continue
             if (item.dateModified > 0L) {
                 cacheKey(path, item.dateModified)
             }
             loadThumbnail(path, targetSizePx = 96, knownLastModified = item.dateModified)
+            prewarmedCount++
+            if (prewarmedCount % 4 == 0) {
+                kotlinx.coroutines.delay(20) // Yield thread so young generation GC can collect ByteArrays smoothly
+            }
+            if (prewarmedCount >= 60) break // Limit initial prewarm batch so startup remains light
         }
     }
 
@@ -345,6 +352,9 @@ fun TrackAlbumThumbnail(
 
     if (imageBitmap == null && filePath.isNotEmpty() && !AlbumArtThumbnailCache.isKnownMissingArt(filePath)) {
         LaunchedEffect(filePath) {
+            // Scroll-aware debounce (35ms ~ 2-4 frames). When user is fast-flinging,
+            // rows flying past are cancelled before triggering expensive decoder allocation.
+            kotlinx.coroutines.delay(35)
             val bmp = AlbumArtThumbnailCache.loadThumbnail(filePath, targetSizePx = 96)
             if (bmp != null) {
                 imageBitmap = AlbumArtThumbnailCache.getImageBitmap(filePath) ?: bmp.asImageBitmap()

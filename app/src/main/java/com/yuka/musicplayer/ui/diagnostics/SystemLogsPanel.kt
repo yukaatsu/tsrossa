@@ -150,16 +150,49 @@ fun generateDiagnosticReport(
     supportedBitDepths: String,
     refusedTrackHistory: List<RefusedTrackEntry>,
     includeLogcat: Boolean = false,
-    logcatLines: List<String> = emptyList()
+    logcatLines: List<String> = emptyList(),
+    context: Context? = null
 ): String {
     val sb = StringBuilder()
     sb.appendLine("=== TSROSSA AUDIO ENGINE DIAGNOSTICS ===")
     sb.appendLine("App Version: ${com.yuka.musicplayer.BuildConfig.VERSION_NAME}")
-    sb.appendLine("Device Model: ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})")
+    sb.appendLine("Device Model: ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}, API ${Build.VERSION.SDK_INT})")
     sb.appendLine("Timestamp: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
     sb.appendLine()
 
-    // 1. Device & Hardware
+    // 1. Storage & Library Scanner State
+    sb.appendLine("[STORAGE & LIBRARY SCANNER]")
+    if (context != null) {
+        val sp = context.getSharedPreferences("music_player_prefs", Context.MODE_PRIVATE)
+        val musicRoot = sp.getString("music_root_directory", null) ?: "(Not Configured)"
+        val treeUri = sp.getString("music_root_tree_uri", null) ?: "(None)"
+        val isBasicGranted = com.yuka.musicplayer.util.checkStoragePermission(context)
+        val isAllFilesGranted = com.yuka.musicplayer.util.isAllFilesAccessGranted(context)
+        val rootF = File(musicRoot)
+        val exists = rootF.exists()
+        val isDir = rootF.isDirectory
+        val canRead = rootF.canRead()
+        val hasNomedia = File(rootF, ".nomedia").exists()
+
+        sb.appendLine("Basic Media Access: ${if (isBasicGranted) "GRANTED" else "RESTRICTED"}")
+        sb.appendLine("All Files Access (MANAGE_EXTERNAL_STORAGE): ${if (isAllFilesGranted) "GRANTED (FUSE .nomedia Bypass Active)" else "NOT GRANTED"}")
+        sb.appendLine("Configured Music Root: $musicRoot")
+        sb.appendLine("Root Status: exists=$exists, isDir=$isDir, canRead=$canRead, hasNomedia=$hasNomedia")
+        sb.appendLine("SAF Tree URI: $treeUri")
+
+        val blockingNomedia = if (exists) com.yuka.musicplayer.util.MusicScannerHelper.findBlockingNomediaFiles(rootF) else emptyList()
+        val scanDiag = com.yuka.musicplayer.util.MusicScannerHelper.lastScanDiagnostics
+        sb.appendLine("Ancestor .nomedia Blocks: ${if (blockingNomedia.isEmpty()) "None" else blockingNomedia.joinToString()}")
+        if (scanDiag != null) {
+            sb.appendLine("Last Scan Diagnostics: Root=${scanDiag.rootPath}, Total=${scanDiag.totalDiscovered}, Duration=${scanDiag.elapsedMs}ms")
+            sb.appendLine("  L1(FUSE Direct)=${scanDiag.layer1WalkCount}, L2(MediaStore Sync Triggered)=${scanDiag.layer2ReindexTriggered} (Post-L2=${scanDiag.layer2AfterReindexCount}), L3(MediaStore Query Added)=${scanDiag.layer3MediaStoreAdded}, L4(SAF Document Bridge Added)=${scanDiag.layer4SafBridgeAdded}")
+        }
+    } else {
+        sb.appendLine("Storage context unavailable")
+    }
+    sb.appendLine()
+
+    // 2. Device & Hardware
     sb.appendLine("[DEVICE & HARDWARE]")
     sb.appendLine("DAC Model: $dacName")
     val usbStatus = if (isDeviceWedged) "ERROR / WEDGED" else if (isDacConnected) "ACTIVE (Exclusive UAC$uacVersion)" else "DISCONNECTED"
@@ -362,7 +395,8 @@ fun SystemLogsPanel(
                         supportedSampleRates = supportedSampleRates,
                         supportedBitDepths = supportedBitDepths,
                         refusedTrackHistory = refusedTrackHistory,
-                        includeLogcat = false
+                        includeLogcat = false,
+                        context = context
                     )
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     val clip = ClipData.newPlainText("tsrossa_diagnostics", report)
@@ -420,7 +454,8 @@ fun SystemLogsPanel(
                                 supportedBitDepths = supportedBitDepths,
                                 refusedTrackHistory = refusedTrackHistory,
                                 includeLogcat = true,
-                                logcatLines = procLogcat
+                                logcatLines = procLogcat,
+                                context = context
                             )
                             val diagDir = File(context.cacheDir, "diagnostics").apply { mkdirs() }
                             diagDir.listFiles()?.forEach { it.delete() }
@@ -475,7 +510,7 @@ fun SystemLogsPanel(
         Spacer(modifier = Modifier.height(10.dp))
         Divider(color = Color.White.copy(alpha = 0.08f), thickness = 1.dp)
 
-        // --- Scrollable Diagnostics Body (Single Unified List with 5 Sections) ---
+        // --- Scrollable Diagnostics Body (Single Unified List with 6 Sections) ---
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -484,6 +519,24 @@ fun SystemLogsPanel(
             horizontalAlignment = Alignment.Start,
             verticalArrangement = Arrangement.Top
         ) {
+            // Section 0: Storage & Library Scanner
+            LogSectionHeader("STORAGE & LIBRARY SCANNER")
+            val sp = remember { context.getSharedPreferences("music_player_prefs", Context.MODE_PRIVATE) }
+            val musicRoot = sp.getString("music_root_directory", null) ?: "(Not Configured)"
+            val isBasicGranted = remember { com.yuka.musicplayer.util.checkStoragePermission(context) }
+            val isAllFilesGranted = remember { com.yuka.musicplayer.util.isAllFilesAccessGranted(context) }
+            val scanDiag = com.yuka.musicplayer.util.MusicScannerHelper.lastScanDiagnostics
+
+            LogItem("Music Root", if (musicRoot.length > 30) "..." + musicRoot.takeLast(28) else musicRoot)
+            LogItem("Basic Permission", if (isBasicGranted) "GRANTED" else "RESTRICTED", if (isBasicGranted) LocalAccentColor.current else Color.Red)
+            LogItem("All Files Access", if (isAllFilesGranted) "GRANTED (FUSE Bypass)" else "NOT GRANTED", if (isAllFilesGranted) LocalAccentColor.current else TerminalGray)
+            if (scanDiag != null) {
+                LogItem("Last Scan Found", "${scanDiag.totalDiscovered} tracks (${scanDiag.elapsedMs}ms)")
+                LogItem("Scan Breakdown", "L1:${scanDiag.layer1WalkCount} L2-Sync:${scanDiag.layer2ReindexTriggered} L3-MS:+${scanDiag.layer3MediaStoreAdded} L4-SAF:+${scanDiag.layer4SafBridgeAdded}")
+            } else {
+                LogItem("Last Scan Status", "No scan recorded yet")
+            }
+
             // Section 1: Device & Hardware
             LogSectionHeader("DEVICE & HARDWARE")
             LogItem("DAC Model", dacName)
@@ -686,7 +739,7 @@ fun AppLogsSection(context: Context) {
     val coroutineScope = rememberCoroutineScope()
     val allLogs by AppLogger.entries.collectAsState()
     var selectedCategory by remember { mutableStateOf("ALL") }
-    val categories = listOf("ALL", "AUDIO", "USB", "PLAYBACK", "UI", "SYSTEM", "LOGCAT")
+    val categories = listOf("ALL", "AUDIO", "USB", "PLAYBACK", "STORAGE", "UI", "SYSTEM", "LOGCAT")
     
     var logcatLines by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoadingLogcat by remember { mutableStateOf(false) }

@@ -1,5 +1,6 @@
 package com.yuka.musicplayer.ui.dialogs
 
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -95,7 +96,9 @@ fun PermissionCard(
     isEssential: Boolean,
     desc: String,
     actionLabel: String,
-    onAction: () -> Unit
+    onAction: () -> Unit,
+    secondaryActionLabel: String? = null,
+    onSecondaryAction: (() -> Unit)? = null
 ) {
     val badgeColor = if (isGranted) Color(0xFF00E676)
     else if (isEssential) Color(0xFFFF9100)
@@ -176,6 +179,27 @@ fun PermissionCard(
                     fontWeight = FontWeight.Bold
                 )
             }
+
+            if (secondaryActionLabel != null && onSecondaryAction != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                TactileBox(
+                    onClick = onSecondaryAction,
+                    pressedScale = 0.94f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(50))
+                        .background(Color.White.copy(alpha = 0.06f))
+                        .padding(vertical = 7.dp)
+                ) {
+                    Text(
+                        text = secondaryActionLabel,
+                        color = Color.White.copy(alpha = 0.70f),
+                        fontFamily = ModernSansFont,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 com.yuka.musicplayer.ui.components.GlyphCheck(
@@ -198,15 +222,19 @@ fun PermissionCard(
 fun PermissionSetupDialog(
     isNotificationGranted: Boolean,
     isStorageGranted: Boolean,
+    isAllFilesAccessGranted: Boolean = false,
     isDndGranted: Boolean,
     isBatteryOptimizationIgnored: Boolean = true,
     onRequestNotification: () -> Unit,
     onRequestStorage: () -> Unit,
+    onRequestBasicStorage: () -> Unit = onRequestStorage,
+    onRequestAllFilesAccess: () -> Unit = {},
     onRequestDnd: () -> Unit,
     onRequestBatteryOptimization: () -> Unit = {},
     onComplete: () -> Unit
 ) {
     val accent = LocalAccentColor.current
+    val canProceed = isStorageGranted || isAllFilesAccessGranted
 
     Column(
         modifier = Modifier
@@ -225,7 +253,7 @@ fun PermissionSetupDialog(
                 fontWeight = FontWeight.Bold,
                 fontFamily = ModernSansFont
             )
-            if (isStorageGranted) {
+            if (canProceed) {
                 TactileBox(
                     onClick = onComplete,
                     pressedScale = 0.85f,
@@ -259,15 +287,55 @@ fun PermissionSetupDialog(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             item {
+                val isAndroid11Plus = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                val effectiveStorageGranted = if (isAndroid11Plus) (isAllFilesAccessGranted || isStorageGranted) else isStorageGranted
+                val isFullyGranted = if (isAndroid11Plus) isAllFilesAccessGranted else isStorageGranted
+
+                val badge = if (isFullyGranted) "FULL ACCESS"
+                else if (effectiveStorageGranted) "PARTIAL ACCESS"
+                else "REQUIRED"
+
+                val desc = if (isFullyGranted) {
+                    "Full direct filesystem access enabled. All folders (including .nomedia bypass) and direct FLAC album subfolders are accessible."
+                } else if (effectiveStorageGranted && isAndroid11Plus) {
+                    "Basic media permission active. On Android 11+ (Samsung One UI), 'All Files Access' is recommended to bypass .nomedia and detect direct FLAC files in subfolders."
+                } else {
+                    "Required for the native engine (dr_flac & dr_wav) to read FLAC & WAV files directly from internal memory or MicroSD."
+                }
+
+                val actionLabel = if (isFullyGranted) {
+                    "Full Access Granted"
+                } else if (effectiveStorageGranted && isAndroid11Plus) {
+                    "Upgrade to All Files Access"
+                } else {
+                    "Grant Storage Access"
+                }
+
+                val onAction = if (isAndroid11Plus && !isAllFilesAccessGranted) {
+                    onRequestAllFilesAccess
+                } else {
+                    onRequestStorage
+                }
+
+                val secondaryLabel = if (isAndroid11Plus && !isAllFilesAccessGranted && !isStorageGranted) {
+                    "Or use basic media access"
+                } else null
+
+                val onSecondary = if (isAndroid11Plus && !isAllFilesAccessGranted && !isStorageGranted) {
+                    onRequestBasicStorage
+                } else null
+
                 PermissionCard(
                     icon = { com.yuka.musicplayer.ui.components.GlyphFolder(color = accent, modifier = Modifier.size(18.dp)) },
                     title = "Audio Storage Access",
-                    badge = if (isStorageGranted) "GRANTED" else "REQUIRED",
-                    isGranted = isStorageGranted,
+                    badge = badge,
+                    isGranted = isFullyGranted,
                     isEssential = true,
-                    desc = "Required for the native engine (dr_flac & dr_wav) to read FLAC & WAV files directly from internal memory or MicroSD.",
-                    actionLabel = if (isStorageGranted) "Already Granted" else "Grant Storage Access",
-                    onAction = onRequestStorage
+                    desc = desc,
+                    actionLabel = actionLabel,
+                    onAction = onAction,
+                    secondaryActionLabel = secondaryLabel,
+                    onSecondaryAction = onSecondary
                 )
             }
 
@@ -313,7 +381,7 @@ fun PermissionSetupDialog(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        if (!isStorageGranted) {
+        if (!canProceed) {
             Text(
                 text = "Please grant Storage Access to begin scanning and playing music.",
                 color = Color(0xFFFF9100),
@@ -325,7 +393,7 @@ fun PermissionSetupDialog(
 
         Button(
             onClick = onComplete,
-            enabled = isStorageGranted,
+            enabled = canProceed,
             colors = ButtonDefaults.buttonColors(
                 containerColor = accent,
                 disabledContainerColor = Color.White.copy(alpha = 0.08f)
@@ -334,11 +402,11 @@ fun PermissionSetupDialog(
             modifier = Modifier.fillMaxWidth().height(48.dp)
         ) {
             Text(
-                text = if (isStorageGranted) "Continue to Player" else "Grant Permissions Above",
+                text = if (canProceed) "Continue to Player" else "Grant Permissions Above",
                 fontFamily = ModernSansFont,
                 fontSize = 13.5.sp,
                 fontWeight = FontWeight.Bold,
-                color = if (isStorageGranted) Color(0xFF0E0D13) else Color.White.copy(alpha = 0.45f)
+                color = if (canProceed) Color(0xFF0E0D13) else Color.White.copy(alpha = 0.45f)
             )
         }
     }

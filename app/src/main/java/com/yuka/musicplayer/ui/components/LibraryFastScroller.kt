@@ -23,6 +23,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.ui.theme.LocalAccentColor
@@ -31,14 +32,15 @@ import com.yuka.musicplayer.ui.theme.glassMorphic
 import com.yuka.musicplayer.ui.theme.m3OnSurface
 import com.yuka.musicplayer.ui.theme.m3SubtleFill
 import com.yuka.musicplayer.ui.theme.m3SurfaceBase
+import kotlin.math.roundToInt
 
 @Composable
 fun LibraryFastScroller(
     lazyListState: LazyListState,
     itemCount: Int,
-    currentLetter: String,
     onScrollToIndex: (Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    letterProvider: ((Int) -> String)? = null
 ) {
     if (itemCount <= 5) return
 
@@ -64,12 +66,17 @@ fun LibraryFastScroller(
         }
     }
 
-    val activeProgress = if (isDragging) dragProgress else derivedScrollProgress
-
-    // Calculate vertical offset ensuring thumb never overflows
-    val maxScrollableDistancePx = (barHeightPx - thumbHeightPx).coerceAtLeast(0f)
-    val thumbOffsetPx = activeProgress * maxScrollableDistancePx
-    val thumbOffsetDp = with(density) { thumbOffsetPx.toDp() }
+    // Letter is ONLY evaluated when dragging, preventing recomposition storms during regular scroll
+    val currentLetter by remember(letterProvider, isDragging, itemCount) {
+        derivedStateOf {
+            if (!isDragging || letterProvider == null || itemCount <= 0) ""
+            else {
+                val p = dragProgress.coerceIn(0f, 1f)
+                val targetIndex = (p * (itemCount - 1)).toInt().coerceIn(0, itemCount - 1)
+                letterProvider(targetIndex)
+            }
+        }
+    }
 
     Box(
         modifier = modifier
@@ -79,10 +86,11 @@ fun LibraryFastScroller(
                 barHeightPx = coordinates.size.height.toFloat().coerceAtLeast(1f)
             }
             .pointerInput(itemCount, barHeightPx) {
+                val maxScrollable = (barHeightPx - thumbHeightPx).coerceAtLeast(1f)
                 detectVerticalDragGestures(
                     onDragStart = { offset ->
                         isDragging = true
-                        val p = ((offset.y - (thumbHeightPx / 2f)) / maxScrollableDistancePx).coerceIn(0f, 1f)
+                        val p = ((offset.y - (thumbHeightPx / 2f)) / maxScrollable).coerceIn(0f, 1f)
                         dragProgress = p
                         val targetIndex = (p * (itemCount - 1)).toInt()
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -96,7 +104,7 @@ fun LibraryFastScroller(
                     },
                     onVerticalDrag = { change, _ ->
                         change.consume()
-                        val p = ((change.position.y - (thumbHeightPx / 2f)) / maxScrollableDistancePx).coerceIn(0f, 1f)
+                        val p = ((change.position.y - (thumbHeightPx / 2f)) / maxScrollable).coerceIn(0f, 1f)
                         dragProgress = p
                         val targetIndex = (p * (itemCount - 1)).toInt()
                         onScrollToIndex(targetIndex)
@@ -114,11 +122,16 @@ fun LibraryFastScroller(
                 .background(m3SubtleFill(alpha = if (isDragging) 0.25f else 0.12f))
         )
 
-        // Active thumb pill (centered horizontally in 16.dp width, 6.dp wide)
+        // Active thumb pill: uses layout-phase offset lambda so scrolling never triggers Composition
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .offset(y = thumbOffsetDp)
+                .offset {
+                    val p = if (isDragging) dragProgress else derivedScrollProgress
+                    val maxScrollable = (barHeightPx - thumbHeightPx).coerceAtLeast(0f)
+                    val offsetPx = (p * maxScrollable).roundToInt()
+                    IntOffset(0, offsetPx)
+                }
                 .size(width = 6.dp, height = thumbHeightDp)
                 .clip(RoundedCornerShape(3.dp))
                 .background(if (isDragging) accent else m3OnSurface().copy(alpha = 0.40f))
@@ -131,10 +144,12 @@ fun LibraryFastScroller(
             exit = fadeOut() + scaleOut(),
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset(
-                    x = (-46).dp,
-                    y = (thumbOffsetDp - 12.dp).coerceAtLeast(0.dp)
-                )
+                .offset {
+                    val maxScrollable = (barHeightPx - thumbHeightPx).coerceAtLeast(0f)
+                    val offsetPx = (dragProgress * maxScrollable).roundToInt()
+                    val bubbleOffsetPx = (offsetPx - with(density) { 12.dp.roundToPx() }).coerceAtLeast(0)
+                    IntOffset(with(density) { (-46).dp.roundToPx() }, bubbleOffsetPx)
+                }
         ) {
             Box(
                 modifier = Modifier

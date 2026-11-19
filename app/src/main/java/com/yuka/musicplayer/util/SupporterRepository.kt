@@ -24,15 +24,23 @@ object SupporterRepository {
     private const val REMOTE_SUPPORTERS_JSON = "https://raw.githubusercontent.com/yukaatsu/tsrossa/main/supporters.json"
 
     const val DEVELOPER_THANK_YOU_MESSAGE =
-        "Terima kasih tak terhingga kepada seluruh pendukung, donatur, dan rekan audiophile yang telah berkontribusi bagi perkembangan tsrossa! Setiap dukungan yang kalian berikan menjadi bahan bakar utama agar pemutar musik bit-perfect ini terus aktif dirawat dan disempurnakan tanpa iklan."
+        "Endless gratitude to all supporters, donors, and fellow audiophiles who have contributed to the development of tsrossa! Every contribution fuels the ongoing maintenance and refinement of this ad-free, bit-perfect audio engine."
 
     const val PRIORITY_FEATURE_REQUEST_NOTE =
-        "Punya ide fitur baru atau perbaikan yang ingin dipertimbangkan lebih utama dalam antrean rilis? Tuliskan request fitur kamu di kolom pesan saat melakukan donasi melalui Bagi-Bagi. Request dari para donatur akan ditinjau dan diprioritaskan langsung dalam roadmap pengembangan tsrossa!"
+        "Have a new feature idea or improvement you want prioritized in the release queue? Write your feature request in the message box when donating via Bagi-Bagi. Supporter requests are reviewed and prioritized directly in the tsrossa development roadmap!"
 
     /**
      * Curated list of early supporters and feature request contributors.
+     * User-submitted supporter messages are preserved verbatim as authentic community quotes.
      */
     val DEFAULT_SUPPORTERS = listOf(
+        DonationSupporter(
+            name = "Arya",
+            message = "Nah kemarin kan udah di kabulkan fitur EQ nya, nah sekarang aku ada usulan fitur bit-perfect biar bisa jalan di aplikasi lain... Kayak UAPP, ini ku coba play Apple music dac nya ga beneran kerja (indikator masih idle)... Dah itu aja..",
+            badge = "Supporter",
+            date = "Community Feedback",
+            isFeatureRequest = true
+        ),
         DonationSupporter(
             name = "Seseorang",
             message = "Bang, untuk aplikasi nya bagus, semoga kedepannya ada fitur EQ dan next patch tambahin informasi waktu play lagu... Berapa bit itu lagunya, outputnya brp, dll, itu aja sih bang",
@@ -43,7 +51,29 @@ object SupporterRepository {
     )
 
     /**
-     * Attempts to fetch latest remote supporters list from GitHub with graceful fallback.
+     * Merges remote supporter entries with curated local defaults, preserving all local entries
+     * without duplicates so newly added supporters always appear both online and offline.
+     */
+    internal fun mergeSupporters(remote: List<DonationSupporter>): List<DonationSupporter> {
+        if (remote.isEmpty()) return DEFAULT_SUPPORTERS
+        val merged = ArrayList<DonationSupporter>(DEFAULT_SUPPORTERS.size + remote.size)
+        val seenKeys = HashSet<String>()
+        fun keyOf(s: DonationSupporter): String = "${s.name.trim().lowercase()}|${s.message.trim()}"
+        for (item in DEFAULT_SUPPORTERS) {
+            if (seenKeys.add(keyOf(item))) {
+                merged.add(item)
+            }
+        }
+        for (item in remote) {
+            if (seenKeys.add(keyOf(item))) {
+                merged.add(item)
+            }
+        }
+        return merged
+    }
+
+    /**
+     * Attempts to fetch latest remote supporters list from GitHub and merges with curated defaults.
      */
     suspend fun getSupporters(): List<DonationSupporter> = withContext(Dispatchers.IO) {
         try {
@@ -72,7 +102,7 @@ object SupporterRepository {
                             )
                         )
                     }
-                    if (list.isNotEmpty()) return@withContext list
+                    if (list.isNotEmpty()) return@withContext mergeSupporters(list)
                 }
             }
         } catch (_: Exception) {

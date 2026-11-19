@@ -818,6 +818,117 @@ fun GlyphEqualizer(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
     )
 }
 
+@Composable
+fun GlyphFloppyDisk(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: floppy-disk (Save Preset / File)
+    PhosphorIconCanvas(
+        "M219.31,72,184,36.69A15.86,15.86,0,0,0,172.69,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V83.31A15.86,15.86,0,0,0,219.31,72ZM168,208H88V152h80Zm40,0H184V152a16,16,0,0,0-16-16H88a16,16,0,0,0-16,16v56H48V48H172.69L208,83.31ZM160,72a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h56A8,8,0,0,1,160,72Z",
+        color = color,
+        contentDescription = "Save",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphShareNetwork(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: share-network (Share / Export-Import)
+    PhosphorIconCanvas(
+        "M176,160a39.89,39.89,0,0,0-28.62,12.09l-46.1-29.63a39.8,39.8,0,0,0,0-28.92l46.1-29.63a40,40,0,1,0-8.66-13.45l-46.1,29.63a40,40,0,1,0,0,55.82l46.1,29.63A40,40,0,1,0,176,160Zm0-128a24,24,0,1,1-24,24A24,24,0,0,1,176,32ZM64,152a24,24,0,1,1,24-24A24,24,0,0,1,64,152Zm112,72a24,24,0,1,1,24-24A24,24,0,0,1,176,224Z",
+        color = color,
+        contentDescription = "Share",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphDownloadSimple(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: download-simple (Import)
+    PhosphorIconCanvas(
+        "M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z",
+        color = color,
+        contentDescription = "Import",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphUploadSimple(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: upload-simple (Export)
+    PhosphorIconCanvas(
+        "M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0ZM88,80l32-32V144a8,8,0,0,0,16,0V48l32,32a8,8,0,0,0,11.32-11.32l-48-48a8,8,0,0,0-11.32,0l-48,48A8,8,0,0,0,88,80Z",
+        color = color,
+        contentDescription = "Export",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphBookmark(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: bookmark-simple (Saved Preset)
+    PhosphorIconCanvas(
+        "M184,32H72A16,16,0,0,0,56,48V224a8,8,0,0,0,12.24,6.78L128,193.43l59.77,37.35A8,8,0,0,0,200,224V48A16,16,0,0,0,184,32Zm0,177.57-51.77-32.35a8,8,0,0,0-8.48,0L72,209.57V48H184Z",
+        color = color,
+        contentDescription = "Preset",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphQuestion(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // phosphor: question (Guide / Help)
+    PhosphorIconCanvas(
+        "M140,180a12,12,0,1,1-12-12A12,12,0,0,1,140,180ZM128,72c-22.06,0-40,16.15-40,36v4a8,8,0,0,0,16,0v-4c0-11,10.77-20,24-20s24,9,24,20-10.77,20-24,20a8,8,0,0,0-8,8v8a8,8,0,0,0,16,0v-.72c18.24-3.35,32-17.9,32-35.28C168,88.15,150.06,72,128,72Zm104,56A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z",
+        color = color,
+        contentDescription = "Guide",
+        modifier = modifier,
+        filled = true
+    )
+}
+
+@Composable
+fun GlyphFilterLowShelf(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // Phosphor-styled 256x256 Low Shelf EQ curve
+    PhosphorIconCanvas(
+        "M28,88 H92 C124,88 132,168 164,168 H228",
+        color = color,
+        contentDescription = "Low Shelf Filter",
+        modifier = modifier,
+        filled = false,
+        strokeWidth = 20f
+    )
+}
+
+@Composable
+fun GlyphFilterPeaking(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // Phosphor-styled 256x256 Peaking Bell EQ curve
+    PhosphorIconCanvas(
+        "M28,168 H64 C94,168 98,80 128,80 C158,80 162,168 192,168 H228",
+        color = color,
+        contentDescription = "Peaking Filter",
+        modifier = modifier,
+        filled = false,
+        strokeWidth = 20f
+    )
+}
+
+@Composable
+fun GlyphFilterHighShelf(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
+    // Phosphor-styled 256x256 High Shelf EQ curve
+    PhosphorIconCanvas(
+        "M28,168 H92 C124,168 132,88 164,88 H228",
+        color = color,
+        contentDescription = "High Shelf Filter",
+        modifier = modifier,
+        filled = false,
+        strokeWidth = 20f
+    )
+}
+
 // ==========================================
 // TSROSSA LOGO SILHOUETTE (Transparent Vector)
 // Exact 10-layer vector geometry from tsrossa_app_icons/icon-1024.png

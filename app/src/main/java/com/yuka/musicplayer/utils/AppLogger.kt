@@ -89,6 +89,25 @@ object AppLogger {
         i("SYSTEM", "Application log buffer cleared by user.")
     }
 
+    internal fun isNoisyFrameworkLog(tag: String, message: String): Boolean {
+        if (tag.equals("InsetsController", ignoreCase = true) ||
+            tag.equals("ImeTracker", ignoreCase = true) ||
+            tag.equals("Choreographer", ignoreCase = true) ||
+            tag.equals("WindowOnBackDispatcher", ignoreCase = true) ||
+            tag.equals("PlayCore", ignoreCase = true) ||
+            tag.equals("ProfileInstaller", ignoreCase = true) ||
+            tag.startsWith("VRI[", ignoreCase = true)
+        ) return true
+
+        if (message.contains("PHASE_CLIENT_ALREADY_HIDDEN", ignoreCase = true) ||
+            message.contains("ViewPostIme pointer", ignoreCase = true) ||
+            message.contains("call setFrameRateCategory", ignoreCase = true) ||
+            message.contains("onFocusEvent", ignoreCase = true)
+        ) return true
+
+        return false
+    }
+
     /**
      * Ingests native C++ and system logcat lines into categorized AppLogEntry records.
      */
@@ -125,6 +144,9 @@ object AppLogger {
                 // Skip logs originating from AppLogger itself to prevent recursion / duplicate entries
                 if (tag.startsWith(LOG_TAG)) continue
 
+                // Filter noisy Android framework spam from application events ring buffer
+                if (isNoisyFrameworkLog(tag, message)) continue
+
                 val dedupeKey = "$fullTimestamp|$tag|$message"
                 if (syncedKeys.contains(dedupeKey)) continue
 
@@ -148,6 +170,10 @@ object AppLogger {
                 val msgUpper = message.uppercase(Locale.US)
 
                 val category = when {
+                    tagUpper.contains("STORAGE") || tagUpper.contains("SCANNER") || tagUpper.contains("MUSICSCANNER") ||
+                            msgUpper.contains("STORAGE") || msgUpper.contains("SCANNER") || msgUpper.contains("NOMEDIA") ||
+                            msgUpper.contains("MEDIASTORE") || msgUpper.contains("SAF") || msgUpper.contains("ALL_FILES") -> "STORAGE"
+
                     tagUpper.contains("USB") || msgUpper.contains("USB") || msgUpper.contains("LIBUSB") ||
                             msgUpper.contains("UAC") || msgUpper.contains("ALTSETTING") || msgUpper.contains("SET_CUR") ||
                             msgUpper.contains("CLAIM") || msgUpper.contains("VID=") || msgUpper.contains("PID=") -> "USB"

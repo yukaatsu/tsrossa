@@ -16,8 +16,8 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -32,6 +32,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -41,7 +42,9 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.audio.*
@@ -66,28 +69,36 @@ fun ParametricEqModalSheet(
     CyberBottomSheet(
         visible = visible,
         onDismissRequest = onDismissRequest,
-        maxHeightFraction = 0.92f,
+        maxHeightFraction = 0.94f,
         maxWidth = 480.dp
     ) {
         val accent = LocalAccentColor.current
+        val isDark = LocalIsDarkTheme.current
+        val onSurfaceColor = m3OnSurface()
         val isEqEnabled = config.enabled
         val disabledGrey = m3OnSurfaceVariant().copy(alpha = 0.42f)
         val effectiveAccent = if (isEqEnabled) accent else disabledGrey
         val sectionAlpha = if (isEqEnabled) 1.0f else 0.50f
+        val subtleBorder = onSurfaceColor.copy(alpha = if (isDark) 0.08f else 0.14f)
+        val subtleDivider = onSurfaceColor.copy(alpha = if (isDark) 0.08f else 0.12f)
 
-        var selectedBandIndex by remember { mutableIntStateOf(5) } // Default: 1 kHz vocal core
+        var selectedBandIndex by remember { mutableIntStateOf(5) } // Default: 1 kHz Vocal Focus
         var showGuideCard by remember { mutableStateOf(false) }
         var showSavePresetCard by remember { mutableStateOf(false) }
         var showExportImportCard by remember { mutableStateOf(false) }
         var presetNameInput by remember { mutableStateOf("") }
 
-        // Tutup kartu panduan, simpan, dan export/import secara otomatis bila PEQ dimatikan
+        // Automatically collapse secondary panels when PEQ is bypassed
         LaunchedEffect(isEqEnabled) {
             if (!isEqEnabled) {
                 showGuideCard = false
                 showSavePresetCard = false
                 showExportImportCard = false
             }
+        }
+
+        val activeUserPreset = remember(userPresets, config.selectedPresetId) {
+            userPresets.find { it.id == config.selectedPresetId }
         }
 
         Column(
@@ -97,7 +108,9 @@ fun ParametricEqModalSheet(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 1. Header & Master Bypass Toggle
+            // =====================================================================
+            // 1. CLEAN HEADER BAR & MASTER BYPASS SWITCH
+            // =====================================================================
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -111,7 +124,7 @@ fun ParametricEqModalSheet(
                         GlyphEqualizer(color = effectiveAccent, modifier = Modifier.size(22.dp))
                         Text(
                             text = "Parametric EQ",
-                            color = m3OnSurface(),
+                            color = onSurfaceColor,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = ModernSansFont
@@ -149,7 +162,9 @@ fun ParametricEqModalSheet(
                 }
             }
 
-            // 2. Preset Selector Chips Row + Panduan + Simpan Preset + Export/Import + Reset Flat (#NOTE 1: Tanpa preset bawaan)
+            // =====================================================================
+            // 2. ERGONOMIC ACTION TOOLBAR (minHeight = 40.dp, 100% Phosphor Icons)
+            // =====================================================================
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -158,179 +173,171 @@ fun ParametricEqModalSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Quick Guide Toggle Button
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (showGuideCard) accent else m3SurfaceContainerHigh())
-                        .clickable(enabled = isEqEnabled) {
-                            showGuideCard = !showGuideCard
-                            if (showGuideCard) {
-                                showSavePresetCard = false
-                                showExportImportCard = false
+                // Save / Manage Preset
+                PeqToolbarActionChip(
+                    label = if (showSavePresetCard) "Close" else "Save",
+                    isActive = showSavePresetCard,
+                    enabled = isEqEnabled,
+                    accentColor = effectiveAccent,
+                    onClick = {
+                        showSavePresetCard = !showSavePresetCard
+                        if (showSavePresetCard) {
+                            showGuideCard = false
+                            showExportImportCard = false
+                            if (activeUserPreset != null) {
+                                presetNameInput = activeUserPreset.name
                             }
                         }
-                        .padding(horizontal = 10.dp, vertical = 7.dp)
-                ) {
-                    Text(
-                        text = if (showGuideCard) "✕ Tutup Panduan" else "💡 Panduan EQ",
-                        color = if (showGuideCard) Color.White else effectiveAccent,
-                        fontSize = 11.5.sp,
-                        fontFamily = ModernSansFont,
-                        fontWeight = FontWeight.Bold
-                    )
+                    }
+                ) { tint ->
+                    if (showSavePresetCard) {
+                        GlyphClose(color = tint, modifier = Modifier.size(15.dp))
+                    } else {
+                        GlyphFloppyDisk(color = tint, modifier = Modifier.size(16.dp))
+                    }
                 }
 
-                // Save Preset Toggle Button (#NOTE 2)
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (showSavePresetCard) effectiveAccent else m3SurfaceContainerHigh())
-                        .clickable(enabled = isEqEnabled) {
-                            showSavePresetCard = !showSavePresetCard
-                            if (showSavePresetCard) {
-                                showGuideCard = false
-                                showExportImportCard = false
-                                val currentPreset = userPresets.find { it.id == config.selectedPresetId }
-                                if (currentPreset != null) {
-                                    presetNameInput = currentPreset.name
-                                }
-                            }
+                // Export / Import Preset
+                PeqToolbarActionChip(
+                    label = if (showExportImportCard) "Close" else "Export / Import",
+                    isActive = showExportImportCard,
+                    enabled = isEqEnabled,
+                    accentColor = effectiveAccent,
+                    onClick = {
+                        showExportImportCard = !showExportImportCard
+                        if (showExportImportCard) {
+                            showGuideCard = false
+                            showSavePresetCard = false
                         }
-                        .padding(horizontal = 10.dp, vertical = 7.dp)
-                ) {
-                    Text(
-                        text = if (showSavePresetCard) "✕ Batal Simpan" else "💾 Simpan Preset",
-                        color = if (showSavePresetCard) Color.White else effectiveAccent,
-                        fontSize = 11.5.sp,
-                        fontFamily = ModernSansFont,
-                        fontWeight = FontWeight.Bold
-                    )
+                    }
+                ) { tint ->
+                    if (showExportImportCard) {
+                        GlyphClose(color = tint, modifier = Modifier.size(15.dp))
+                    } else {
+                        GlyphShareNetwork(color = tint, modifier = Modifier.size(16.dp))
+                    }
                 }
 
-                // Export / Import Preset Button (#NOTE 1)
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (showExportImportCard) effectiveAccent else m3SurfaceContainerHigh())
-                        .clickable(enabled = isEqEnabled) {
-                            showExportImportCard = !showExportImportCard
-                            if (showExportImportCard) {
-                                showGuideCard = false
-                                showSavePresetCard = false
-                            }
-                        }
-                        .padding(horizontal = 10.dp, vertical = 7.dp)
-                ) {
-                    Text(
-                        text = if (showExportImportCard) "✕ Tutup Bagikan" else "⇄ Export / Import",
-                        color = if (showExportImportCard) Color.White else effectiveAccent,
-                        fontSize = 11.5.sp,
-                        fontFamily = ModernSansFont,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                // Reset Flat Action Button
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(m3SurfaceContainerLow())
-                        .border(
-                            1.dp,
-                            Color.White.copy(alpha = if (isEqEnabled) 0.12f else 0.05f),
-                            RoundedCornerShape(10.dp)
+                // Reset Flat
+                PeqToolbarActionChip(
+                    label = "Reset Flat",
+                    isActive = false,
+                    enabled = isEqEnabled,
+                    accentColor = effectiveAccent,
+                    subtle = true,
+                    onClick = {
+                        val flatBands = PeqConfiguration.createDefaultBands()
+                        onConfigChange(
+                            config.copy(
+                                selectedPresetId = "flat",
+                                preampDb = 0.0f,
+                                bands = flatBands
+                            )
                         )
-                        .clickable(enabled = isEqEnabled) {
-                            val flatBands = PeqConfiguration.createDefaultBands()
-                            onConfigChange(
-                                config.copy(
-                                    selectedPresetId = "flat",
-                                    preampDb = 0.0f,
-                                    bands = flatBands
-                                )
-                            )
-                        }
-                        .padding(horizontal = 10.dp, vertical = 7.dp)
-                ) {
-                    Text(
-                        text = "Reset Flat",
-                        color = if (isEqEnabled) m3OnSurfaceVariant() else disabledGrey,
-                        fontSize = 11.5.sp,
-                        fontFamily = ModernSansFont,
-                        fontWeight = FontWeight.Medium
-                    )
+                    }
+                ) { tint ->
+                    GlyphRefresh(color = tint, modifier = Modifier.size(15.dp))
                 }
 
-                // User Saved Presets Chips (#NOTE 2)
-                userPresets.forEach { userPreset ->
-                    val isSelected = config.selectedPresetId == userPreset.id
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(
-                                if (isSelected) {
-                                    if (isEqEnabled) accent.copy(alpha = 0.22f)
-                                    else disabledGrey.copy(alpha = 0.15f)
-                                } else m3SurfaceContainerLow()
-                            )
-                            .border(
-                                width = 1.dp,
-                                color = if (isSelected) effectiveAccent else Color.Transparent,
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                            .clickable(enabled = isEqEnabled) {
-                                onConfigChange(
-                                    config.copy(
-                                        selectedPresetId = userPreset.id,
-                                        preampDb = userPreset.preampDb,
-                                        autoPreampEnabled = userPreset.autoPreampEnabled,
-                                        bands = userPreset.bands
+                // EQ Guide
+                PeqToolbarActionChip(
+                    label = if (showGuideCard) "Close" else "Guide",
+                    isActive = showGuideCard,
+                    enabled = isEqEnabled,
+                    accentColor = effectiveAccent,
+                    subtle = !showGuideCard,
+                    onClick = {
+                        showGuideCard = !showGuideCard
+                        if (showGuideCard) {
+                            showSavePresetCard = false
+                            showExportImportCard = false
+                        }
+                    }
+                ) { tint ->
+                    if (showGuideCard) {
+                        GlyphClose(color = tint, modifier = Modifier.size(15.dp))
+                    } else {
+                        GlyphQuestion(color = tint, modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+
+            // =====================================================================
+            // 2b. USER SAVED PRESETS ROW (Pure Tap-to-Select, Zero Tiny Delete X)
+            // =====================================================================
+            if (userPresets.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer { alpha = sectionAlpha }
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    userPresets.forEach { userPreset ->
+                        val isSelected = config.selectedPresetId == userPreset.id
+                        val contentTint = when {
+                            isSelected -> effectiveAccent
+                            isEqEnabled -> onSurfaceColor
+                            else -> disabledGrey
+                        }
+                        Row(
+                            modifier = Modifier
+                                .heightIn(min = 40.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isSelected) {
+                                        if (isEqEnabled) accent.copy(alpha = 0.20f)
+                                        else disabledGrey.copy(alpha = 0.14f)
+                                    } else {
+                                        m3SurfaceContainerLow()
+                                    }
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isSelected) effectiveAccent else subtleBorder,
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .clickable(enabled = isEqEnabled) {
+                                    onConfigChange(
+                                        config.copy(
+                                            selectedPresetId = userPreset.id,
+                                            preampDb = userPreset.preampDb,
+                                            autoPreampEnabled = userPreset.autoPreampEnabled,
+                                            bands = userPreset.bands
+                                        )
                                     )
-                                )
-                            }
-                            .padding(horizontal = 10.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = "★ ${userPreset.name}",
-                            color = if (isSelected) effectiveAccent else if (isEqEnabled) m3OnSurface() else disabledGrey,
-                            fontSize = 12.sp,
-                            fontFamily = ModernSansFont,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                        )
-
-                        if (isSelected && isEqEnabled) {
-                            Box(
-                                modifier = Modifier
-                                    .size(16.dp)
-                                    .clip(CircleShape)
-                                    .background(m3SurfaceContainerHigh())
-                                    .clickable {
-                                        onDeleteUserPreset(userPreset.id)
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "✕",
-                                    color = m3OnSurfaceVariant(),
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                                }
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(7.dp)
+                        ) {
+                            GlyphBookmark(
+                                color = contentTint,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = userPreset.name,
+                                color = contentTint,
+                                fontSize = 12.5.sp,
+                                fontFamily = ModernSansFont,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
             }
 
-            // 3. Expandable Save Preset Card (#NOTE 2)
+            // =====================================================================
+            // 3. EXPANDABLE SECONDARY CARDS (Save/Delete, Export/Import, Guide)
+            // =====================================================================
             AnimatedVisibility(
                 visible = showSavePresetCard && isEqEnabled,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
-                val activeUserPreset = userPresets.find { it.id == config.selectedPresetId }
                 PeqSavePresetCard(
                     accentColor = effectiveAccent,
                     presetName = presetNameInput,
@@ -349,17 +356,22 @@ fun ParametricEqModalSheet(
                             showSavePresetCard = false
                         }
                     },
+                    onDeleteExisting = {
+                        if (activeUserPreset != null) {
+                            onDeleteUserPreset(activeUserPreset.id)
+                            presetNameInput = ""
+                            showSavePresetCard = false
+                        }
+                    },
                     onClose = { showSavePresetCard = false }
                 )
             }
 
-            // 3b. Expandable Export / Import Preset Card (#NOTE 1)
             AnimatedVisibility(
                 visible = showExportImportCard && isEqEnabled,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
-                val activeUserPreset = userPresets.find { it.id == config.selectedPresetId }
                 PeqExportImportCard(
                     accentColor = effectiveAccent,
                     config = config,
@@ -380,7 +392,6 @@ fun ParametricEqModalSheet(
                 )
             }
 
-            // 4. Expandable In-Sheet Tutorial Guide Card
             AnimatedVisibility(
                 visible = showGuideCard && isEqEnabled,
                 enter = expandVertically() + fadeIn(),
@@ -392,134 +403,171 @@ fun ParametricEqModalSheet(
                 )
             }
 
-            // 4. Interactive Frequency Response Graph Canvas
-            PeqFrequencyResponseGraph(
-                bands = config.bands,
-                preampDb = config.effectivePreampDb,
-                accentColor = accent,
-                isEnabled = isEqEnabled,
-                selectedBandIndex = selectedBandIndex,
-                onSelectBand = { selectedBandIndex = it },
+            // =====================================================================
+            // 4. INTERACTIVE FREQUENCY RESPONSE GRAPH + INTEGRATED PRE-AMP BAR
+            // =====================================================================
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(130.dp)
                     .clip(RoundedCornerShape(16.dp))
                     .background(m3SurfaceContainerLow())
                     .border(
                         0.8.dp,
-                        if (isEqEnabled) accent.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f),
+                        if (isEqEnabled) accent.copy(alpha = 0.25f) else subtleBorder,
                         RoundedCornerShape(16.dp)
                     )
-            )
+            ) {
+                PeqFrequencyResponseGraph(
+                    bands = config.bands,
+                    preampDb = config.effectivePreampDb,
+                    accentColor = accent,
+                    isEnabled = isEqEnabled,
+                    selectedBandIndex = selectedBandIndex,
+                    onSelectBand = { selectedBandIndex = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(136.dp)
+                )
 
-            // 5. Preamp & Auto-Preamp Anti-Clipping Bar
+                // Adaptive divider between graph and preamp bar
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(0.8.dp)
+                        .background(subtleDivider)
+                )
+
+                // Integrated Pre-Amp & Auto-Clip Control
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer { alpha = sectionAlpha }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        val maxBoost = remember(config.bands) { PeqEvaluator.calculateMaxBoost(config.bands) }
+                        val displayPreamp = config.effectivePreampDb
+                        val preampText = String.format(Locale.US, "Pre-Amp: %+.1f dB", displayPreamp)
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = preampText,
+                                color = if (isEqEnabled) onSurfaceColor else disabledGrey,
+                                fontSize = 12.5.sp,
+                                fontFamily = TerminalFont,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            if (config.autoPreampEnabled && maxBoost > 0.05f) {
+                                Text(
+                                    text = "Anti-Clip",
+                                    color = effectiveAccent,
+                                    fontSize = 10.5.sp,
+                                    fontFamily = TerminalFont,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+
+                        if (!config.autoPreampEnabled) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Slider(
+                                value = config.preampDb,
+                                enabled = isEqEnabled,
+                                onValueChange = { newPre ->
+                                    if (isEqEnabled) {
+                                        onConfigChange(
+                                            config.copy(
+                                                preampDb = (round(newPre * 10f) / 10f),
+                                                selectedPresetId = "custom"
+                                            )
+                                        )
+                                    }
+                                },
+                                valueRange = -12.0f..6.0f,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = effectiveAccent,
+                                    activeTrackColor = effectiveAccent,
+                                    inactiveTrackColor = m3SurfaceContainerHigh(),
+                                    disabledThumbColor = disabledGrey,
+                                    disabledActiveTrackColor = disabledGrey.copy(alpha = 0.6f),
+                                    disabledInactiveTrackColor = m3SurfaceContainerHigh().copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(28.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    // Auto-Clip Toggle Pill (minHeight = 38.dp)
+                    Box(
+                        modifier = Modifier
+                            .heightIn(min = 38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (config.autoPreampEnabled) effectiveAccent.copy(alpha = 0.18f)
+                                else m3SurfaceContainerHigh()
+                            )
+                            .border(
+                                width = 0.8.dp,
+                                color = if (config.autoPreampEnabled) effectiveAccent.copy(alpha = 0.45f)
+                                else subtleBorder,
+                                shape = RoundedCornerShape(10.dp)
+                            )
+                            .clickable(enabled = isEqEnabled) {
+                                onConfigChange(
+                                    config.copy(
+                                        autoPreampEnabled = !config.autoPreampEnabled
+                                    )
+                                )
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (config.autoPreampEnabled) "Auto-Clip ON" else "Manual",
+                            color = if (config.autoPreampEnabled) effectiveAccent
+                            else if (isEqEnabled) m3OnSurfaceVariant()
+                            else disabledGrey,
+                            fontSize = 11.5.sp,
+                            fontFamily = ModernSansFont,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            // =====================================================================
+            // 5. POWERAMP-STYLE SPACIOUS 10-BAND VERTICAL FADER BANK
+            //    (62.dp wide columns, 164.dp tall track, 0.1 dB precision, Light/Dark adaptive)
+            // =====================================================================
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .graphicsLayer { alpha = sectionAlpha }
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(m3SurfaceContainerLow())
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    val maxBoost = remember(config.bands) { PeqEvaluator.calculateMaxBoost(config.bands) }
-                    val displayPreamp = config.effectivePreampDb
-                    val preampText = String.format(Locale.US, "Pre-Amp: %+.1f dB", displayPreamp)
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = preampText,
-                            color = if (isEqEnabled) m3OnSurface() else disabledGrey,
-                            fontSize = 12.5.sp,
-                            fontFamily = TerminalFont,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        if (config.autoPreampEnabled && maxBoost > 0.05f) {
-                            Text(
-                                text = "(Auto-Clip: ${String.format(Locale.US, "%+.1f", displayPreamp)} dB)",
-                                color = effectiveAccent,
-                                fontSize = 10.sp,
-                                fontFamily = TerminalFont
-                            )
-                        }
-                    }
-
-                    if (!config.autoPreampEnabled) {
-                        Slider(
-                            value = config.preampDb,
-                            enabled = isEqEnabled,
-                            onValueChange = { newPre ->
-                                if (isEqEnabled) {
-                                    onConfigChange(
-                                        config.copy(
-                                            preampDb = (round(newPre * 2f) / 2f),
-                                            selectedPresetId = "custom"
-                                        )
-                                    )
-                                }
-                            },
-                            valueRange = -12.0f..6.0f,
-                            colors = SliderDefaults.colors(
-                                thumbColor = effectiveAccent,
-                                activeTrackColor = effectiveAccent,
-                                inactiveTrackColor = m3SurfaceContainerHigh(),
-                                disabledThumbColor = disabledGrey,
-                                disabledActiveTrackColor = disabledGrey.copy(alpha = 0.6f),
-                                disabledInactiveTrackColor = m3SurfaceContainerHigh().copy(alpha = 0.5f)
-                            ),
-                            modifier = Modifier.fillMaxWidth().height(26.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(10.dp))
-
-                // Auto-Preamp Toggle Chip
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            if (config.autoPreampEnabled) effectiveAccent.copy(alpha = 0.18f)
-                            else m3SurfaceContainerHigh()
-                        )
-                        .clickable(enabled = isEqEnabled) {
-                            onConfigChange(
-                                config.copy(
-                                    autoPreampEnabled = !config.autoPreampEnabled
-                                )
-                            )
-                        }
-                        .padding(horizontal = 9.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = if (config.autoPreampEnabled) "Auto-Clip ON" else "Manual",
-                        color = if (config.autoPreampEnabled) effectiveAccent else if (isEqEnabled) m3OnSurfaceVariant() else disabledGrey,
-                        fontSize = 11.sp,
-                        fontFamily = ModernSansFont,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-
-            // 6. 10-Band Horizontal Faders Rack
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer { alpha = sectionAlpha },
+                    .padding(horizontal = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "10-Band Sliders (Geser fader / ketuk 2x reset 0 dB)",
-                    color = if (isEqEnabled) m3OnSurfaceVariant() else disabledGrey,
-                    fontSize = 11.sp,
+                    text = "10-Band Faders",
+                    color = if (isEqEnabled) onSurfaceColor else disabledGrey,
+                    fontSize = 12.5.sp,
                     fontFamily = ModernSansFont,
-                    fontWeight = FontWeight.Medium
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Double-tap fader to reset 0 dB",
+                    color = if (isEqEnabled) m3OnSurfaceVariant() else disabledGrey,
+                    fontSize = 10.5.sp,
+                    fontFamily = ModernSansFont
                 )
             }
 
@@ -529,9 +577,14 @@ fun ParametricEqModalSheet(
                     .graphicsLayer { alpha = sectionAlpha }
                     .clip(RoundedCornerShape(16.dp))
                     .background(m3SurfaceContainerLow())
-                    .padding(vertical = 12.dp, horizontal = 6.dp)
+                    .border(
+                        width = 0.8.dp,
+                        color = subtleBorder,
+                        shape = RoundedCornerShape(16.dp)
+                    )
+                    .padding(vertical = 12.dp, horizontal = 8.dp)
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 config.bands.forEachIndexed { idx, band ->
@@ -543,6 +596,7 @@ fun ParametricEqModalSheet(
                         isSelected = isSelected,
                         onSelect = { selectedBandIndex = idx },
                         onGainChange = { newGain ->
+                            selectedBandIndex = idx
                             val updatedBands = config.bands.toMutableList()
                             updatedBands[idx] = band.copy(gainDb = newGain)
                             onConfigChange(
@@ -556,7 +610,10 @@ fun ParametricEqModalSheet(
                 }
             }
 
-            // 7. Selected Band Fine-Tune Inspector
+            // =====================================================================
+            // 6. UAPP-STYLE COMPACT SELECTED BAND EDITOR
+            //    (3-Way Phosphor Filter Bar 42.dp + 40.dp x 40.dp Steppers, 0.1 dB Gain Steps)
+            // =====================================================================
             val currentBand = config.bands.getOrNull(selectedBandIndex)
             if (currentBand != null) {
                 PeqBandFineTuneInspector(
@@ -576,13 +633,120 @@ fun ParametricEqModalSheet(
                 )
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
 
 /**
- * 60 FPS Logarithmic Frequency Response Graph with Canvas curve and interactive touch node selector.
+ * Ergonomic toolbar chip (minHeight = 40.dp) with Phosphor Icon + text label.
+ */
+@Composable
+private fun PeqToolbarActionChip(
+    label: String,
+    isActive: Boolean,
+    enabled: Boolean,
+    accentColor: Color,
+    subtle: Boolean = false,
+    onClick: () -> Unit,
+    icon: @Composable (tint: Color) -> Unit
+) {
+    val isDark = LocalIsDarkTheme.current
+    val onSurfaceColor = m3OnSurface()
+    val disabledGrey = m3OnSurfaceVariant().copy(alpha = 0.42f)
+    val contentTint = when {
+        isActive -> Color.White
+        !enabled -> disabledGrey
+        subtle -> m3OnSurfaceVariant()
+        else -> accentColor
+    }
+    val bgColor = when {
+        isActive -> accentColor
+        subtle -> m3SurfaceContainerLow()
+        else -> m3SurfaceContainerHigh()
+    }
+    val borderColor = when {
+        isActive -> Color.Transparent
+        subtle -> onSurfaceColor.copy(alpha = if (enabled) (if (isDark) 0.12f else 0.16f) else 0.06f)
+        else -> accentColor.copy(alpha = if (enabled) 0.28f else 0.08f)
+    }
+
+    Row(
+        modifier = Modifier
+            .heightIn(min = 40.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(bgColor)
+            .border(width = 0.8.dp, color = borderColor, shape = RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 13.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        icon(contentTint)
+        Text(
+            text = label,
+            color = contentTint,
+            fontSize = 12.sp,
+            fontFamily = ModernSansFont,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
+    }
+}
+
+/**
+ * Phosphor curve icon helper matching PeqFilterType.
+ */
+@Composable
+private fun PeqFilterTypeIcon(
+    filterType: PeqFilterType,
+    color: Color,
+    modifier: Modifier = Modifier.size(16.dp)
+) {
+    when (filterType) {
+        PeqFilterType.LOW_SHELF -> GlyphFilterLowShelf(color = color, modifier = modifier)
+        PeqFilterType.PEAKING -> GlyphFilterPeaking(color = color, modifier = modifier)
+        PeqFilterType.HIGH_SHELF -> GlyphFilterHighShelf(color = color, modifier = modifier)
+    }
+}
+
+/**
+ * Ergonomic 40.dp x 40.dp Phosphor stepper button (Minus / Plus) for accurate thumb taps.
+ */
+@Composable
+private fun PeqStepperButton(
+    isPlus: Boolean,
+    enabled: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    val isDark = LocalIsDarkTheme.current
+    val onSurfaceColor = m3OnSurface()
+    val disabledGrey = m3OnSurfaceVariant().copy(alpha = 0.42f)
+    TactileBox(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(m3SurfaceContainerHigh().copy(alpha = if (enabled) 1.0f else 0.45f))
+            .border(
+                width = 0.8.dp,
+                color = if (enabled) accentColor.copy(alpha = 0.24f) else onSurfaceColor.copy(alpha = if (isDark) 0.06f else 0.10f),
+                shape = RoundedCornerShape(12.dp)
+            )
+    ) {
+        val iconColor = if (enabled) onSurfaceColor else disabledGrey
+        if (isPlus) {
+            GlyphAdd(color = iconColor, modifier = Modifier.size(18.dp))
+        } else {
+            GlyphMinus(color = iconColor, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+/**
+ * 60 FPS Logarithmic Frequency Response Graph with Light/Dark adaptive grid & interactive band dots.
  */
 @Composable
 private fun PeqFrequencyResponseGraph(
@@ -594,8 +758,16 @@ private fun PeqFrequencyResponseGraph(
     onSelectBand: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isDark = LocalIsDarkTheme.current
+    val onSurfaceColor = m3OnSurface()
+    val zeroGridColor = onSurfaceColor.copy(
+        alpha = if (isEnabled) (if (isDark) 0.24f else 0.30f) else 0.12f
+    )
+    val minorGridColor = onSurfaceColor.copy(
+        alpha = if (isEnabled) (if (isDark) 0.08f else 0.14f) else 0.05f
+    )
+
     val samplePoints = remember {
-        // Logarithmic frequency distribution from 20 Hz to 20,000 Hz (96 points)
         val numPoints = 96
         val logMin = log10(20.0)
         val logMax = log10(20000.0)
@@ -608,6 +780,8 @@ private fun PeqFrequencyResponseGraph(
     val curveGainValues = remember(bands, preampDb) {
         PeqEvaluator.evaluateCurve(bands, samplePoints, preampDb)
     }
+
+    val currentOnSelectBand by rememberUpdatedState(onSelectBand)
 
     Canvas(
         modifier = modifier.pointerInput(bands, isEnabled) {
@@ -626,8 +800,8 @@ private fun PeqFrequencyResponseGraph(
                         nearestIdx = i
                     }
                 }
-                if (minDiff < 45.dp.toPx()) {
-                    onSelectBand(nearestIdx)
+                if (minDiff < 48.dp.toPx()) {
+                    currentOnSelectBand(nearestIdx)
                 }
             }
         }
@@ -654,25 +828,25 @@ private fun PeqFrequencyResponseGraph(
             return frac * h
         }
 
-        // Draw horizontal grid lines (+12, +6, 0, -6, -12 dB)
+        // Horizontal dB grid lines (+12, +6, 0, -6, -12 dB) — Light/Dark adaptive
         val gridDbs = floatArrayOf(12f, 6f, 0f, -6f, -12f)
         for (gDb in gridDbs) {
             val y = dbToY(gDb)
             val isZero = gDb == 0f
             drawLine(
-                color = if (isZero) Color.White.copy(alpha = if (isEnabled) 0.22f else 0.10f) else Color.White.copy(alpha = if (isEnabled) 0.07f else 0.03f),
+                color = if (isZero) zeroGridColor else minorGridColor,
                 start = Offset(0f, y),
                 end = Offset(w, y),
                 strokeWidth = if (isZero) 1.2f else 0.8f
             )
         }
 
-        // Draw vertical frequency grid lines (31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k)
+        // Vertical octave frequency grid lines — Light/Dark adaptive
         val gridFreqs = doubleArrayOf(31.25, 62.5, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
         for (gFreq in gridFreqs) {
             val x = freqToX(gFreq)
             drawLine(
-                color = Color.White.copy(alpha = if (isEnabled) 0.08f else 0.03f),
+                color = minorGridColor,
                 start = Offset(x, 0f),
                 end = Offset(x, h),
                 strokeWidth = 0.8f
@@ -681,10 +855,8 @@ private fun PeqFrequencyResponseGraph(
 
         val curveColor = if (isEnabled) accentColor else Color.Gray.copy(alpha = 0.55f)
 
-        // Construct composite frequency response curve Path
         val curvePath = Path()
         val fillPath = Path()
-
         for (i in samplePoints.indices) {
             val x = freqToX(samplePoints[i].toDouble())
             val y = dbToY(curveGainValues[i])
@@ -702,12 +874,12 @@ private fun PeqFrequencyResponseGraph(
         fillPath.lineTo(lastX, dbToY(0f))
         fillPath.close()
 
-        // Draw gradient fill under curve
+        // Gradient fill under curve
         drawPath(
             path = fillPath,
             brush = Brush.verticalGradient(
                 colors = listOf(
-                    curveColor.copy(alpha = if (isEnabled) 0.25f else 0.08f),
+                    curveColor.copy(alpha = if (isEnabled) 0.26f else 0.08f),
                     curveColor.copy(alpha = 0.01f)
                 ),
                 startY = 0f,
@@ -716,14 +888,14 @@ private fun PeqFrequencyResponseGraph(
             style = Fill
         )
 
-        // Draw curve outline
+        // Curve outline
         drawPath(
             path = curvePath,
             color = curveColor,
             style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round)
         )
 
-        // Draw dots for each of the 10 bands
+        // Interactive dots for each band (high-contrast on both Light & Dark themes)
         val nodeColor = if (isEnabled) accentColor else Color.Gray.copy(alpha = 0.60f)
         bands.forEachIndexed { idx, band ->
             val bx = freqToX(band.freqHz.toDouble())
@@ -732,24 +904,36 @@ private fun PeqFrequencyResponseGraph(
 
             if (isSelected) {
                 drawCircle(
-                    color = nodeColor.copy(alpha = 0.35f),
-                    radius = 8.dp.toPx(),
+                    color = nodeColor.copy(alpha = 0.32f),
+                    radius = 9.dp.toPx(),
+                    center = Offset(bx, by)
+                )
+                drawCircle(
+                    color = nodeColor,
+                    radius = 5.2.dp.toPx(),
+                    center = Offset(bx, by)
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = 2.2.dp.toPx(),
+                    center = Offset(bx, by)
+                )
+            } else {
+                drawCircle(
+                    color = nodeColor,
+                    radius = 3.2.dp.toPx(),
                     center = Offset(bx, by)
                 )
             }
-
-            drawCircle(
-                color = if (isSelected) (if (isEnabled) Color.White else Color.LightGray) else nodeColor,
-                radius = if (isSelected) 4.5.dp.toPx() else 3.0.dp.toPx(),
-                center = Offset(bx, by)
-            )
         }
     }
 }
 
 /**
- * Interactive vertical EQ band fader with pointer touch/drag gesture, double-tap reset,
- * gain text, tactile steppers, frequency label, acoustic role badge, and filter type tag.
+ * Poweramp-inspired spacious vertical EQ band fader:
+ * - Wide 62.dp column & tall 164.dp touchable vertical track
+ * - 0.1 dB precision on tap & drag + double-tap reset to 0.0 dB
+ * - Light & Dark theme adaptive inactive rail, 0 dB center tick, and thumb contrast
  */
 @Composable
 private fun PeqVerticalBandSlider(
@@ -760,42 +944,67 @@ private fun PeqVerticalBandSlider(
     onSelect: () -> Unit,
     onGainChange: (Float) -> Unit
 ) {
-    val freqText = when {
-        band.freqHz >= 1000f -> "${(band.freqHz / 1000f).toInt().takeIf { band.freqHz % 1000 == 0f } ?: String.format(Locale.US, "%.1f", band.freqHz / 1000f)}k"
-        else -> "${band.freqHz.toInt()}"
-    }
-
+    val freqText = remember(band.freqHz) { formatShortFreq(band.freqHz) }
+    val isDark = LocalIsDarkTheme.current
+    val onSurfaceColor = m3OnSurface()
     val disabledGrey = m3OnSurfaceVariant().copy(alpha = 0.42f)
     val effectiveAccent = if (isEnabled) accentColor else disabledGrey
 
+    // Adaptive contrast palette for both Dark Mode and Light Mode
+    val inactiveRailColor = if (isDark) {
+        Color.White.copy(alpha = if (isEnabled) 0.16f else 0.07f)
+    } else {
+        onSurfaceColor.copy(alpha = if (isEnabled) 0.24f else 0.10f)
+    }
+    val zeroTickColor = if (isDark) {
+        Color.White.copy(alpha = if (isEnabled) 0.42f else 0.18f)
+    } else {
+        onSurfaceColor.copy(alpha = if (isEnabled) 0.52f else 0.22f)
+    }
+
+    val currentOnSelect by rememberUpdatedState(onSelect)
+    val currentOnGainChange by rememberUpdatedState(onGainChange)
     var sliderHeightPx by remember { mutableFloatStateOf(1f) }
 
     Column(
         modifier = Modifier
-            .width(46.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (isSelected) effectiveAccent.copy(alpha = if (isEnabled) 0.14f else 0.08f) else Color.Transparent)
-            .clickable(enabled = isEnabled) { onSelect() }
-            .padding(vertical = 4.dp),
+            .width(62.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                if (isSelected) effectiveAccent.copy(alpha = if (isEnabled) 0.14f else 0.08f)
+                else Color.Transparent
+            )
+            .border(
+                width = if (isSelected) 0.9.dp else 0.dp,
+                color = if (isSelected) effectiveAccent.copy(alpha = 0.35f) else Color.Transparent,
+                shape = RoundedCornerShape(14.dp)
+            )
+            .clickable(enabled = isEnabled) { currentOnSelect() }
+            .padding(vertical = 8.dp, horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // Gain text
+        // 1. Live Gain dB Readout (0.1 dB precision)
         val gainStr = String.format(Locale.US, "%+.1f", band.gainDb)
         Text(
             text = gainStr,
-            color = if (!isEnabled) disabledGrey else if (isSelected) accentColor else if (abs(band.gainDb) > 0.05f) m3OnSurface() else m3OnSurfaceVariant(),
-            fontSize = 9.5.sp,
+            color = when {
+                !isEnabled -> disabledGrey
+                isSelected -> accentColor
+                abs(band.gainDb) > 0.05f -> onSurfaceColor
+                else -> m3OnSurfaceVariant()
+            },
+            fontSize = 11.sp,
             fontFamily = TerminalFont,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = if (isSelected || abs(band.gainDb) > 0.05f) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1
         )
 
-        // Vertical Slider Canvas with Pointer Touch/Drag and Double-Tap Reset
+        // 2. Tall 164.dp Vertical Fader Track (full column touch width, 0.1 dB step)
         Box(
             modifier = Modifier
-                .width(36.dp)
-                .height(112.dp)
+                .fillMaxWidth()
+                .height(164.dp)
                 .onGloballyPositioned { coords ->
                     sliderHeightPx = coords.size.height.toFloat()
                 }
@@ -803,18 +1012,19 @@ private fun PeqVerticalBandSlider(
                     if (!isEnabled) return@pointerInput
                     detectTapGestures(
                         onDoubleTap = {
-                            onGainChange(0.0f)
+                            currentOnSelect()
+                            currentOnGainChange(0.0f)
                         },
                         onTap = { offset ->
-                            val topPad = 6.dp.toPx()
-                            val botPad = 6.dp.toPx()
-                            val trackLen = sliderHeightPx - topPad - botPad
+                            currentOnSelect()
+                            val pad = 10.dp.toPx()
+                            val trackLen = sliderHeightPx - 2f * pad
                             if (trackLen > 0f) {
-                                val clampedY = offset.y.coerceIn(topPad, sliderHeightPx - botPad)
-                                val frac = (sliderHeightPx - botPad - clampedY) / trackLen
+                                val clampedY = offset.y.coerceIn(pad, sliderHeightPx - pad)
+                                val frac = (sliderHeightPx - pad - clampedY) / trackLen
                                 val newGain = (frac * 24f - 12f).coerceIn(-12f, 12f)
-                                val stepped = (round(newGain.toDouble() * 2.0) / 2.0).toFloat()
-                                onGainChange(stepped)
+                                val stepped = (round(newGain.toDouble() * 10.0) / 10.0).toFloat()
+                                currentOnGainChange(stepped)
                             }
                         }
                     )
@@ -822,17 +1032,17 @@ private fun PeqVerticalBandSlider(
                 .pointerInput(band.index, isEnabled) {
                     if (!isEnabled) return@pointerInput
                     detectVerticalDragGestures(
+                        onDragStart = { currentOnSelect() },
                         onVerticalDrag = { change, _ ->
                             change.consume()
-                            val topPad = 6.dp.toPx()
-                            val botPad = 6.dp.toPx()
-                            val trackLen = sliderHeightPx - topPad - botPad
+                            val pad = 10.dp.toPx()
+                            val trackLen = sliderHeightPx - 2f * pad
                             if (trackLen > 0f) {
-                                val clampedY = change.position.y.coerceIn(topPad, sliderHeightPx - botPad)
-                                val frac = (sliderHeightPx - botPad - clampedY) / trackLen
+                                val clampedY = change.position.y.coerceIn(pad, sliderHeightPx - pad)
+                                val frac = (sliderHeightPx - pad - clampedY) / trackLen
                                 val newGain = (frac * 24f - 12f).coerceIn(-12f, 12f)
-                                val stepped = (round(newGain.toDouble() * 2.0) / 2.0).toFloat()
-                                onGainChange(stepped)
+                                val stepped = (round(newGain.toDouble() * 10.0) / 10.0).toFloat()
+                                currentOnGainChange(stepped)
                             }
                         }
                     )
@@ -841,29 +1051,30 @@ private fun PeqVerticalBandSlider(
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val cx = size.width / 2f
-                val topY = 6.dp.toPx()
-                val botY = size.height - 6.dp.toPx()
+                val topY = 10.dp.toPx()
+                val botY = size.height - 10.dp.toPx()
                 val trackLen = botY - topY
                 val midY = topY + trackLen / 2f
 
-                // Inactive rail
+                // Inactive rail (adaptive for Dark & Light mode)
                 drawLine(
-                    color = Color.White.copy(alpha = if (isEnabled) 0.12f else 0.06f),
+                    color = inactiveRailColor,
                     start = Offset(cx, topY),
                     end = Offset(cx, botY),
-                    strokeWidth = 3.dp.toPx(),
+                    strokeWidth = 4.dp.toPx(),
                     cap = StrokeCap.Round
                 )
 
-                // Zero line center tick
+                // Zero dB center reference tick (adaptive for Dark & Light mode)
                 drawLine(
-                    color = Color.White.copy(alpha = if (isEnabled) 0.35f else 0.15f),
-                    start = Offset(cx - 5.dp.toPx(), midY),
-                    end = Offset(cx + 5.dp.toPx(), midY),
-                    strokeWidth = 1.dp.toPx()
+                    color = zeroTickColor,
+                    start = Offset(cx - 8.dp.toPx(), midY),
+                    end = Offset(cx + 8.dp.toPx(), midY),
+                    strokeWidth = 1.4.dp.toPx(),
+                    cap = StrokeCap.Round
                 )
 
-                // Active fill from midY to thumbY
+                // Active gain fill from 0 dB to thumb
                 val frac = ((band.gainDb.coerceIn(-12f, 12f) + 12f) / 24f)
                 val thumbY = botY - (frac * trackLen)
 
@@ -872,109 +1083,73 @@ private fun PeqVerticalBandSlider(
                         color = effectiveAccent,
                         start = Offset(cx, midY),
                         end = Offset(cx, thumbY),
-                        strokeWidth = 3.dp.toPx(),
+                        strokeWidth = 4.dp.toPx(),
                         cap = StrokeCap.Round
                     )
                 }
 
-                // Thumb circle
-                drawCircle(
-                    color = if (isSelected) (if (isEnabled) Color.White else disabledGrey) else effectiveAccent,
-                    radius = if (isSelected) 6.dp.toPx() else 4.5.dp.toPx(),
-                    center = Offset(cx, thumbY)
-                )
+                // Soft halo ring for selected band
+                if (isSelected && isEnabled) {
+                    drawCircle(
+                        color = effectiveAccent.copy(alpha = 0.24f),
+                        radius = 13.5.dp.toPx(),
+                        center = Offset(cx, thumbY)
+                    )
+                }
+
+                // High-contrast thumb for both Light and Dark themes
+                if (isSelected && isEnabled) {
+                    drawCircle(
+                        color = effectiveAccent,
+                        radius = 8.dp.toPx(),
+                        center = Offset(cx, thumbY)
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = 3.2.dp.toPx(),
+                        center = Offset(cx, thumbY)
+                    )
+                } else {
+                    drawCircle(
+                        color = if (isEnabled) effectiveAccent else disabledGrey,
+                        radius = 6.dp.toPx(),
+                        center = Offset(cx, thumbY)
+                    )
+                }
             }
         }
 
-        // Stepper buttons - / +
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            TactileBox(
-                onClick = { if (isEnabled) onGainChange((band.gainDb - 0.5f).coerceIn(-12.0f, 12.0f)) },
-                enabled = isEnabled,
-                pressedScale = 0.85f,
-                modifier = Modifier
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .background(m3SurfaceContainerHigh().copy(alpha = if (isEnabled) 1.0f else 0.40f))
-            ) {
-                Text(
-                    text = "-",
-                    color = if (isEnabled) m3OnSurface() else disabledGrey,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            TactileBox(
-                onClick = { if (isEnabled) onGainChange((band.gainDb + 0.5f).coerceIn(-12.0f, 12.0f)) },
-                enabled = isEnabled,
-                pressedScale = 0.85f,
-                modifier = Modifier
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .background(m3SurfaceContainerHigh().copy(alpha = if (isEnabled) 1.0f else 0.40f))
-            ) {
-                Text(
-                    text = "+",
-                    color = if (isEnabled) m3OnSurface() else disabledGrey,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-
-        // Frequency Label
+        // 3. Frequency Label
         Text(
             text = freqText,
-            color = if (!isEnabled) disabledGrey else if (isSelected) accentColor else m3OnSurface(),
-            fontSize = 11.sp,
+            color = when {
+                !isEnabled -> disabledGrey
+                isSelected -> accentColor
+                else -> onSurfaceColor
+            },
+            fontSize = 12.sp,
             fontFamily = ModernSansFont,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+            maxLines = 1
         )
 
-        // Acoustic Role Badge (SUB, BASS, WARM, BODY, MID, VOCAL, CLEAR, PRES, BRIL, AIR)
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(3.dp))
-                .background(if (isSelected) effectiveAccent.copy(alpha = 0.25f) else Color.White.copy(alpha = if (isEnabled) 0.08f else 0.04f))
-                .padding(horizontal = 3.dp, vertical = 1.dp)
-        ) {
-            Text(
-                text = band.shortLabel,
-                color = if (isSelected) effectiveAccent else if (isEnabled) m3OnSurfaceVariant() else disabledGrey,
-                fontSize = 7.5.sp,
-                fontFamily = TerminalFont,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        // Type Tag (LS / PK / HS)
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(
-                    if (isSelected) effectiveAccent.copy(alpha = 0.22f)
-                    else m3SurfaceContainerHigh().copy(alpha = if (isEnabled) 1.0f else 0.40f)
-                )
-                .padding(horizontal = 4.dp, vertical = 1.dp)
-        ) {
-            Text(
-                text = band.filterType.label,
-                color = if (isSelected) effectiveAccent else if (isEnabled) m3OnSurfaceVariant() else disabledGrey,
-                fontSize = 8.5.sp,
-                fontFamily = TerminalFont,
-                fontWeight = FontWeight.Bold
-            )
-        }
+        // 4. Phosphor Filter Curve Icon (15.dp)
+        PeqFilterTypeIcon(
+            filterType = band.filterType,
+            color = if (isSelected) effectiveAccent else if (isEnabled) m3OnSurfaceVariant() else disabledGrey,
+            modifier = Modifier.size(15.dp)
+        )
     }
 }
 
 /**
- * Detailed parameter inspector for the selected band with horizontal sliders for Gain & Q-Factor,
- * acoustic role zone description, frequency steppers, and filter type selector.
+ * UAPP-inspired compact parametric band editor:
+ * - Clean header with Band #, Frequency, Acoustic Zone & 1-line description
+ * - Full-width 3-Way Filter Type Segmented Bar (height = 42.dp) with Phosphor curve icons
+ * - 3 precision rows with 40.dp x 40.dp Phosphor steppers:
+ *   1) Gain stepper row (±0.1 dB per tap + Reset 0 dB)
+ *   2) Frequency row (logarithmic slider 20 Hz..20 kHz + smart steppers)
+ *   3) Q-Factor row (slider 0.3..5.0 + ±0.05 steppers)
  */
 @Composable
 private fun PeqBandFineTuneInspector(
@@ -983,8 +1158,21 @@ private fun PeqBandFineTuneInspector(
     isEnabled: Boolean,
     onBandChange: (PeqBand) -> Unit
 ) {
+    val onSurfaceColor = m3OnSurface()
     val disabledGrey = m3OnSurfaceVariant().copy(alpha = 0.42f)
     val effectiveAccent = if (isEnabled) accentColor else disabledGrey
+
+    val filterTypesOrdered = remember {
+        listOf(PeqFilterType.LOW_SHELF, PeqFilterType.PEAKING, PeqFilterType.HIGH_SHELF)
+    }
+
+    val logMinFreq = remember { log10(20.0) }
+    val logMaxFreq = remember { log10(20000.0) }
+    val freqLogFraction = remember(band.freqHz) {
+        ((log10(band.freqHz.toDouble().coerceIn(20.0, 20000.0)) - logMinFreq) / (logMaxFreq - logMinFreq))
+            .toFloat()
+            .coerceIn(0f, 1f)
+    }
 
     Column(
         modifier = Modifier
@@ -992,229 +1180,313 @@ private fun PeqBandFineTuneInspector(
             .graphicsLayer { alpha = if (isEnabled) 1.0f else 0.50f }
             .clip(RoundedCornerShape(16.dp))
             .background(m3SurfaceContainerLow())
-            .border(0.8.dp, effectiveAccent.copy(alpha = 0.18f), RoundedCornerShape(16.dp))
+            .border(0.8.dp, effectiveAccent.copy(alpha = 0.20f), RoundedCornerShape(16.dp))
             .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Header: Band Index, Zone Name & Type Selector
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
+        // Header: Selected Band Identity
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                text = "Band ${band.index + 1} • ${formatFullFreq(band.freqHz)} • ${band.zoneName}",
+                color = if (isEnabled) onSurfaceColor else disabledGrey,
+                fontSize = 13.5.sp,
+                fontFamily = ModernSansFont,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (band.acousticDescription.isNotBlank()) {
                 Text(
-                    text = "Band ${band.index + 1} • ${band.zoneName}",
-                    color = if (isEnabled) m3OnSurface() else disabledGrey,
-                    fontSize = 13.5.sp,
+                    text = band.acousticDescription,
+                    color = if (isEnabled) m3OnSurfaceVariant() else disabledGrey.copy(alpha = 0.7f),
+                    fontSize = 11.sp,
                     fontFamily = ModernSansFont,
-                    fontWeight = FontWeight.Bold
+                    lineHeight = 15.sp
                 )
-                if (band.acousticDescription.isNotBlank()) {
-                    Text(
-                        text = band.acousticDescription,
-                        color = if (isEnabled) m3OnSurfaceVariant() else disabledGrey.copy(alpha = 0.7f),
-                        fontSize = 10.5.sp,
-                        fontFamily = ModernSansFont,
-                        lineHeight = 14.sp
-                    )
-                }
             }
+        }
 
-            // Filter Type Segmented Control
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(m3SurfaceContainerHigh().copy(alpha = if (isEnabled) 1.0f else 0.40f))
-                    .padding(2.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                PeqFilterType.values().forEach { type ->
-                    val isTypeActive = band.filterType == type
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (isTypeActive) effectiveAccent else Color.Transparent)
-                            .clickable(enabled = isEnabled) { onBandChange(band.copy(filterType = type)) }
-                            .padding(horizontal = 7.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = type.label,
-                            color = if (isTypeActive) Color.White else if (isEnabled) m3OnSurfaceVariant() else disabledGrey,
-                            fontSize = 10.5.sp,
-                            fontFamily = TerminalFont,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+        // Full-Width 3-Way Filter Type Segmented Selector (height = 42.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(m3SurfaceContainerHigh().copy(alpha = if (isEnabled) 1.0f else 0.45f))
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            filterTypesOrdered.forEach { type ->
+                val isTypeActive = band.filterType == type
+                val tint = when {
+                    isTypeActive -> Color.White
+                    isEnabled -> m3OnSurfaceVariant()
+                    else -> disabledGrey
+                }
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(if (isTypeActive) effectiveAccent else Color.Transparent)
+                        .clickable(enabled = isEnabled) {
+                            onBandChange(band.copy(filterType = type))
+                        }
+                        .padding(horizontal = 6.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    PeqFilterTypeIcon(
+                        filterType = type,
+                        color = tint,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = type.fullName,
+                        color = tint,
+                        fontSize = 11.5.sp,
+                        fontFamily = ModernSansFont,
+                        fontWeight = if (isTypeActive) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
 
-        // 1. Gain Slider
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        // 1. Gain Precision Row (±0.1 dB per tap — vertical fader handles fast drag)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PeqStepperButton(
+                isPlus = false,
+                enabled = isEnabled,
+                accentColor = effectiveAccent,
+                onClick = {
+                    val next = (round((band.gainDb - 0.1f) * 10f) / 10f).coerceIn(-12.0f, 12.0f)
+                    onBandChange(band.copy(gainDb = next))
+                }
+            )
+
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(m3SurfaceContainerHigh().copy(alpha = if (isEnabled) 0.55f else 0.30f))
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = String.format(Locale.US, "Gain: %+.1f dB", band.gainDb),
+                    color = if (isEnabled) onSurfaceColor else disabledGrey,
+                    fontSize = 12.5.sp,
+                    fontFamily = TerminalFont,
+                    fontWeight = FontWeight.Bold
+                )
+
+                val isNonZero = abs(band.gainDb) > 0.05f
+                if (isNonZero && isEnabled) {
+                    Row(
+                        modifier = Modifier
+                            .heightIn(min = 32.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(effectiveAccent.copy(alpha = 0.16f))
+                            .clickable { onBandChange(band.copy(gainDb = 0.0f)) }
+                            .padding(horizontal = 9.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        GlyphRefresh(color = effectiveAccent, modifier = Modifier.size(12.dp))
+                        Text(
+                            text = "0 dB",
+                            color = effectiveAccent,
+                            fontSize = 11.sp,
+                            fontFamily = ModernSansFont,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "Flat",
+                        color = if (isEnabled) m3OnSurfaceVariant() else disabledGrey,
+                        fontSize = 11.sp,
+                        fontFamily = ModernSansFont
+                    )
+                }
+            }
+
+            PeqStepperButton(
+                isPlus = true,
+                enabled = isEnabled,
+                accentColor = effectiveAccent,
+                onClick = {
+                    val next = (round((band.gainDb + 0.1f) * 10f) / 10f).coerceIn(-12.0f, 12.0f)
+                    onBandChange(band.copy(gainDb = next))
+                }
+            )
+        }
+
+        // 2. Frequency Row (Logarithmic Slider + 40.dp Steppers)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = String.format(Locale.US, "Gain: %+.1f dB", band.gainDb),
-                    color = if (isEnabled) m3OnSurface() else disabledGrey,
+                    text = "Frequency",
+                    color = if (isEnabled) m3OnSurfaceVariant() else disabledGrey,
+                    fontSize = 11.5.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = formatFullFreq(band.freqHz),
+                    color = if (isEnabled) onSurfaceColor else disabledGrey,
+                    fontSize = 12.sp,
+                    fontFamily = TerminalFont,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PeqStepperButton(
+                    isPlus = false,
+                    enabled = isEnabled,
+                    accentColor = effectiveAccent,
+                    onClick = {
+                        val step = smartFreqStep(band.freqHz, steppingUp = false)
+                        onBandChange(band.copy(freqHz = (band.freqHz - step).coerceAtLeast(20f)))
+                    }
+                )
+
+                Slider(
+                    value = freqLogFraction,
+                    enabled = isEnabled,
+                    onValueChange = { frac ->
+                        if (isEnabled) {
+                            val rawFreq = 10.0.pow(logMinFreq + frac.toDouble() * (logMaxFreq - logMinFreq)).toFloat()
+                            val snapped = snapFrequencyNice(rawFreq).coerceIn(20f, 20000f)
+                            onBandChange(band.copy(freqHz = snapped))
+                        }
+                    },
+                    valueRange = 0f..1f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = effectiveAccent,
+                        activeTrackColor = effectiveAccent,
+                        inactiveTrackColor = m3SurfaceContainerHigh(),
+                        disabledThumbColor = disabledGrey,
+                        disabledActiveTrackColor = disabledGrey.copy(alpha = 0.6f),
+                        disabledInactiveTrackColor = m3SurfaceContainerHigh().copy(alpha = 0.5f)
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(34.dp)
+                )
+
+                PeqStepperButton(
+                    isPlus = true,
+                    enabled = isEnabled,
+                    accentColor = effectiveAccent,
+                    onClick = {
+                        val step = smartFreqStep(band.freqHz, steppingUp = true)
+                        onBandChange(band.copy(freqHz = (band.freqHz + step).coerceAtMost(20000f)))
+                    }
+                )
+            }
+        }
+
+        // 3. Q-Factor Row (Bandwidth Control + 40.dp Steppers)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val qDesc = when {
+                band.q <= 0.85f -> "Wide / Musical"
+                band.q <= 1.65f -> "1-Octave Standard"
+                else -> "Narrow / Surgical"
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Q-Factor (Bandwidth)",
+                    color = if (isEnabled) m3OnSurfaceVariant() else disabledGrey,
+                    fontSize = 11.5.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = String.format(Locale.US, "Q: %.2f • %s", band.q, qDesc),
+                    color = if (isEnabled) onSurfaceColor else disabledGrey,
                     fontSize = 11.5.sp,
                     fontFamily = TerminalFont,
                     fontWeight = FontWeight.SemiBold
                 )
-                Text(
-                    text = "Ketuk 2x slider untuk reset 0 dB",
-                    color = if (isEnabled) m3OnSurfaceVariant() else disabledGrey.copy(alpha = 0.6f),
-                    fontSize = 9.5.sp,
-                    fontFamily = ModernSansFont
-                )
             }
-            Slider(
-                value = band.gainDb,
-                enabled = isEnabled,
-                onValueChange = { newG ->
-                    if (isEnabled) {
-                        val stepped = round(newG * 2f) / 2f
-                        onBandChange(band.copy(gainDb = stepped))
-                    }
-                },
-                valueRange = -12.0f..12.0f,
-                colors = SliderDefaults.colors(
-                    thumbColor = effectiveAccent,
-                    activeTrackColor = effectiveAccent,
-                    inactiveTrackColor = m3SurfaceContainerHigh(),
-                    disabledThumbColor = disabledGrey,
-                    disabledActiveTrackColor = disabledGrey.copy(alpha = 0.6f),
-                    disabledInactiveTrackColor = m3SurfaceContainerHigh().copy(alpha = 0.5f)
-                ),
-                modifier = Modifier.fillMaxWidth().height(26.dp)
-            )
-        }
 
-        // 2. Frequency Control
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    text = "Frekuensi: ${band.freqHz.toInt()} Hz",
-                    color = if (isEnabled) m3OnSurface() else disabledGrey,
-                    fontSize = 11.5.sp,
-                    fontFamily = ModernSansFont,
-                    fontWeight = FontWeight.Medium
+                PeqStepperButton(
+                    isPlus = false,
+                    enabled = isEnabled,
+                    accentColor = effectiveAccent,
+                    onClick = {
+                        val next = (round((band.q - 0.05f) * 20f) / 20f).coerceIn(0.3f, 5.0f)
+                        onBandChange(band.copy(q = next))
+                    }
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TactileBox(
-                        onClick = {
-                            if (isEnabled) {
-                                val step = if (band.freqHz > 1000f) 100f else 20f
-                                onBandChange(band.copy(freqHz = (band.freqHz - step).coerceAtLeast(20f)))
-                            }
-                        },
-                        enabled = isEnabled,
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(m3SurfaceContainerHigh().copy(alpha = if (isEnabled) 1.0f else 0.40f))
-                    ) {
-                        Text("-", color = if (isEnabled) m3OnSurface() else disabledGrey, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                    TactileBox(
-                        onClick = {
-                            if (isEnabled) {
-                                val step = if (band.freqHz >= 1000f) 100f else 20f
-                                onBandChange(band.copy(freqHz = (band.freqHz + step).coerceAtMost(20000f)))
-                            }
-                        },
-                        enabled = isEnabled,
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(m3SurfaceContainerHigh().copy(alpha = if (isEnabled) 1.0f else 0.40f))
-                    ) {
-                        Text("+", color = if (isEnabled) m3OnSurface() else disabledGrey, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
 
-        // 3. Q-Factor Control (Lebar / Musikal ↔ Sempit / Presisi)
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                val qDesc = if (band.q <= 0.9f) "Lebar / Musikal" else if (band.q <= 1.8f) "Normal" else "Sempit / Tajam"
-                Text(
-                    text = String.format(Locale.US, "Q-Factor: %.2f (%s)", band.q, qDesc),
-                    color = if (isEnabled) m3OnSurface() else disabledGrey,
-                    fontSize = 11.5.sp,
-                    fontFamily = ModernSansFont,
-                    fontWeight = FontWeight.Medium
+                Slider(
+                    value = band.q,
+                    enabled = isEnabled,
+                    onValueChange = { newQ ->
+                        if (isEnabled) {
+                            val stepped = (round(newQ * 20f) / 20f).coerceIn(0.3f, 5.0f)
+                            onBandChange(band.copy(q = stepped))
+                        }
+                    },
+                    valueRange = 0.3f..5.0f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = effectiveAccent,
+                        activeTrackColor = effectiveAccent,
+                        inactiveTrackColor = m3SurfaceContainerHigh(),
+                        disabledThumbColor = disabledGrey,
+                        disabledActiveTrackColor = disabledGrey.copy(alpha = 0.6f),
+                        disabledInactiveTrackColor = m3SurfaceContainerHigh().copy(alpha = 0.5f)
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(34.dp)
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TactileBox(
-                        onClick = {
-                            if (isEnabled) {
-                                onBandChange(band.copy(q = ((round((band.q - 0.05f) * 20f) / 20f)).coerceIn(0.3f, 5.0f)))
-                            }
-                        },
-                        enabled = isEnabled,
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(m3SurfaceContainerHigh().copy(alpha = if (isEnabled) 1.0f else 0.40f))
-                    ) {
-                        Text("-", color = if (isEnabled) m3OnSurface() else disabledGrey, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+
+                PeqStepperButton(
+                    isPlus = true,
+                    enabled = isEnabled,
+                    accentColor = effectiveAccent,
+                    onClick = {
+                        val next = (round((band.q + 0.05f) * 20f) / 20f).coerceIn(0.3f, 5.0f)
+                        onBandChange(band.copy(q = next))
                     }
-                    TactileBox(
-                        onClick = {
-                            if (isEnabled) {
-                                onBandChange(band.copy(q = ((round((band.q + 0.05f) * 20f) / 20f)).coerceIn(0.3f, 5.0f)))
-                            }
-                        },
-                        enabled = isEnabled,
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(m3SurfaceContainerHigh().copy(alpha = if (isEnabled) 1.0f else 0.40f))
-                    ) {
-                        Text("+", color = if (isEnabled) m3OnSurface() else disabledGrey, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
+                )
             }
-            Slider(
-                value = band.q,
-                enabled = isEnabled,
-                onValueChange = { newQ ->
-                    if (isEnabled) {
-                        val stepped = round(newQ * 20f) / 20f
-                        onBandChange(band.copy(q = stepped.coerceIn(0.3f, 5.0f)))
-                    }
-                },
-                valueRange = 0.3f..5.0f,
-                colors = SliderDefaults.colors(
-                    thumbColor = effectiveAccent,
-                    activeTrackColor = effectiveAccent,
-                    inactiveTrackColor = m3SurfaceContainerHigh(),
-                    disabledThumbColor = disabledGrey,
-                    disabledActiveTrackColor = disabledGrey.copy(alpha = 0.6f),
-                    disabledInactiveTrackColor = m3SurfaceContainerHigh().copy(alpha = 0.5f)
-                ),
-                modifier = Modifier.fillMaxWidth().height(26.dp)
-            )
         }
     }
 }
 
 /**
- * In-Sheet Interactive Guide Card: Step-by-step instructions, parameter glossary,
- * 10-band acoustic sound zone map, and quick troubleshooting recipes.
+ * In-Sheet Interactive Guide Card (100% Phosphor Icons, Full English).
  */
 @Composable
 private fun PeqTutorialGuideCard(
@@ -1235,138 +1507,99 @@ private fun PeqTutorialGuideCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "💡 Panduan Pintar 10-Band Parametric EQ",
-                color = m3OnSurface(),
-                fontSize = 13.5.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Tutup",
-                color = accentColor,
-                fontSize = 12.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clickable { onClose() }
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                GlyphQuestion(color = accentColor, modifier = Modifier.size(18.dp))
+                Text(
+                    text = "10-Band Parametric EQ Guide",
+                    color = m3OnSurface(),
+                    fontSize = 13.5.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .heightIn(min = 36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onClose)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                GlyphClose(color = accentColor, modifier = Modifier.size(13.dp))
+                Text(
+                    text = "Close",
+                    color = accentColor,
+                    fontSize = 12.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
 
-        // Section 1: Cara Pakai Cepat
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(m3SurfaceContainerHigh().copy(alpha = 0.5f))
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = "1. Cara Pakai Cepat (Untuk Pemula)",
-                color = accentColor,
-                fontSize = 11.5.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "• Langkah 1: Geser 10 Slider Vertikal ke atas (+dB) atau bawah (-dB) dengan jari untuk membentuk karakter suara idamanmu. Ketuk 2x (double-tap) pada slider untuk reset instan ke 0 dB.\n" +
-                       "• Langkah 2: Tekan '💾 Simpan Preset' untuk menyimpan racikanmu, atau gunakan tombol '⇄ Export / Import' untuk menyalin kode preset dan membagikannya ke teman/komunitas Discord!\n" +
-                       "• Langkah 3: Matikan tombol sakelar ON/OFF di pojok kanan atas kapan saja jika ingin kembali ke mode 100% Bit-Perfect Murni (Direct USB bypass).",
-                color = m3OnSurface(),
-                fontSize = 10.5.sp,
-                fontFamily = ModernSansFont,
-                lineHeight = 15.sp
-            )
-        }
+        PeqGuideSection(
+            title = "1. Quick Start",
+            accentColor = accentColor,
+            body = "• Drag the 10 vertical faders up (+dB) or down (-dB) in 0.1 dB steps to shape your sound. Double-tap any fader to reset it to 0.0 dB.\n" +
+                "• Select any band to adjust its filter type (Low Shelf / Peaking / High Shelf), center frequency, or Q-Factor in the editor below.\n" +
+                "• Use Save to store or delete custom presets, or Export / Import to share preset codes with the community."
+        )
 
-        // Section 2: Kamus Parameter
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(m3SurfaceContainerHigh().copy(alpha = 0.5f))
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = "2. Kamus Singkat Parameter EQ",
-                color = accentColor,
-                fontSize = 11.5.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "• Gain (dB): Kekuatan frekuensi diangkat (+) atau dipotong (-). Perubahan ±1.5 s.d. ±4 dB memberikan hasil paling natural.\n" +
-                       "• Q-Factor: Lebar lengkungan kurva. Q Rendah (0.5–0.9) = lebar & musikal (soundstage luas). Q Tinggi (1.5–5.0) = sempit & presisi (menghilangkan frekuensi mengganggu).\n" +
-                       "• Tipe Filter: LS (Low Shelf: mengangkat semua bass ke bawah), PK (Peaking Bell: bukit/lembah di frekuensi tengah), HS (High Shelf: mengangkat semua treble ke atas).\n" +
-                       "• Pre-Amp & Auto-Clip: Volume dasar sebelum filter. Biarkan di 0.0 dB untuk tenaga suara maksimal, atau nyalakan Auto-Clip jika menaikkan bass tinggi agar terhindar dari distorsi digital.",
-                color = m3OnSurface(),
-                fontSize = 10.5.sp,
-                fontFamily = ModernSansFont,
-                lineHeight = 15.sp
-            )
-        }
+        PeqGuideSection(
+            title = "2. Parameter Glossary",
+            accentColor = accentColor,
+            body = "• Gain (dB): Boost (+) or cut (-) amount in 0.1 dB increments. Adjustments of ±1.5 to ±4.0 dB sound most natural.\n" +
+                "• Q-Factor: Bandwidth of the filter curve. Q = 1.41 is the true 1-octave Constant-Q standard for clean instrument separation. Lower Q (<0.9) is wider; higher Q (>2.0) is narrower.\n" +
+                "• Auto-Clip: Automatically maintains 100% linear headroom (zero clipping/IMD) whenever you boost frequencies."
+        )
 
-        // Section 3: Peta Suara 10-Band
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(m3SurfaceContainerHigh().copy(alpha = 0.5f))
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = "3. Peta Suara 10-Band (31 Hz – 16 kHz)",
-                color = accentColor,
-                fontSize = 11.5.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "• 31 Hz – 125 Hz (Zona Bass): Getaran sub-bass bioskop, hentakan kick drum, dan kehangatan bodi musik.\n" +
-                       "• 250 Hz – 1 kHz (Zona Vokal & Inti): Ketebalan instrumen (low-mid) dan fokus maju-mundurnya vokal penyanyi.\n" +
-                       "• 2 kHz – 4 kHz (Zona Clarity & Attack): Artikulasi vokal, petikan senar gitar, dan ketajaman serangan instrumen.\n" +
-                       "• 8 kHz – 16 kHz (Zona Soundstage & Air): Kilau simbal, udara gema panggung (soundstage luas), dan micro-detail halus.",
-                color = m3OnSurface(),
-                fontSize = 10.5.sp,
-                fontFamily = ModernSansFont,
-                lineHeight = 15.sp
-            )
-        }
+        PeqGuideSection(
+            title = "3. 10-Band Acoustic Map (31 Hz – 16 kHz)",
+            accentColor = accentColor,
+            body = "• 31 Hz – 125 Hz (Bass): Sub-bass rumble, kick drum punch, and lower body warmth.\n" +
+                "• 250 Hz – 1 kHz (Mids & Vocals): Instrument thickness (cut 250 Hz slightly to remove mud) and vocal intimacy (1 kHz).\n" +
+                "• 2 kHz – 4 kHz (Clarity & Attack): Vocal articulation, string definition, and transient bite.\n" +
+                "• 8 kHz – 16 kHz (Soundstage & Air): Cymbal sparkle, soundstage width, and fine micro-detail."
+        )
+    }
+}
 
-        // Section 4: Resep Cepat Solusi Audio
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(m3SurfaceContainerHigh().copy(alpha = 0.5f))
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = "4. Resep Cepat Sesuai Keluhan Telinga",
-                color = accentColor,
-                fontSize = 11.5.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "• Ingin Suara Lebih Powerful & Nendang? → Naikkan 62 Hz (+3.0 dB) dan 31 Hz (+2.5 dB), pastikan Pre-Amp di 0 dB.\n" +
-                       "• Ingin Soundstage Luas & Micro-Detail Keluar? → Naikkan 16 kHz (+2.5 dB) dan 8 kHz (+1.5 dB), potong sedikit 250 Hz (-1.5 dB) agar kabut hilang.\n" +
-                       "• Ingin Vokal Lebih Jernih & Maju ke Depan? → Naikkan 1 kHz (+2.0 dB) dan 2 kHz (+1.5 dB).\n" +
-                       "• Suara Terlalu Pedas / Menusuk Telinga? → Turunkan 4 kHz (-2.0 dB) atau 8 kHz (-2.5 dB).",
-                color = m3OnSurface(),
-                fontSize = 10.5.sp,
-                fontFamily = ModernSansFont,
-                lineHeight = 15.sp
-            )
-        }
+@Composable
+private fun PeqGuideSection(
+    title: String,
+    accentColor: Color,
+    body: String
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(m3SurfaceContainerHigh().copy(alpha = 0.5f))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = title,
+            color = accentColor,
+            fontSize = 11.5.sp,
+            fontFamily = ModernSansFont,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = body,
+            color = m3OnSurface(),
+            fontSize = 10.5.sp,
+            fontFamily = ModernSansFont,
+            lineHeight = 15.sp
+        )
     }
 }
 
 /**
- * Inline card for saving or updating custom user PEQ presets (#NOTE 2).
+ * Inline card for saving, updating, or safely deleting custom user PEQ presets.
  */
 @Composable
 private fun PeqSavePresetCard(
@@ -1376,8 +1609,11 @@ private fun PeqSavePresetCard(
     onNameChange: (String) -> Unit,
     onSaveNew: () -> Unit,
     onUpdateExisting: () -> Unit,
+    onDeleteExisting: () -> Unit,
     onClose: () -> Unit
 ) {
+    val deleteRed = Color(0xFFFF6B6B)
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1392,103 +1628,129 @@ private fun PeqSavePresetCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "💾 Simpan Racikan Parametric EQ",
-                color = m3OnSurface(),
-                fontSize = 13.5.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Tutup",
-                color = accentColor,
-                fontSize = 12.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clickable { onClose() }
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                GlyphFloppyDisk(color = accentColor, modifier = Modifier.size(18.dp))
+                Text(
+                    text = "Save & Manage Preset",
+                    color = m3OnSurface(),
+                    fontSize = 13.5.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .heightIn(min = 36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onClose)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                GlyphClose(color = accentColor, modifier = Modifier.size(13.dp))
+                Text(
+                    text = "Close",
+                    color = accentColor,
+                    fontSize = 12.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
 
         Text(
-            text = "Beri nama preset kustom Anda untuk disimpan dan di-load kembali kapan saja saat bereksperimen:",
+            text = "Save your current EQ tuning as a new preset, update, or delete the active preset:",
             color = m3OnSurfaceVariant(),
             fontSize = 11.sp,
             fontFamily = ModernSansFont,
             lineHeight = 15.sp
         )
 
-        // Text input field box
+        // Text input field (minHeight = 44.dp)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
+                .heightIn(min = 44.dp)
+                .clip(RoundedCornerShape(12.dp))
                 .background(m3SurfaceContainerHigh())
-                .border(1.dp, accentColor.copy(alpha = 0.30f), RoundedCornerShape(10.dp))
-                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .border(1.dp, accentColor.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 11.dp),
+            contentAlignment = Alignment.CenterStart
         ) {
             if (presetName.isEmpty()) {
                 Text(
-                    text = "Ketik nama preset (misal: IEM Bass, Warm Vocal)...",
+                    text = "Enter preset name (e.g. IEM Bass, Vocal Clear)...",
                     color = m3OnSurfaceVariant().copy(alpha = 0.6f),
                     fontSize = 12.5.sp,
                     fontFamily = ModernSansFont
                 )
             }
-            androidx.compose.foundation.text.BasicTextField(
+            BasicTextField(
                 value = presetName,
                 onValueChange = onNameChange,
                 singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(
+                textStyle = TextStyle(
                     color = m3OnSurface(),
                     fontSize = 12.5.sp,
                     fontFamily = ModernSansFont,
                     fontWeight = FontWeight.Medium
                 ),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(accentColor),
+                cursorBrush = SolidColor(accentColor),
                 modifier = Modifier.fillMaxWidth()
             )
         }
 
-        // Action buttons row
+        // Primary Save / Update Buttons (minHeight = 42.dp)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Save as New Button
-            Box(
+            Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
+                    .heightIn(min = 42.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(if (presetName.isNotBlank()) accentColor else m3SurfaceContainerHigh())
-                    .clickable(enabled = presetName.isNotBlank()) { onSaveNew() }
-                    .padding(vertical = 9.dp),
-                contentAlignment = Alignment.Center
+                    .clickable(enabled = presetName.isNotBlank(), onClick = onSaveNew)
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
             ) {
+                val tint = if (presetName.isNotBlank()) Color.White else m3OnSurfaceVariant()
+                GlyphAdd(color = tint, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "＋ Simpan Preset Baru",
-                    color = if (presetName.isNotBlank()) Color.White else m3OnSurfaceVariant(),
-                    fontSize = 11.5.sp,
+                    text = "Save New",
+                    color = tint,
+                    fontSize = 12.sp,
                     fontFamily = ModernSansFont,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
                 )
             }
 
-            // Update existing button if user is currently editing an existing user preset
             if (activeUserPreset != null) {
-                Box(
+                Row(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(10.dp))
+                        .heightIn(min = 42.dp)
+                        .clip(RoundedCornerShape(12.dp))
                         .background(m3SurfaceContainerHigh())
-                        .border(1.dp, accentColor.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-                        .clickable { onUpdateExisting() }
-                        .padding(vertical = 9.dp),
-                    contentAlignment = Alignment.Center
+                        .border(1.dp, accentColor.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                        .clickable(onClick = onUpdateExisting)
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
+                    GlyphRefresh(color = accentColor, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "↻ Update '${activeUserPreset.name}'",
+                        text = "Update",
                         color = accentColor,
-                        fontSize = 11.5.sp,
+                        fontSize = 12.sp,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1
@@ -1496,11 +1758,39 @@ private fun PeqSavePresetCard(
                 }
             }
         }
+
+        // Safe Dedicated Delete Active Preset Button (minHeight = 42.dp)
+        if (activeUserPreset != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(deleteRed.copy(alpha = 0.12f))
+                    .border(0.9.dp, deleteRed.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                    .clickable(onClick = onDeleteExisting)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                GlyphDelete(color = deleteRed, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Delete Preset '${activeUserPreset.name}'",
+                    color = deleteRed,
+                    fontSize = 12.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
     }
 }
 
 /**
- * Inline card for exporting and importing custom PEQ presets (#NOTE 1).
+ * Inline card for exporting and importing custom PEQ presets (100% Phosphor Icons, Full English).
  */
 @Composable
 private fun PeqExportImportCard(
@@ -1515,6 +1805,9 @@ private fun PeqExportImportCard(
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val isDark = LocalIsDarkTheme.current
+    val onSurfaceColor = m3OnSurface()
+    val subtleBorder = onSurfaceColor.copy(alpha = if (isDark) 0.12f else 0.16f)
     var manualInputText by remember { mutableStateOf("") }
 
     val presetToExport = remember(activeUserPreset, config) {
@@ -1535,80 +1828,107 @@ private fun PeqExportImportCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "⇄ Export & Import Preset PEQ",
-                color = m3OnSurface(),
-                fontSize = 13.5.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Tutup",
-                color = accentColor,
-                fontSize = 12.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clickable { onClose() }
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                GlyphShareNetwork(color = accentColor, modifier = Modifier.size(18.dp))
+                Text(
+                    text = "Export & Import Preset",
+                    color = onSurfaceColor,
+                    fontSize = 13.5.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .heightIn(min = 36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onClose)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                GlyphClose(color = accentColor, modifier = Modifier.size(13.dp))
+                Text(
+                    text = "Close",
+                    color = accentColor,
+                    fontSize = 12.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
 
-        // --- SECTION 1: EXPORT / BAGIKAN ---
+        // --- SECTION 1: EXPORT ---
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(m3SurfaceContainerHigh().copy(alpha = 0.5f))
                 .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                GlyphUploadSimple(color = accentColor, modifier = Modifier.size(15.dp))
+                Text(
+                    text = "Export / Share Preset",
+                    color = accentColor,
+                    fontSize = 12.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             Text(
-                text = "📤 Export / Bagikan Preset",
-                color = accentColor,
-                fontSize = 11.5.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Preset aktif: \"${presetToExport.name}\" (${String.format(Locale.US, "%+.1f dB", presetToExport.preampDb)})",
-                color = m3OnSurface(),
+                text = "Active: \"${presetToExport.name}\" (${String.format(Locale.US, "%+.1f dB", presetToExport.preampDb)})",
+                color = onSurfaceColor,
                 fontSize = 10.5.sp,
                 fontFamily = TerminalFont
             )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // 1. Copy Code
-                Box(
+                // 1. Copy Share Code
+                Row(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(accentColor)
                         .clickable {
                             val code = PeqPreferencesHelper.exportPresetToShareCode(presetToExport)
                             clipboardManager.setText(AnnotatedString(code))
-                            Toast.makeText(context, "Kode '${presetToExport.name}' disalin ke Clipboard!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Copied '${presetToExport.name}' code to Clipboard!", Toast.LENGTH_SHORT).show()
                         }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
+                    GlyphClipboard(color = Color.White, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = "📋 Salin Kode",
+                        text = "Copy",
                         color = Color.White,
-                        fontSize = 11.sp,
+                        fontSize = 11.5.sp,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
-                // 2. Share Intent (Discord/WA)
-                Box(
+                // 2. Android Share Intent
+                Row(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(m3SurfaceContainerHigh())
-                        .border(1.dp, accentColor.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                        .border(1.dp, accentColor.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
                         .clickable {
                             val code = PeqPreferencesHelper.exportPresetToShareCode(presetToExport)
                             val sendIntent = Intent().apply {
@@ -1616,64 +1936,75 @@ private fun PeqExportImportCard(
                                 putExtra(Intent.EXTRA_TEXT, code)
                                 type = "text/plain"
                             }
-                            val shareIntent = Intent.createChooser(sendIntent, "Bagikan Preset PEQ (${presetToExport.name})")
+                            val shareIntent = Intent.createChooser(sendIntent, "Share PEQ Preset (${presetToExport.name})")
                             context.startActivity(shareIntent)
                         }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
+                    GlyphShareNetwork(color = accentColor, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = "📤 Bagikan",
+                        text = "Share",
                         color = accentColor,
-                        fontSize = 11.sp,
+                        fontSize = 11.5.sp,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
                 // 3. Export File .json
-                Box(
+                Row(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(m3SurfaceContainerHigh())
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                        .border(1.dp, subtleBorder, RoundedCornerShape(10.dp))
                         .clickable {
                             val jsonStr = PeqPreferencesHelper.exportPresetsToJsonString(listOf(presetToExport))
                             val safeName = presetToExport.name.replace("[^a-zA-Z0-9_-]".toRegex(), "_")
                             onExportJsonFile(jsonStr, "peq_${safeName}.json")
                         }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
+                    GlyphFloppyDisk(color = onSurfaceColor, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = "💾 File .json",
-                        color = m3OnSurface(),
-                        fontSize = 11.sp,
+                        text = ".json",
+                        color = onSurfaceColor,
+                        fontSize = 11.5.sp,
                         fontFamily = ModernSansFont,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             }
 
             if (allUserPresets.size > 1) {
-                Box(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(m3SurfaceContainerLow())
-                        .border(0.8.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                        .border(0.8.dp, subtleBorder, RoundedCornerShape(10.dp))
                         .clickable {
                             val jsonStr = PeqPreferencesHelper.exportPresetsToJsonString(allUserPresets)
                             onExportJsonFile(jsonStr, "peq_all_presets.json")
                         }
-                        .padding(vertical = 6.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
+                    GlyphUploadSimple(color = m3OnSurfaceVariant(), modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "📦 Backup Semua Preset (${allUserPresets.size} preset) ke .json",
+                        text = "Backup All Presets (${allUserPresets.size}) to .json",
                         color = m3OnSurfaceVariant(),
-                        fontSize = 10.5.sp,
+                        fontSize = 11.5.sp,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Medium
                     )
@@ -1681,24 +2012,30 @@ private fun PeqExportImportCard(
             }
         }
 
-        // --- SECTION 2: IMPORT / TERIMA PRESET ---
+        // --- SECTION 2: IMPORT ---
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(m3SurfaceContainerHigh().copy(alpha = 0.5f))
                 .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                GlyphDownloadSimple(color = accentColor, modifier = Modifier.size(15.dp))
+                Text(
+                    text = "Import Preset from Friend / Community",
+                    color = accentColor,
+                    fontSize = 12.sp,
+                    fontFamily = ModernSansFont,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             Text(
-                text = "📥 Import Preset dari Teman / Komunitas",
-                color = accentColor,
-                fontSize = 11.5.sp,
-                fontFamily = ModernSansFont,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Salin kode dari Discord/WA, lalu tekan tombol di bawah untuk langsung menerapkan:",
+                text = "Copy a preset code from Discord/chat, then tap below to apply it immediately:",
                 color = m3OnSurfaceVariant(),
                 fontSize = 10.5.sp,
                 fontFamily = ModernSansFont
@@ -1706,49 +2043,57 @@ private fun PeqExportImportCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 // 1. One-click Paste & Import from Clipboard
-                Box(
+                Row(
                     modifier = Modifier
                         .weight(1.3f)
-                        .clip(RoundedCornerShape(8.dp))
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(accentColor)
                         .clickable {
                             val clipData = clipboardManager.getText()?.text ?: ""
                             if (clipData.isNotBlank()) {
                                 onImportText(clipData)
                             } else {
-                                Toast.makeText(context, "Clipboard kosong! Salin kode preset terlebih dahulu.", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Clipboard is empty! Copy a preset code first.", Toast.LENGTH_SHORT).show()
                             }
                         }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
+                    GlyphClipboard(color = Color.White, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "📋 Tempel dari Clipboard",
+                        text = "Paste Clipboard",
                         color = Color.White,
-                        fontSize = 11.sp,
+                        fontSize = 11.5.sp,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
                 // 2. Import File .json
-                Box(
+                Row(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(m3SurfaceContainerHigh())
-                        .border(1.dp, accentColor.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                        .clickable { onImportJsonFile() }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center
+                        .border(1.dp, accentColor.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                        .clickable(onClick = onImportJsonFile)
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
+                    GlyphFolderOpen(color = accentColor, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "📂 File .json",
+                        text = "JSON File",
                         color = accentColor,
-                        fontSize = 11.sp,
+                        fontSize = 11.5.sp,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold
                     )
@@ -1759,52 +2104,98 @@ private fun PeqExportImportCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
+                    .heightIn(min = 42.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(m3SurfaceContainerHigh())
-                    .border(0.8.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 10.dp, vertical = 7.dp)
+                    .border(0.8.dp, subtleBorder, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                contentAlignment = Alignment.CenterStart
             ) {
                 if (manualInputText.isEmpty()) {
                     Text(
-                        text = "Atau ketik/tempel kode TSROSSA-PEQ1:... di sini",
+                        text = "Or type/paste TSROSSA-PEQ1:... code here",
                         color = m3OnSurfaceVariant().copy(alpha = 0.5f),
-                        fontSize = 10.5.sp,
+                        fontSize = 11.sp,
                         fontFamily = ModernSansFont
                     )
                 }
-                androidx.compose.foundation.text.BasicTextField(
+                BasicTextField(
                     value = manualInputText,
                     onValueChange = { manualInputText = it },
                     singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        color = m3OnSurface(),
-                        fontSize = 11.sp,
+                    textStyle = TextStyle(
+                        color = onSurfaceColor,
+                        fontSize = 11.5.sp,
                         fontFamily = TerminalFont
                     ),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(accentColor),
+                    cursorBrush = SolidColor(accentColor),
                     modifier = Modifier.fillMaxWidth()
                 )
             }
 
             if (manualInputText.isNotBlank()) {
-                Box(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(accentColor)
                         .clickable { onImportText(manualInputText.trim()) }
-                        .padding(vertical = 7.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
+                    GlyphDownloadSimple(color = Color.White, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "＋ Import Kode yang Diketik",
+                        text = "Import Typed Code",
                         color = Color.White,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold
                     )
                 }
             }
         }
+    }
+}
+
+private fun formatShortFreq(freqHz: Float): String {
+    return if (freqHz >= 1000f) {
+        val k = freqHz / 1000f
+        if (abs(k - round(k)) < 0.05f) "${round(k).toInt()}k"
+        else String.format(Locale.US, "%.1fk", k)
+    } else {
+        "${freqHz.toInt()}"
+    }
+}
+
+private fun formatFullFreq(freqHz: Float): String {
+    return if (freqHz >= 1000f) {
+        val k = freqHz / 1000f
+        if (abs(k - round(k)) < 0.01f) "${round(k).toInt()} kHz"
+        else String.format(Locale.US, "%.2f kHz", k)
+    } else {
+        "${freqHz.toInt()} Hz"
+    }
+}
+
+private fun smartFreqStep(freqHz: Float, steppingUp: Boolean): Float {
+    val ref = if (steppingUp) freqHz else (freqHz - 1f)
+    return when {
+        ref < 100f -> 5f
+        ref < 500f -> 10f
+        ref < 1000f -> 25f
+        ref < 5000f -> 100f
+        else -> 250f
+    }
+}
+
+private fun snapFrequencyNice(rawHz: Float): Float {
+    return when {
+        rawHz < 100f -> round(rawHz)
+        rawHz < 1000f -> round(rawHz / 5f) * 5f
+        rawHz < 5000f -> round(rawHz / 25f) * 25f
+        else -> round(rawHz / 50f) * 50f
     }
 }

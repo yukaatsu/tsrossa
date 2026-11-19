@@ -79,7 +79,7 @@ fun DiscordModalPanel(
                         color = m3OnSurface()
                     )
                     Text(
-                        text = "Server Discord & Bug Report",
+                        text = "Discord Server & Bug Reports",
                         fontFamily = ModernSansFont,
                         fontSize = 12.sp,
                         color = m3OnSurfaceVariant()
@@ -114,7 +114,7 @@ fun DiscordModalPanel(
                     ) {
                         GlyphSparkle(color = accent, modifier = Modifier.size(15.dp))
                         Text(
-                            text = "Pusat Laporan Bug & Masalah USB DAC",
+                            text = "Bug Reports & USB DAC Troubleshooting",
                             fontFamily = ModernSansFont,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp,
@@ -122,7 +122,7 @@ fun DiscordModalPanel(
                         )
                     }
                     Text(
-                        text = "Menemukan bug, audio glitch, lag, kendala deteksi USB DAC, atau format audio tidak kompatibel? Laporkan langsung di server Discord tsrossa. Kamu bisa melampirkan System Logs agar dapat dianalisis dan diperbaiki segera oleh developer.",
+                        text = "Encountered a bug, audio glitch, lag, USB DAC detection issue, or incompatible audio format? Report it directly on the tsrossa Discord server. You can attach System Logs so the developer can analyze and fix it quickly.",
                         fontFamily = ModernSansFont,
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
@@ -152,7 +152,7 @@ fun DiscordModalPanel(
                                 .background(accent)
                         )
                         Text(
-                            text = "Sharing Preset PEQ & Diskusi Komunitas",
+                            text = "PEQ Preset Sharing & Audiophile Community",
                             fontFamily = ModernSansFont,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
@@ -160,12 +160,60 @@ fun DiscordModalPanel(
                         )
                     }
                     Text(
-                        text = "Bergabunglah dengan sesama penggemar bit-perfect audio! Bagikan racikan profil 10-Band Parametric EQ favoritmu, diskusikan kecocokan IEM / headphone / DAC, request fitur terbaru, dan dapatkan pengumuman rilis lebih awal.",
+                        text = "Connect with fellow bit-perfect audio enthusiasts! Share your favorite 10-Band Parametric EQ presets, discuss IEM / headphone / DAC pairings, request new features, and get early release announcements.",
                         fontFamily = ModernSansFont,
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
                         color = m3OnSurface()
                     )
+                }
+            }
+
+            // 3. Beta Tester Recruitment Callout
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(m3SurfaceContainerHigh().copy(alpha = 0.7f))
+                    .border(0.8.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                    .padding(14.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        GlyphSparkle(color = accent, modifier = Modifier.size(15.dp))
+                        Text(
+                            text = "Looking for Beta Testers!",
+                            fontFamily = ModernSansFont,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = accent
+                        )
+                    }
+                    Text(
+                        text = "We are actively recruiting Beta Testers to try experimental features, test compatibility across various USB DACs (UAC1/UAC2/PEQ), and verify audio engine stability. Want to contribute and try new updates before public release? Apply now on our Discord server!",
+                        fontFamily = ModernSansFont,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        color = m3OnSurface()
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(accent.copy(alpha = 0.08f))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "How to apply: Join the Discord server -> Open #apply-beta -> Share your phone model & USB DAC.",
+                            fontFamily = ModernSansFont,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = accent
+                        )
+                    }
                 }
             }
 
@@ -195,7 +243,7 @@ fun DiscordModalPanel(
                     GlyphDiscord(color = onAccent, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Gabung Server Discord (Lapor Bug & Diskusi)",
+                        text = "Join Discord Server (Bug Reports & Community)",
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
@@ -214,7 +262,7 @@ fun DiscordModalPanel(
                     .background(m3SurfaceContainerHigh().copy(alpha = 0.6f))
             ) {
                 Text(
-                    text = "Lanjut ke Aplikasi",
+                    text = "Continue to App",
                     fontFamily = ModernSansFont,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp,

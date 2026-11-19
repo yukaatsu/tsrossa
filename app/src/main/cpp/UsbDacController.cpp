@@ -104,29 +104,64 @@ void control_thread_func() {
     if (req.type == 1) { // SET_CUR Volume
       if (g_audioState.usbHandle != nullptr && g_audioState.isHardwareVolumeSupported.load() &&
           g_audioState.featureUnitId.load() > 0) {
-        int16_t target_db = g_audioState.maxVolumeDb.load();
+        // ATTENUATE-FIRST, BOOST-SECOND HANDSHAKE (BUG-VOL-02):
+        // When transitioning from Hybrid Hardware UAC -> Universal 64-Bit DSP while audio is playing,
+        // the kernel xHCI DMA ring still holds ~192ms of 1.0f (0 dBFS) digital PCM URBs.
+        // We MUST wait for those in-flight full-scale URBs to drain while the DAC hardware is still
+        // attenuated before sending out-of-band EP0 SET_CUR = max_db (0 dB), completely preventing a 100% volume blast!
+        if (!g_audioState.preferHardwareVolume.load() &&
+            g_audioState.pendingHwToDspDrain.exchange(false, std::memory_order_acq_rel) &&
+            g_audioState.isPlaying.load()) {
+          int fps = g_audioState.usb_frames_per_sec.load();
+          if (fps <= 0) fps = 8000;
+          int active_urbs = g_audioState.activeIsoTransfers.load();
+          if (active_urbs <= 0) active_urbs = (fps >= 8000) ? 24 : 16;
+          int pkts_per_urb = g_audioState.isoPacketsCount.load();
+          if (pkts_per_urb <= 0) pkts_per_urb = (fps >= 8000) ? 64 : 16;
+          int drain_ms = (active_urbs * pkts_per_urb * 1000) / fps + 20;
+          if (drain_ms < 80) drain_ms = 80;
+          if (drain_ms > 280) drain_ms = 280;
+          LOGI("[VolumeSync] Draining in-flight 1.0f URBs (%d ms) before raising DAC hardware to maxVolumeDb", drain_ms);
+          for (int waited = 0; waited < drain_ms; waited += 10) {
+            if (g_audioState.stopControlThread.load() ||
+                g_audioState.usbHandle == nullptr ||
+                g_audioState.preferHardwareVolume.load()) {
+              break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          }
+          if (g_audioState.stopControlThread.load() ||
+              g_audioState.usbHandle == nullptr ||
+              g_audioState.preferHardwareVolume.load()) {
+            continue;
+          }
+        }
+
+        int16_t min_db = g_audioState.minVolumeDb.load();
+        int16_t max_db = g_audioState.maxVolumeDb.load();
+        int16_t target_db = max_db;
         float desired_db = 0.0f;
 
         if (!g_audioState.preferHardwareVolume.load()) {
-          // In Universal 64-Bit DSP Mode, lock DAC hardware at 0dB (maxVolumeDb)
-          target_db = g_audioState.maxVolumeDb.load();
+          // In Universal 64-Bit DSP Mode, lock DAC hardware at full rated reference output (maxVolumeDb)
+          // so the internal analog/PGA output stage delivers 100% power, dynamics, and open soundstage!
+          target_db = max_db;
           desired_db = 0.0f;
         } else if (req.volume <= 0.0f) {
-          target_db = g_audioState.minVolumeDb.load();
+          target_db = min_db;
           desired_db = -128.0f;
         } else {
           desired_db = compute_perceptual_db(req.volume);
-          int32_t raw_target = (int32_t)g_audioState.maxVolumeDb.load() +
+          int32_t raw_target = (int32_t)max_db +
                                (int32_t)std::lround(desired_db * 256.0f);
           int16_t step = (g_audioState.resVolumeDb.load() > 0) ? g_audioState.resVolumeDb.load() : 1;
           if (step > 1) {
-            raw_target = ((raw_target - g_audioState.maxVolumeDb.load()) / step) * step +
-                         g_audioState.maxVolumeDb.load();
+            raw_target = ((raw_target - max_db) / step) * step + max_db;
           }
-          if (raw_target < g_audioState.minVolumeDb.load())
-            raw_target = g_audioState.minVolumeDb.load();
-          if (raw_target > g_audioState.maxVolumeDb.load())
-            raw_target = g_audioState.maxVolumeDb.load();
+          if (raw_target < min_db)
+            raw_target = min_db;
+          if (raw_target > max_db)
+            raw_target = max_db;
           target_db = (int16_t)raw_target;
         }
 
@@ -163,6 +198,7 @@ void control_thread_func() {
 
         if (r_master >= 0 || r_ch >= 0) {
           if (g_audioState.preferHardwareVolume.load()) {
+            bool wasAlreadyActive = g_audioState.isHardwareVolumeActive.load(std::memory_order_relaxed);
             int16_t actual_target_db = target_db;
             uint8_t cur_buf[2] = {0, 0};
             int ch_to_read = (r_master >= 0) ? 0 : 1;
@@ -175,17 +211,21 @@ void control_thread_func() {
             } else if (r_cur < 0) {
               lib_usb_clear_halt_if_needed();
             }
-            float actual_hw_db = (float)(actual_target_db - g_audioState.maxVolumeDb.load()) / 256.0f;
-            g_audioState.appliedHardwareDb.store(actual_hw_db);
-            g_audioState.isHardwareVolumeActive.store(true);
+            if (!wasAlreadyActive && g_audioState.isPlaying.load()) {
+              // Allow DAC hardware PGA 15ms to settle at attenuated dB BEFORE digital DSP ramps back up to 1.0f
+              std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            }
+            float actual_hw_db = (float)(actual_target_db - max_db) / 256.0f;
+            g_audioState.appliedHardwareDb.store(actual_hw_db, std::memory_order_release);
+            g_audioState.isHardwareVolumeActive.store(true, std::memory_order_release);
           } else {
-            g_audioState.appliedHardwareDb.store(0.0f);
-            g_audioState.isHardwareVolumeActive.store(false);
+            g_audioState.appliedHardwareDb.store(0.0f, std::memory_order_release);
+            g_audioState.isHardwareVolumeActive.store(false, std::memory_order_release);
           }
         } else {
           LOGW("Hardware volume SET_CUR failed, falling back to 64-bit DSP volume");
-          g_audioState.appliedHardwareDb.store(0.0f);
-          g_audioState.isHardwareVolumeActive.store(false);
+          g_audioState.appliedHardwareDb.store(0.0f, std::memory_order_release);
+          g_audioState.isHardwareVolumeActive.store(false, std::memory_order_release);
         }
       } else if (g_audioState.usbHandle != nullptr && g_audioState.featureUnitId.load() > 0) {
         // Fallback: Even if hardware volume query failed or was shallow,
@@ -252,8 +292,32 @@ void set_volume(float volume) {
 }
 
 void set_hardware_volume_enabled(bool enabled) {
-  g_audioState.preferHardwareVolume.store(enabled);
-  set_volume(g_audioState.rawLinearVolume);
+  bool prevPrefer = g_audioState.preferHardwareVolume.exchange(enabled, std::memory_order_acq_rel);
+  float raw_vol = g_audioState.rawLinearVolume.load();
+  if (!enabled) {
+    // Switching Hybrid Hardware UAC -> Universal 64-Bit DSP:
+    // 1. Pre-clear hardware volume flags BEFORE queueing USB control transfer.
+    // 2. Immediately snap software DSP currentVolume to target attenuated gain (no slow ramp from 1.0f!).
+    // 3. Arm pendingHwToDspDrain so control_thread_func waits for in-flight 1.0f URBs in the kernel
+    //    DMA queue to drain BEFORE EP0 raises DAC hardware register to maxVolumeDb (Zero 100% spike!).
+    bool wasHwActive = g_audioState.isHardwareVolumeActive.exchange(false, std::memory_order_acq_rel);
+    g_audioState.appliedHardwareDb.store(0.0f, std::memory_order_release);
+    float dsp_gain = 1.0f;
+    if (raw_vol <= 0.0f) {
+      dsp_gain = 0.0f;
+    } else if (raw_vol < 1.0f) {
+      dsp_gain = db_to_linear_gain(compute_perceptual_db(raw_vol));
+    }
+    g_audioState.currentVolume.store(dsp_gain);
+    if ((wasHwActive || prevPrefer) && g_audioState.isPlaying.load() && raw_vol < 0.99f) {
+      g_audioState.pendingHwToDspDrain.store(true, std::memory_order_release);
+    }
+  } else {
+    // Switching Universal 64-Bit DSP -> Hybrid Hardware UAC:
+    // Keep software DSP attenuation active until control_thread_func finishes EP0 SET_CUR attenuation!
+    g_audioState.pendingHwToDspDrain.store(false, std::memory_order_release);
+  }
+  set_volume(raw_vol);
 }
 
 bool is_hardware_volume_enabled() {
@@ -462,6 +526,7 @@ void close_usb_dac_internal() {
     g_audioState.isHardwareVolumeActive.store(false);
     g_audioState.isHardwareVolumeSupported.store(false);
     g_audioState.appliedHardwareDb.store(0.0f);
+    g_audioState.pendingHwToDspDrain.store(false);
     g_audioState.volumeMasterSupported.store(false);
     g_audioState.volumePerChannelSupported.store(false);
     g_audioState.featureUnitId.store(-1);
@@ -616,6 +681,7 @@ bool init_usb_dac_internal(int fd) {
   g_audioState.volumeMasterSupported.store(false);
   g_audioState.volumePerChannelSupported.store(false);
   g_audioState.appliedHardwareDb.store(0.0f);
+  g_audioState.pendingHwToDspDrain.store(false);
   g_audioState.deviceWedged.store(false);
   g_audioState.isSwapping.store(false);
   g_audioState.swappingZeroUrbCount.store(0);
@@ -853,10 +919,16 @@ bool init_usb_dac_internal(int fd) {
               for (auto r : rates) sampleRateSet.insert(r);
             }
 
-            int pk_size = libusb_get_max_iso_packet_size(
-                dev, alt->endpoint[k].bEndpointAddress);
-            if (pk_size < 0)
-              pk_size = alt->endpoint[k].wMaxPacketSize;
+            uint16_t raw_wMax = alt->endpoint[k].wMaxPacketSize;
+            int base_pkt = static_cast<int>(raw_wMax & 0x07FF); // Bits 10..0: max packet size per transaction (0..1024)
+            int hs_mult = 1 + static_cast<int>((raw_wMax >> 11) & 0x03); // Bits 12..11: additional transactions per microframe (0..2 -> 1..3x)
+            int pk_size = base_pkt * hs_mult;
+            if (pk_size <= 0) {
+              pk_size = libusb_get_max_iso_packet_size(dev, alt->endpoint[k].bEndpointAddress);
+            }
+            if (pk_size <= 0) {
+              pk_size = 1024;
+            }
 
             uint8_t ep_addr = alt->endpoint[k].bEndpointAddress;
             uint8_t ep_sync = alt->endpoint[k].bSynchAddress;
@@ -892,8 +964,8 @@ bool init_usb_dac_internal(int fd) {
                 {alt->bInterfaceNumber, alt->bAlternateSetting,
                  ep_addr, pk_size, subframe_size, ep_fb, is_async, alt_fps});
             snprintf(dbg, sizeof(dbg),
-                     "  Alt[iface=%d, alt=%d]: ep=0x%02X maxPkt=%d sf=%d (%d-bit) bInterval=%d fps=%d async=%d",
-                     alt->bInterfaceNumber, alt->bAlternateSetting, ep_addr, pk_size,
+                     "  Alt[iface=%d, alt=%d]: ep=0x%02X maxPkt=%d (raw=0x%04X) sf=%d (%d-bit) bInterval=%d fps=%d async=%d",
+                     alt->bInterfaceNumber, alt->bAlternateSetting, ep_addr, pk_size, raw_wMax,
                      subframe_size, subframe_size * 8, ep_bInterval, alt_fps, is_async ? 1 : 0);
             record_usb_diag(dbg);
           }
@@ -916,14 +988,15 @@ bool init_usb_dac_internal(int fd) {
     if (source_bytes > 4)
       source_bytes = 4;
 
-    const bool peq_active_for_alt =
-        g_audioState.peqState.enabled.load(std::memory_order_relaxed);
+    const bool dsp_high_precision_alt =
+        g_audioState.peqState.enabled.load(std::memory_order_relaxed) ||
+        !g_audioState.preferHardwareVolume.load(std::memory_order_relaxed);
 
     AltSettingInfo best_alt = g_audioState.validAlts[0];
     int best_score = -1;
     for (const auto &a : g_audioState.validAlts) {
       int score = 0;
-      if (!peq_active_for_alt) {
+      if (!dsp_high_precision_alt) {
         // MODE BIT-PERFECT 1:1 MURNI:
         // Prioritaskan kecocokan 1:1 (16-bit -> 16-bit, 24-bit -> 24-bit, 32-bit -> 32-bit)
         if (a.subframe_size == source_bytes) {
@@ -934,7 +1007,8 @@ bool init_usb_dac_internal(int fd) {
           score = 100 + a.subframe_size * 50;
         }
       } else {
-        // MODE DSP 64-BIT PEQ AKTIF:
+        // MODE DSP 64-BIT / PEQ AKTIF:
+        // Gunakan wadah terbesar (>= source_bytes) agar presisi pecahan 64-bit biquad / software volume tersalurkan penuh
         if (a.subframe_size >= source_bytes) {
           if (a.subframe_size == 4) score = 600;
           else if (a.subframe_size == 3) score = 550;

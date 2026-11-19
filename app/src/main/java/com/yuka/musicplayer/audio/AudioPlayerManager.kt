@@ -20,6 +20,7 @@ object AudioPlayerManager {
     var activePlayingPlaylistId: String? = null
     var playlistPaths: List<String> = emptyList()
     var priorityQueue: List<File> = emptyList()
+    var hasEvaluatedStartupModalSession: Boolean = false
 
     // Callbacks registered by UI / Playback coordinator (MainActivity)
     var onPlayNext: (() -> Unit)? = null

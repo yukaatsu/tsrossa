@@ -20,16 +20,16 @@ data class AcousticRole(
 )
 
 val ACOUSTIC_ROLES = listOf(
-    AcousticRole("SUB", "Sub-Bass", "Getaran bass paling dalam (rumble bioskop & sub-bass elektronik)."),
-    AcousticRole("BASS", "Deep Bass / Punch", "Hentakan kick drum dan tenaga utama bassline agar terasa powerful."),
-    AcousticRole("WARM", "Upper Bass / Warmth", "Kehangatan dan ketebalan bodi instrumen. Turunkan jika terasa boomy."),
-    AcousticRole("BODY", "Low-Mid / Body", "Kepadatan vokal bawah & gitar. Kurangi 1–2 dB jika terdengar keruh (muddy)."),
-    AcousticRole("MID", "Center Midrange", "Inti suara piano, gitar, dan snare. Mengatur keseimbangan penuh atau tipisnya musik."),
-    AcousticRole("VOCAL", "Vocal Focus", "Posisi maju-mundurnya vokal penyanyi. Naikkan agar vokal lebih dekat di depan."),
-    AcousticRole("CLEAR", "Upper-Mid / Clarity", "Artikulasi bibir vokal, petikan senar akustik, dan ketegasan instrumen."),
-    AcousticRole("PRES", "Presence / Attack", "Detail serangan instrumen (transient attack) & kejelasan tepi suara."),
-    AcousticRole("BRIL", "Brilliance / Treble", "Kilau simbal, biola, dan gemerincing hi-hat. Turunkan jika terasa menusuk (sibilance)."),
-    AcousticRole("AIR", "Air & Soundstage", "Udara, kesan panggung luas (soundstage), gema ruangan, dan micro-detail halus.")
+    AcousticRole("SUB", "Sub-Bass", "Deepest sub-bass rumble and low-end extension."),
+    AcousticRole("BASS", "Deep Bass / Punch", "Kick drum impact and primary bassline authority."),
+    AcousticRole("WARM", "Upper Bass / Warmth", "Instrument body fullness and warmth. Cut slightly if boomy."),
+    AcousticRole("BODY", "Low-Mid / Body", "Lower vocal and guitar weight. Cut 1–2 dB if the mix sounds muddy."),
+    AcousticRole("MID", "Center Midrange", "Core timbre of piano, guitars, and snare. Balances fullness vs. thinness."),
+    AcousticRole("VOCAL", "Vocal Focus", "Lead vocal forwardness and intimacy in the soundstage."),
+    AcousticRole("CLEAR", "Upper-Mid / Clarity", "Vocal articulation, acoustic string pluck, and instrument definition."),
+    AcousticRole("PRES", "Presence / Attack", "Transient attack sharpness and immediate detail edge."),
+    AcousticRole("BRIL", "Brilliance / Treble", "Cymbal shimmer, violin overtones, and hi-hat crispness. Cut to tame sibilance."),
+    AcousticRole("AIR", "Air & Soundstage", "Top-octave air, spaciousness, room decay, and fine micro-detail.")
 )
 
 data class PeqBand(
@@ -60,13 +60,10 @@ data class PeqConfiguration(
     val effectivePreampDb: Float
         get() = if (autoPreampEnabled) {
             val maxPeak = PeqEvaluator.calculateMaxBoost(bands)
-            val hasAnyActiveFilter = bands.any { it.enabled && abs(it.gainDb) >= 0.05f }
             if (maxPeak > 0.05f) {
-                // High-headroom anti-congestion compensation: 85% peak attenuation + 0.6 dB phase-rotation margin
-                (-(maxPeak * 0.85f + 0.6f)).coerceAtLeast(-10.0f)
-            } else if (hasAnyActiveFilter) {
-                // Even pure cuts rotate biquad phase and cause ~0.5 dB time-domain peak overshoot on dense tracks
-                -0.6f
+                // 100% Exact Peak Headroom Compensation + 0.2 dB inter-sample margin:
+                // Ensures biquad cascade stays 100% in the pure linear domain (zero clipping / zero IMD!).
+                (-(maxPeak + 0.2f)).coerceAtLeast(-24.0f)
             } else {
                 0.0f
             }
@@ -80,9 +77,8 @@ data class PeqConfiguration(
         )
 
         fun defaultQForBandIndex(idx: Int): Float = when (idx) {
-            0, 9 -> 0.707f // Butterworth shelf
-            1, 2 -> 0.85f  // Punchy bass warmth
-            else -> 1.05f  // 1-octave proportional Q for clean instrument separation in mids & highs
+            0, 9 -> 0.707f // Butterworth shelf (smooth tilt, zero ringing)
+            else -> 1.41f  // True 1-octave Constant-Q (sqrt(2)) for clean surgical instrument separation
         }
 
         fun createDefaultBands(): List<PeqBand> = DEFAULT_FREQUENCIES.mapIndexed { idx, freq ->
@@ -181,15 +177,8 @@ object PeqEvaluator {
         val cosW0 = cos(w0)
         val sinW0 = sin(w0)
         val aVal = 10.0.pow(gainDb / 40.0)
-        var alpha = sinW0 / (2.0 * q)
-
-        // Matches C++ Nyquist bandwidth stabilization for high-frequency peaking filters
-        if (band.filterType == PeqFilterType.PEAKING && f0 > fs * 0.18) {
-            val cosHalfW0 = cos(w0 * 0.5)
-            if (cosHalfW0 > 0.05) {
-                alpha *= cosHalfW0.pow(0.35)
-            }
-        }
+        // Pure RBJ Audio EQ Cookbook bandwidth matching C++ engine (zero upper-treble choking)
+        val alpha = sinW0 / (2.0 * q)
 
         val b0: Double; val b1: Double; val b2: Double
         val a0: Double; val a1: Double; val a2: Double
@@ -252,29 +241,47 @@ object PeqPreferencesHelper {
     private const val PREF_PEQ_PRESET = "peq_preset"
     private const val PREF_PEQ_USER_PRESETS_JSON = "peq_user_presets_json"
     private const val PREF_PEQ_LAST_CUSTOM_SNAPSHOT_JSON = "peq_last_custom_snapshot_json"
+    private const val PREF_PEQ_Q_MIGRATED_V2 = "peq_q_migrated_v2"
 
     fun load(prefs: SharedPreferences): PeqConfiguration {
         val enabled = prefs.getBoolean(PREF_PEQ_ENABLED, false)
         val preampDb = prefs.getFloat(PREF_PEQ_PREAMP_DB, 0.0f)
         val autoPreamp = prefs.getBoolean(PREF_PEQ_AUTO_PREAMP, true)
         val loadedPresetId = prefs.getString(PREF_PEQ_PRESET, "flat") ?: "flat"
+        val needQMigration = !prefs.getBoolean(PREF_PEQ_Q_MIGRATED_V2, false)
 
         val defaultBands = PeqConfiguration.createDefaultBands()
         val loadedBands = defaultBands.map { band ->
             val pfx = "peq_band_${band.index}_"
             val freq = prefs.getFloat("${pfx}freq", band.freqHz)
             val gain = prefs.getFloat("${pfx}gain", band.gainDb)
-            val q = prefs.getFloat("${pfx}q", band.q)
+            val savedQ = prefs.getFloat("${pfx}q", band.q)
             val typeId = prefs.getInt("${pfx}type", band.filterType.id)
             val bandEnabled = prefs.getBoolean("${pfx}enabled", band.enabled)
+
+            val finalQ = if (needQMigration && band.index in 1..8 &&
+                (abs(savedQ - 0.75f) < 0.02f || abs(savedQ - 0.85f) < 0.02f || abs(savedQ - 1.05f) < 0.02f)
+            ) {
+                band.q // Upgrade legacy overlapping Q to surgical Constant-Q 1-octave (1.41)
+            } else {
+                savedQ
+            }
 
             band.copy(
                 freqHz = freq,
                 gainDb = gain,
-                q = q,
+                q = finalQ,
                 filterType = PeqFilterType.fromId(typeId),
                 enabled = bandEnabled
             )
+        }
+
+        if (needQMigration) {
+            val editor = prefs.edit().putBoolean(PREF_PEQ_Q_MIGRATED_V2, true)
+            loadedBands.forEach { b ->
+                editor.putFloat("peq_band_${b.index}_q", b.q)
+            }
+            editor.apply()
         }
 
         val userPresets = loadUserPresets(prefs)

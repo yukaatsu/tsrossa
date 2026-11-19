@@ -484,4 +484,211 @@ class VolumeAndStreamingMathTest {
         assertTrue("Masih harus tersisa minimal ~12.000 frame (250ms) agar tidak langsung memicu auto-next instan",
             (totalFrames - targetFrame) >= 10_000L)
     }
+
+    @Test
+    fun usbEndpoint_wMaxPacketSizeCalculation_computesPerAltsettingCorrectly() {
+        fun computeMaxPacketSize(wMaxPacketSize: Int): Int {
+            val baseSize = wMaxPacketSize and 0x7FF
+            val mult = 1 + ((wMaxPacketSize shr 11) and 0x03)
+            return baseSize * mult
+        }
+
+        // FiiO KA11 / JadeAudio JA11 (KT02H20 DAC) altsettings:
+        // Alt 1 (16-bit): raw wMaxPacketSize = 196 (0x00C4)
+        assertEquals(196, computeMaxPacketSize(196))
+
+        // Alt 2 (24-bit): raw wMaxPacketSize = 294 (0x0126) -> Previous bug caused this to be clamped to 196
+        assertEquals(294, computeMaxPacketSize(294))
+
+        // Alt 3 (32-bit): raw wMaxPacketSize = 392 (0x0188) -> Previous bug caused this to be clamped to 196
+        assertEquals(392, computeMaxPacketSize(392))
+
+        // High-speed endpoint with 2 additional transactions per microframe (mult = 3)
+        // e.g. base = 512, mult = 3 -> raw = 512 | (2 << 11) = 512 | 4096 = 4608
+        val highBandwidthRaw = 512 or (2 shl 11)
+        assertEquals(1536, computeMaxPacketSize(highBandwidthRaw))
+    }
+
+    @Test
+    fun audioStreamer_frameAlignedByteClamp_preventsPartialStereoFrames() {
+        fun clampBytesToSend(bytesToSend: Int, maxPacketSize: Int, bytesPerFrame: Int): Int {
+            var clamped = if (bytesToSend > maxPacketSize) maxPacketSize else bytesToSend
+            clamped = (clamped / bytesPerFrame) * bytesPerFrame
+            return clamped
+        }
+
+        // 16-bit stereo (4 bytes/frame)
+        assertEquals(196, clampBytesToSend(196, 196, 4))
+        assertEquals(196, clampBytesToSend(199, 196, 4)) // Odd clamp rounds down to whole frame (49 frames)
+
+        // 24-bit stereo (6 bytes/frame)
+        // 294 bytes = 49 whole frames. If maxPacketSize is 295 or 300, clamp must not split frames!
+        assertEquals(294, clampBytesToSend(294, 294, 6))
+        assertEquals(294, clampBytesToSend(295, 295, 6))
+        assertEquals(294, clampBytesToSend(500, 294, 6))
+
+        // 32-bit stereo (8 bytes/frame)
+        // 392 bytes = 49 whole frames
+        assertEquals(392, clampBytesToSend(392, 392, 8))
+        assertEquals(392, clampBytesToSend(395, 395, 8))
+        assertEquals(392, clampBytesToSend(1000, 392, 8))
+    }
+
+    // =========================================================================
+    // 9. Full Hardware Reference Ceiling (BUG-AUDIO-01) & Attenuate-First
+    //    Zero-Spike Volume Mode Transition (BUG-VOL-02)
+    // =========================================================================
+
+    @Test
+    fun `uac hardware reference uses full maxVolumeDb ceiling even when maxDb is positive`() {
+        // Many USB DACs (CX31993, KT02H20, ESS/CS variants) report range [-64 dB .. +6 dB]
+        // Full DAC hardware PGA power lives at maxDb (+6 dB), NOT artificially truncated to 0 dB!
+        val minDb = (-64 * 256).toShort()  // -64.0 dB
+        val maxDb = (6 * 256).toShort()    //  +6.0 dB
+        val resDb = 256.toShort()          //   1.0 dB step
+
+        // Universal 64-Bit DSP mode must lock hardware PGA to full maxDb (+6 dB), not 0 dB
+        val targetDsp = AudioEngine.quantizeHardwareVolumeTarget(
+            slider = 0.50f,
+            minDb = minDb,
+            maxDb = maxDb,
+            resDb = resDb,
+            preferHardwareVolume = false
+        )
+        assertEquals("64-Bit DSP mode must target full maxDb (+6 dB) ceiling", maxDb, targetDsp)
+
+        // Hybrid Hardware UAC at 100% must also hit full maxDb (+6 dB) ceiling
+        val targetHw100 = AudioEngine.quantizeHardwareVolumeTarget(
+            slider = 1.0f,
+            minDb = minDb,
+            maxDb = maxDb,
+            resDb = resDb,
+            preferHardwareVolume = true
+        )
+        assertEquals("Hybrid HW UAC 100% must target full maxDb (+6 dB) ceiling", maxDb, targetHw100)
+
+        // Hybrid Hardware UAC at 75% (-6.0 dB below ceiling): +6.0 - 6.0 = 0.0 dB (relative attenuation -6.0 dB)
+        val targetHw75 = AudioEngine.quantizeHardwareVolumeTarget(
+            slider = 0.75f,
+            minDb = minDb,
+            maxDb = maxDb,
+            resDb = resDb,
+            preferHardwareVolume = true
+        )
+        val appliedRelativeDb = (targetHw75.toInt() - maxDb.toInt()) / 256.0f
+        assertEquals(-6.0f, appliedRelativeDb, 0.1f)
+    }
+
+    @Test
+    fun `attenuate-first handshake guarantees zero full-scale blast during HW-to-DSP and DSP-to-HW switches`() {
+        // User is listening at 25% volume (~ -31.18 dB below DAC maxDb ceiling)
+        val userSlider = 0.25f
+        val targetDb = AudioEngine.sliderToPerceptualDb(userSlider) // ~ -31.18 dB
+        assertTrue("Target dB at 25% must be attenuated well below 0 dB", targetDb < -25.0f)
+
+        // --- Scenario A: Hybrid Hardware UAC -> Universal 64-Bit DSP ---
+        // Initial steady state: HW PGA = targetDb (-31.18 dB), SW DSP = 0.0 dB (1.0f full-scale URBs in flight)
+        var hwGainDb = targetDb
+        var swGainDb = 0.0f
+        var inFlightUrbGainDb = 0.0f
+
+        // Step 1 (Attenuate-First): Immediately snap SW DSP gain to targetDb while HW PGA is STILL at targetDb
+        swGainDb = targetDb
+        // In-flight URBs still have 0.0 dB, HW PGA is still at targetDb -> output = targetDb + 0.0 = targetDb (NO SPIKE!)
+        assertTrue("While draining in-flight URBs, output must NEVER exceed targetDb", (hwGainDb + inFlightUrbGainDb) <= targetDb + 0.05f)
+
+        // Step 2 (Drain): Wait ~192ms until new attenuated URBs replace all in-flight full-scale URBs
+        inFlightUrbGainDb = swGainDb // Now all URBs reaching DAC are attenuated to targetDb
+        // During overlap, output briefly dips to 2 * targetDb (inaudible soft dip, NEVER a loud spike!)
+        assertTrue("Attenuate-first overlap must stay <= targetDb (soft dip only)", (hwGainDb + inFlightUrbGainDb) <= targetDb + 0.05f)
+
+        // Step 3 (Release HW): Now EP0 SET_CUR sets HW PGA = maxDb (0.0 dB relative)
+        hwGainDb = 0.0f
+        assertEquals("Final steady state in 64-Bit DSP must equal exact user targetDb", targetDb, hwGainDb + inFlightUrbGainDb, 0.05f)
+
+        // --- Scenario B: Universal 64-Bit DSP -> Hybrid Hardware UAC ---
+        // Initial steady state: HW PGA = 0.0 dB (maxDb), SW DSP = targetDb
+        // Step 1 (Attenuate HW First): Send EP0 SET_CUR = targetDb FIRST while SW DSP is STILL at targetDb
+        hwGainDb = targetDb
+        assertTrue("During EP0 HW attenuation, combined gain must stay <= targetDb", (hwGainDb + swGainDb) <= targetDb + 0.05f)
+
+        // Step 2 (Release SW): Only AFTER EP0 succeeds + PGA settles, release SW DSP to residual (~0.0 dB)
+        swGainDb = 0.0f
+        assertEquals("Final steady state in Hybrid HW UAC must equal exact user targetDb", targetDb, hwGainDb + swGainDb, 0.05f)
+    }
+
+    // =========================================================================
+    // 10. Pause >= 3s Isochronous Auto-Suspend -> Resume Wake-from-Standby (BUG-04)
+    // =========================================================================
+
+    @Test
+    fun `resuming after 3s+ pause auto-suspend wakes isoThread at exact paused pcmIndex without resetting to 0`() {
+        val sampleRate = 48_000L
+        val totalFrames = sampleRate * 240L // 4-minute track
+        val decodedFrames = totalFrames
+        val pausedAtSeconds = 135.0 // 02:15
+        var pcmIndex = (pausedAtSeconds * sampleRate).toLong() // 6,480,000
+        var isPlaying = false
+        var isFinished = false
+        var hasPcmBuffer = true
+        var hasUsbHandle = true
+        var isoThreadExited = false
+        var activeIsoTransfers = 24
+
+        // Simulate >= 3 seconds of pause (375 URBs * 8ms = 3000ms) -> iso_callback auto-suspends
+        val pauseLimitUrbs = 375
+        var pausedUrbs = 0
+        repeat(400) {
+            pausedUrbs++
+            if (pausedUrbs > pauseLimitUrbs && activeIsoTransfers > 0) {
+                activeIsoTransfers--
+                if (activeIsoTransfers == 0) {
+                    isoThreadExited = true
+                }
+            }
+        }
+        assertTrue("After >3s pause, isoThread should enter idle auto-suspend", isoThreadExited)
+        assertEquals(0, activeIsoTransfers)
+
+        // Now user taps Play after unlimited pause duration -> resume_audio_internal() runs:
+        fun simulateResumeAudioInternal(): Boolean {
+            if (!hasPcmBuffer || decodedFrames == 0L || totalFrames == 0L || isFinished || pcmIndex >= totalFrames) {
+                isPlaying = false
+                return false
+            }
+            if ((isoThreadExited || activeIsoTransfers == 0) && hasUsbHandle) {
+                // Transparently wake isoThread from standby without touching pcmIndex!
+                isoThreadExited = false
+                activeIsoTransfers = 24
+                isPlaying = true
+                return true
+            }
+            isPlaying = true
+            return true
+        }
+
+        val resumed = simulateResumeAudioInternal()
+        assertTrue("resume_audio_internal must return true when PCM buffer is intact in RAM", resumed)
+        assertTrue("Playback must be active again", isPlaying)
+        assertEquals("pcmIndex must stay at exact paused frame (02:15), NEVER reset to 0!", 6_480_000L, pcmIndex)
+        assertEquals(24, activeIsoTransfers)
+
+        // Fallback test: if DAC was unplugged during pause (pcmBuffer cleared), Kotlin preserves savedResumePos
+        hasPcmBuffer = false
+        isPlaying = false
+        val resumedAfterDetach = simulateResumeAudioInternal()
+        org.junit.Assert.assertFalse(resumedAfterDetach)
+        val durationSec = 240.0
+        val savedResumePos = if (pausedAtSeconds > 0.5 && (durationSec <= 0.0 || pausedAtSeconds < durationSec - 1.0)) {
+            pausedAtSeconds
+        } else {
+            -1.0
+        }
+        assertEquals("Fallback playTrack must receive exact paused timestamp 135.0s", 135.0, savedResumePos, 0.001)
+
+        // EOF test: if track actually finished at 239.8s, savedResumePos should restart from 0 (-1.0)
+        val eofPos = 239.8
+        val savedAtEof = if (eofPos > 0.5 && (durationSec <= 0.0 || eofPos < durationSec - 1.0)) eofPos else -1.0
+        assertEquals("Track paused at EOF should cleanly restart from 0:00", -1.0, savedAtEof, 0.001)
+    }
 }

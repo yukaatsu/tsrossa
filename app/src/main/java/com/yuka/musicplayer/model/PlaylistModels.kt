@@ -1,7 +1,9 @@
 package com.yuka.musicplayer.model
 
+import androidx.compose.runtime.Immutable
 import java.util.UUID
 
+@Immutable
 data class Playlist(
     val id: String = UUID.randomUUID().toString(),
     val name: String,

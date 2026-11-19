@@ -42,6 +42,12 @@ import androidx.compose.ui.unit.dp
 val LocalModalBlurCount = compositionLocalOf<MutableIntState> { mutableIntStateOf(0) }
 
 /**
+ * Controls whether opening a modal bottom sheet or dialog blurs the underlying screen.
+ * Toggled by the user in Settings -> Appearance -> Modal Backdrop Blur.
+ */
+val LocalModalBlurEnabled = compositionLocalOf { true }
+
+/**
  * Surface style local: "BLUR_OPACITY" (translucent glass + blur) or "SOLID" (opaque surfaces).
  */
 val LocalSurfaceStyle = compositionLocalOf { "BLUR_OPACITY" }
@@ -75,7 +81,8 @@ fun ModalBlurContainer(
     maxBlurRadius: Dp = 3.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
-    val isBlurred = LocalModalBlurCount.current.intValue > 0 || extraBlurActive
+    val modalBlurEnabled = LocalModalBlurEnabled.current
+    val isBlurred = modalBlurEnabled && (LocalModalBlurCount.current.intValue > 0 || extraBlurActive)
     val maxBlurPx = with(LocalDensity.current) { maxBlurRadius.toPx() }
     val animatedBlurPx by animateFloatAsState(
         targetValue = if (isBlurred) maxBlurPx else 0f,
@@ -108,9 +115,10 @@ fun ModalBlurContainer(
  */
 @Composable
 fun Modifier.modalBackdropBlur(): Modifier {
+    val modalBlurEnabled = LocalModalBlurEnabled.current
     val modalCount = LocalModalBlurCount.current.intValue
     val surfaceStyle = LocalSurfaceStyle.current
-    val targetBlur = if (modalCount > 0 && surfaceStyle == "BLUR_OPACITY") 3.dp else 0.dp
+    val targetBlur = if (modalBlurEnabled && modalCount > 0 && surfaceStyle == "BLUR_OPACITY") 3.dp else 0.dp
     val animatedBlur by animateDpAsState(
         targetValue = targetBlur,
         animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow),

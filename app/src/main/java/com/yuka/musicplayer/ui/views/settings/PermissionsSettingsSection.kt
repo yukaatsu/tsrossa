@@ -1,5 +1,6 @@
 package com.yuka.musicplayer.ui.views.settings
 
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,15 +23,20 @@ import com.yuka.musicplayer.ui.theme.TerminalFont
 fun PermissionsSettingsSection(
     isNotificationGranted: Boolean = true,
     isStorageGranted: Boolean = true,
+    isAllFilesAccessGranted: Boolean = true,
     isDndGranted: Boolean = false,
     isBatteryOptimizationIgnored: Boolean = true,
     onRequestNotification: () -> Unit = {},
     onRequestStorage: () -> Unit = {},
+    onRequestAllFilesAccess: () -> Unit = {},
     onRequestDnd: () -> Unit = {},
     onRequestBatteryOptimization: () -> Unit = {},
     onOpenPermissionDialog: () -> Unit = {}
 ) {
     val accent = LocalAccentColor.current
+    val isAndroid11Plus = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+    val isFullStorageGranted = if (isAndroid11Plus) isAllFilesAccessGranted else isStorageGranted
+    val isAnyStorageGranted = if (isAndroid11Plus) (isAllFilesAccessGranted || isStorageGranted) else isStorageGranted
 
     SettingsCard(title = "Permissions & Access") {
         PermissionStatusRow(
@@ -46,11 +52,15 @@ fun PermissionsSettingsSection(
 
         PermissionStatusRow(
             title = "All Audio Files Access",
-            subtitle = "Direct C++ bit-perfect reader for FLAC/DSD/WAV",
-            isGranted = isStorageGranted,
-            grantedText = "Active",
-            deniedText = "Restricted",
-            onActionClick = onRequestStorage
+            subtitle = if (isAndroid11Plus && !isFullStorageGranted && isAnyStorageGranted) {
+                "Basic media active • Tap to grant All Files Access for .nomedia bypass"
+            } else {
+                "Direct C++ bit-perfect reader for FLAC/DSD/WAV"
+            },
+            isGranted = isFullStorageGranted,
+            grantedText = "Full Access",
+            deniedText = if (isAnyStorageGranted) "Partial" else "Restricted",
+            onActionClick = if (isAndroid11Plus && !isFullStorageGranted) onRequestAllFilesAccess else onRequestStorage
         )
 
         Spacer(modifier = Modifier.height(8.dp))

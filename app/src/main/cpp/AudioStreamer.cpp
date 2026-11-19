@@ -564,10 +564,12 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
         g_audioState.iso_fixed_rem -= usb_frames_per_sec;
       }
 
-      int bytes_to_send = audio_frames_to_send * g_audioState.channels.load() *
-                          g_audioState.subframeSize.load();
-      if (bytes_to_send > g_audioState.maxPacketSize)
-        bytes_to_send = g_audioState.maxPacketSize;
+      const int bytes_per_frame = g_audioState.channels.load() * g_audioState.subframeSize.load();
+      int bytes_to_send = audio_frames_to_send * bytes_per_frame;
+      if (bytes_to_send > g_audioState.maxPacketSize && bytes_per_frame > 0) {
+        // Round DOWN to an exact whole-frame multiple so stereo channels & MSB/LSB bytes NEVER misalign!
+        bytes_to_send = (g_audioState.maxPacketSize / bytes_per_frame) * bytes_per_frame;
+      }
 
       memset(buffer + data_offset, 0, bytes_to_send);
       transfer->iso_packet_desc[i].length = bytes_to_send;
@@ -577,6 +579,23 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
       libusb_submit_transfer(transfer);
     }
     return;
+  }
+
+  // Auto-suspend isochronous streaming after ~3 seconds of continuous pause
+  // Prevents DAC heating, battery drain, and background CPU stalls while paused.
+  if (!g_audioState.isPlaying.load() && !g_audioState.isSwapping.load() && !g_audioState.isWarmingUp.load()) {
+    uint64_t pausedUrbs = g_audioState.pausedZeroUrbCount.fetch_add(1) + 1;
+    uint32_t pauseLimitUrbs = (usb_frames_per_sec >= 8000) ? 375 : 50;
+    if (pausedUrbs > pauseLimitUrbs) {
+      int active = g_audioState.activeIsoTransfers.fetch_sub(1) - 1;
+      if (active <= 0) {
+        LOGI("[AudioStreamer] Isochronous stream paused idle auto-suspend complete (standby).");
+        g_audioState.stopIsoThread.store(true);
+      }
+      return;
+    }
+  } else {
+    g_audioState.pausedZeroUrbCount.store(0);
   }
 
   g_audioState.isSwappingAck.store(false);
@@ -590,10 +609,11 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
       g_audioState.iso_fixed_rem -= usb_frames_per_sec;
     }
 
-    int bytes_to_send = audio_frames_to_send * g_audioState.channels.load() *
-                        g_audioState.subframeSize.load();
-    if (bytes_to_send > g_audioState.maxPacketSize) {
-      bytes_to_send = g_audioState.maxPacketSize;
+    const int bytes_per_frame = g_audioState.channels.load() * g_audioState.subframeSize.load();
+    int bytes_to_send = audio_frames_to_send * bytes_per_frame;
+    if (bytes_to_send > g_audioState.maxPacketSize && bytes_per_frame > 0) {
+      // Round DOWN to an exact whole-frame multiple so stereo channels & MSB/LSB bytes NEVER misalign!
+      bytes_to_send = (g_audioState.maxPacketSize / bytes_per_frame) * bytes_per_frame;
     }
     int bytes_filled = 0;
 
@@ -686,32 +706,58 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
         // BIT-PERFECT BYPASS: Active if PEQ is OFF or Flat (0 dB filters & 0 dB preamp), and volume is at unity (1.0)
         if (!peq_effectively_active && g_audioState.currentVolume >= 0.9999f && target_vol >= 0.9999f && delta == 0.0f) {
           g_audioState.bitPerfectDirectPassActive.store(true);
+          const int src_bits = g_audioState.sourceBitDepth.load(std::memory_order_relaxed);
           if (sf_size == 4) {
             // 32-bit subslot container (UAC standard Type I PCM):
             // In dr_flac and dr_wav, samples are always scaled to full 32-bit signed range (left-aligned).
             // Direct 32-bit integer transfer preserves bit-perfect audio for all bit depths (16-bit, 24-bit, 32-bit).
             memcpy(dst_bytes, src, num_samples * sizeof(int32_t));
           } else if (sf_size == 2) {
-            // 16-bit container: Exact bit-shift without DC offset or artificial rounding bias
-            for (size_t s = 0; s < num_samples; s++) {
-              int32_t val16 = src[s] >> 16;
-              dst_bytes[s * 2]     = static_cast<uint8_t>(val16 & 0xFF);
-              dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
+            if (src_bits > 16) {
+              // Down-converting higher bit depth to 16-bit container: unbiased mid-tread rounding
+              for (size_t s = 0; s < num_samples; s++) {
+                int64_t val = (static_cast<int64_t>(src[s]) + 0x8000LL) >> 16;
+                if (val > 32767LL) val = 32767LL;
+                if (val < -32768LL) val = -32768LL;
+                int32_t val16 = static_cast<int32_t>(val);
+                dst_bytes[s * 2]     = static_cast<uint8_t>(val16 & 0xFF);
+                dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
+              }
+            } else {
+              // Exact 1:1 16-bit source -> 16-bit container bit-perfect shift
+              for (size_t s = 0; s < num_samples; s++) {
+                int32_t val16 = src[s] >> 16;
+                dst_bytes[s * 2]     = static_cast<uint8_t>(val16 & 0xFF);
+                dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
+              }
             }
           } else if (sf_size == 3) {
-            // 24-bit container: Exact bit-shift without DC offset or artificial rounding bias
-            for (size_t s = 0; s < num_samples; s++) {
-              int32_t val24 = src[s] >> 8;
-              dst_bytes[s * 3]     = static_cast<uint8_t>(val24 & 0xFF);
-              dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
-              dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
+            if (src_bits > 24) {
+              // Down-converting 32-bit source to 24-bit container: unbiased mid-tread rounding
+              for (size_t s = 0; s < num_samples; s++) {
+                int64_t val = (static_cast<int64_t>(src[s]) + 0x80LL) >> 8;
+                if (val > 8388607LL) val = 8388607LL;
+                if (val < -8388608LL) val = -8388608LL;
+                int32_t val24 = static_cast<int32_t>(val);
+                dst_bytes[s * 3]     = static_cast<uint8_t>(val24 & 0xFF);
+                dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
+                dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
+              }
+            } else {
+              // Exact 1:1 <=24-bit source -> 24-bit container bit-perfect shift
+              for (size_t s = 0; s < num_samples; s++) {
+                int32_t val24 = src[s] >> 8;
+                dst_bytes[s * 3]     = static_cast<uint8_t>(val24 & 0xFF);
+                dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
+                dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
+              }
             }
           }
         } else {
           g_audioState.bitPerfectDirectPassActive.store(false);
           double frame_vol = static_cast<double>(g_audioState.currentVolume);
 
-          // Frame-locked volume scaling with optional 10-band PEQ and decorrelated dual-channel TPDF dither
+          // Frame-locked volume scaling with optional 10-band PEQ and decorrelated dual-channel TPDF dither (IACC = 0.0)
           for (size_t s = 0; s < num_samples; s++) {
             uint32_t ch = static_cast<uint32_t>(s % channels);
             if (ch == 0) {
@@ -747,20 +793,24 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
               }
             }
 
-            // 3. Apply frame-locked software volume BEFORE output ceiling protection
+            // 3. Apply frame-locked software volume BEFORE output ceiling guard
             //    so any volume attenuation provides genuine physical headroom for dense transients.
             double scaled32 = x * frame_vol;
 
-            // 4. Mastering-grade Linear-Core Soft-Knee Ceiling (-0.8 dBFS linear core)
-            //    Prevents multi-instrument transients from piling up at the digital ceiling.
+            // 4. Transparent Linear-Core Peak Guard (-0.05 dBFS linear core = 99.43% FS zero-IMD)
             if (peq_effectively_active) {
               scaled32 = ParametricEqEngine::applyMasteringCeilingPcm32(scaled32);
             }
-            // Dither is only needed when truncating/quantizing down to 16-bit or 24-bit with active DSP or volume attenuation
-            bool apply_dither = (sf_size < 4) && (peq_effectively_active || (frame_vol < 0.9999 && frame_vol > 0.00001));
+
+            // Silence-gated Dual-Channel Decorrelated Stereo TPDF Dither (IACC = 0.0) across all bit-depths
+            // Linearizes quantization tails, restores micro-detail, reverb decay, and wide open soundstage.
+            bool apply_dither = (src[s] != 0) && (peq_effectively_active || (frame_vol < 0.9999 && frame_vol > 0.00001));
 
             if (sf_size == 4) {
-              // 32-bit container: 1 LSB = 1.0 on int32 scale, no dither injected to preserve 32-bit noise floor (-192 dBFS)
+              // 32-bit container: restore decorrelated stereo TPDF dither at LSB for holographic imaging
+              if (apply_dither) {
+                scaled32 += fast_tpdf_dither(ch);
+              }
               int64_t q32 = std::llrint(scaled32);
               if (q32 > 2147483647LL) q32 = 2147483647LL;
               if (q32 < -2147483648LL) q32 = -2147483648LL;
@@ -783,10 +833,11 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
               dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
               dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
             } else if (sf_size == 2) {
-              // 16-bit container: scale to true 16-bit domain (divide by 65536.0) and round with std::llrint
+              // 16-bit container: scale to true 16-bit domain (divide by 65536.0) with silence-gated 0.5 LSB TPDF dither
+              // Eliminates 16-bit quantization granulation & preserves micro-detail without idle background hiss.
               double scaled16 = scaled32 * (1.0 / 65536.0);
               if (apply_dither) {
-                scaled16 += fast_tpdf_dither(ch);
+                scaled16 += fast_tpdf_dither(ch) * 0.5;
               }
               int64_t q16 = std::llrint(scaled16);
               if (q16 > 32767LL) q16 = 32767LL;
@@ -925,10 +976,25 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
         r = libusb_submit_transfer(transfer);
       }
       if (r != 0) {
-        g_audioState.activeIsoTransfers.fetch_sub(1);
-        g_audioState.stopIsoThread.store(true);
-        g_audioState.stallFaultReported.store(true);
+        int remaining = g_audioState.activeIsoTransfers.fetch_sub(1) - 1;
+        int errStreak = g_audioState.consecutiveSubmitErrors.fetch_add(1) + 1;
+        // Do not crash/kill stream on single glitch; only declare stall if all URBs fail or streak >= 5
+        if (remaining <= 0 || errStreak >= 5) {
+          g_audioState.stopIsoThread.store(true);
+          if (g_audioState.isPlaying.load()) {
+            g_audioState.stallFaultReported.store(true);
+            std::lock_guard<std::mutex> lock(g_controlMutex);
+            ControlRequest evReq;
+            evReq.type = REQ_EVENT_USB_STALL_FAULT;
+            g_controlQueue.push(evReq);
+            g_controlCv.notify_one();
+          }
+        }
+      } else {
+        g_audioState.consecutiveSubmitErrors.store(0);
       }
+    } else {
+      g_audioState.consecutiveSubmitErrors.store(0);
     }
   } else {
     g_audioState.activeIsoTransfers.fetch_sub(1);
@@ -981,6 +1047,8 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
     return -4;
   }
   InitializingTrackGuard initGuard;
+  g_audioState.pausedZeroUrbCount.store(0);
+  g_audioState.consecutiveSubmitErrors.store(0);
   g_audioState.seekGeneration.fetch_add(1, std::memory_order_acq_rel);
   g_audioState.sampleRateUnverified.store(false);
   g_audioState.isFinished = false;
@@ -1322,8 +1390,9 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   if (target_sf < 2) target_sf = 2;
   if (target_sf > 4) target_sf = 4;
 
-  const bool peq_active_for_alt =
-      g_audioState.peqState.enabled.load(std::memory_order_relaxed);
+  const bool dsp_high_precision_alt =
+      g_audioState.peqState.enabled.load(std::memory_order_relaxed) ||
+      !g_audioState.preferHardwareVolume.load(std::memory_order_relaxed);
 
   // Sync PEQ sample rate if necessary
   uint32_t activeBank = g_audioState.peqState.activeBankIndex.load(std::memory_order_relaxed);
@@ -1338,7 +1407,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
     int best_score = -1;
     for (const auto &a : g_audioState.validAlts) {
       int score = 0;
-      if (!peq_active_for_alt) {
+      if (!dsp_high_precision_alt) {
         // MODE BIT-PERFECT 1:1 MURNI:
         // Prioritaskan kecocokan 1:1 (16-bit -> 16-bit, 24-bit -> 24-bit, 32-bit -> 32-bit)
         if (a.subframe_size == target_sf) {
@@ -1350,7 +1419,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
           score = 100 + a.subframe_size * 50;
         }
       } else {
-        // MODE DSP 64-BIT PEQ AKTIF:
+        // MODE DSP 64-BIT / PEQ AKTIF:
         // Gunakan wadah terbesar (>= target_sf) agar presisi pecahan 64-bit biquad tersalurkan penuh
         if (a.subframe_size >= target_sf) {
           if (a.subframe_size == 4) score = 600;
@@ -1520,12 +1589,61 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
         setintf.altsetting = (unsigned int)selected_alt.altsetting;
         ioctl_alt_res = ioctl(g_audioState.usbFd, USBDEVFS_SETINTERFACE, &setintf);
       }
+      int ioctl_errno = (ioctl_alt_res < 0) ? errno : 0;
       snprintf(dbg, sizeof(dbg),
-               "Activate Altsetting: iface=%d alt=%d ep=0x%02X maxPkt=%d pktsPerSec=%d -> libusb=%d (%s), ioctl=%d",
+               "Activate Altsetting: iface=%d alt=%d ep=0x%02X maxPkt=%d pktsPerSec=%d -> libusb=%d (%s), ioctl=%d (errno=%d %s)",
                selected_alt.interface_num, selected_alt.altsetting, selected_alt.ep_out,
                selected_alt.max_packet_size, selected_alt.packets_per_sec,
-               r, libusb_error_name(r), ioctl_alt_res);
+               r, libusb_error_name(r), ioctl_alt_res, ioctl_errno, strerror(ioctl_errno));
       record_usb_diag(dbg);
+
+      // TIER 1 SELF-HEALING NATIVE RESET:
+      // If both libusb and usbfs ioctl failed to activate streaming altsetting,
+      // the USB device controller or kernel endpoint state is out of sync.
+      if (r != 0 && ioctl_alt_res != 0 && g_audioState.usbFd >= 0) {
+        snprintf(dbg, sizeof(dbg), "Tier 1 USB Recovery: Resetting USB device (FD=%d) via USBDEVFS_RESET...", g_audioState.usbFd);
+        record_usb_diag(dbg);
+        int reset_res = ioctl(g_audioState.usbFd, USBDEVFS_RESET, 0);
+        snprintf(dbg, sizeof(dbg), "USBDEVFS_RESET result: %d (errno=%d %s)", reset_res, errno, strerror(errno));
+        record_usb_diag(dbg);
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+        // Re-claim interfaces
+        ensure_claimed(g_audioState.acInterfaceNum);
+        ensure_claimed(selected_alt.interface_num);
+
+        // Put DAC in hardware mute (altsetting 0) first
+        libusb_set_interface_alt_setting(g_audioState.usbHandle, selected_alt.interface_num, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+
+        // Re-apply clock rate if UAC2
+        if (g_audioState.uacVersion.load() == 2 && g_audioState.clockSourceId != -1) {
+          uint32_t sr = newSampleRate;
+          uint8_t data[4];
+          data[0] = sr & 0xFF;
+          data[1] = (sr >> 8) & 0xFF;
+          data[2] = (sr >> 16) & 0xFF;
+          data[3] = (sr >> 24) & 0xFF;
+          libusb_control_transfer(g_audioState.usbHandle,
+                                  0x21, 0x01, (0x01 << 8),
+                                  (g_audioState.clockSourceId << 8) | g_audioState.acInterfaceNum,
+                                  data, 4, 1000);
+          std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+
+        r = libusb_set_interface_alt_setting(
+            g_audioState.usbHandle, selected_alt.interface_num, selected_alt.altsetting);
+        if (r != 0 && g_audioState.usbFd >= 0) {
+          struct usbdevfs_setinterface setintf;
+          memset(&setintf, 0, sizeof(setintf));
+          setintf.interface = (unsigned int)selected_alt.interface_num;
+          setintf.altsetting = (unsigned int)selected_alt.altsetting;
+          ioctl_alt_res = ioctl(g_audioState.usbFd, USBDEVFS_SETINTERFACE, &setintf);
+        }
+        snprintf(dbg, sizeof(dbg), "Tier 1 Recovery Altsetting retry -> libusb=%d (%s), ioctl=%d",
+                 r, libusb_error_name(r), ioctl_alt_res);
+        record_usb_diag(dbg);
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
       auto settle_end = std::chrono::steady_clock::now();
       g_audioState.lastInterfaceSettleUs.store(
@@ -1614,21 +1732,76 @@ void pause_audio_internal() {
 }
 
 bool resume_audio_internal() {
+  if (g_audioState.deviceWedged.load()) {
+    LOGW("resumeAudio: Device is wedged. Falling back to playAudio restart.");
+    g_audioState.isPlaying.store(false);
+    return false;
+  }
+
+  // 1. Verify we have valid decoded PCM data in RAM and track has not finished (EOF)
+  uint64_t decoded = g_audioState.decodedFrames.load(std::memory_order_acquire);
+  uint64_t total = g_audioState.totalFrames.load(std::memory_order_acquire);
+  uint64_t currentPos = g_audioState.pcmIndex.load(std::memory_order_acquire);
+  if (g_audioState.pcmBuffer.empty() || decoded == 0 || total == 0 ||
+      g_audioState.isFinished.load() || currentPos >= total) {
+    LOGW("resumeAudio: No resumable PCM state (empty=%d, decoded=%llu, pos=%llu/%llu, finished=%d). Falling back to playAudio.",
+         g_audioState.pcmBuffer.empty() ? 1 : 0,
+         (unsigned long long)decoded,
+         (unsigned long long)currentPos,
+         (unsigned long long)total,
+         g_audioState.isFinished.load() ? 1 : 0);
+    g_audioState.isPlaying.store(false);
+    return false;
+  }
+
   g_audioState.isSwapping.store(false);
+  g_audioState.pausedZeroUrbCount.store(0);
+  g_audioState.consecutiveSubmitErrors.store(0);
+
+  // 2. If isoThread auto-suspended after >= 3 seconds of continuous pause, wake it directly
+  //    from the exact paused pcmIndex in RAM instead of restarting the track from 0:00!
+  if ((g_audioState.isoThread == nullptr || g_audioState.isoThreadExited.load() ||
+       g_audioState.activeIsoTransfers.load() == 0) &&
+      g_audioState.usbHandle != nullptr) {
+    LOGI("resumeAudio: Waking isochronous stream from >3s pause auto-suspend at frame %llu / %llu",
+         (unsigned long long)currentPos, (unsigned long long)total);
+
+    stop_and_join_iso_thread("wake from pause auto-suspend");
+
+    int iface = g_audioState.usbAudioInterface;
+    int alt = g_audioState.currentAltSetting.load();
+    if (iface >= 0 && alt > 0) {
+      int r = libusb_set_interface_alt_setting(g_audioState.usbHandle, iface, alt);
+      if (r != 0 && g_audioState.usbFd >= 0) {
+        struct usbdevfs_setinterface setintf;
+        memset(&setintf, 0, sizeof(setintf));
+        setintf.interface = (unsigned int)iface;
+        setintf.altsetting = (unsigned int)alt;
+        ioctl(g_audioState.usbFd, USBDEVFS_SETINTERFACE, &setintf);
+      }
+    }
+
+    uint32_t sr = g_audioState.sampleRate.load();
+    if (sr == 0) sr = 44100;
+    // Brief 15ms zero-padded pre-roll + micro-ramp fade-in for clickless resume
+    g_audioState.warmupSilenceFrames.store(static_cast<uint32_t>(sr * 0.015));
+    g_audioState.currentVolume = 0.0f;
+    g_audioState.isPlaying.store(true);
+
+    start_iso_streaming_thread("TsrossaIso");
+    if (g_audioState.activeIsoTransfers.load() == 0) {
+      LOGW("resumeAudio: Failed to restart USB isochronous transfers. Falling back to playAudio.");
+      stop_and_join_iso_thread("resume zero active transfers");
+      g_audioState.isPlaying.store(false);
+      return false;
+    }
+
+    g_audioState.decoderCv.notify_one();
+    return true;
+  }
+
   g_audioState.isPlaying.store(true);
-  if ((g_audioState.isoThread == nullptr || g_audioState.isoThreadExited.load()) && g_audioState.usbHandle != nullptr) {
-    LOGW("resumeAudio: isoThread is dead! Falling back to playAudio restart.");
-    g_audioState.isPlaying.store(false);
-    return false;
-  }
-  // After DAC reconnect warmup, pcmBuffer is cleared and decodedFrames reset to 0.
-  // isoThread (TsrossaIsoWarm) may still be alive but there's no PCM data to play.
-  // Return false so Kotlin falls back to playTrack() which re-decodes the file.
-  if (g_audioState.pcmBuffer.empty() || g_audioState.decodedFrames.load() == 0) {
-    LOGW("resumeAudio: No PCM data (buffer empty or decodedFrames=0). Falling back to playAudio restart.");
-    g_audioState.isPlaying.store(false);
-    return false;
-  }
+  g_audioState.decoderCv.notify_one();
   return true;
 }
 

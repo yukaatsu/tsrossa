@@ -118,7 +118,7 @@ fun DonationModalPanel(
                     ) {
                         GlyphSparkle(color = accent, modifier = Modifier.size(15.dp))
                         Text(
-                            text = "Terima Kasih Dari Developer",
+                            text = "Developer Appreciation",
                             fontFamily = ModernSansFont,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp,
@@ -156,7 +156,7 @@ fun DonationModalPanel(
                                 .background(accent)
                         )
                         Text(
-                            text = "Priority Feature Request via Donasi",
+                            text = "Priority Feature Request via Donation",
                             fontFamily = ModernSansFont,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
@@ -173,7 +173,7 @@ fun DonationModalPanel(
                 }
             }
 
-            // 3. Supporter Wall (Daftar Donatur & Pesan Dukungan)
+            // 3. Supporter Wall
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
                     modifier = Modifier.padding(top = 4.dp),
@@ -182,7 +182,7 @@ fun DonationModalPanel(
                 ) {
                     GlyphChatTeardropText(color = accent, modifier = Modifier.size(16.dp))
                     Text(
-                        text = "Pesan Donatur & Supporter Wall",
+                        text = "Supporter Messages & Wall",
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
@@ -221,7 +221,7 @@ fun DonationModalPanel(
                     GlyphBagiBagi(color = onAccent, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Donasi & Request Fitur (Bagi-Bagi)",
+                        text = "Donate & Request Feature (Bagi-Bagi)",
                         fontFamily = ModernSansFont,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
@@ -240,7 +240,7 @@ fun DonationModalPanel(
                     .background(m3SurfaceContainerHigh().copy(alpha = 0.6f))
             ) {
                 Text(
-                    text = "Lanjut ke Aplikasi",
+                    text = "Continue to App",
                     fontFamily = ModernSansFont,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp,

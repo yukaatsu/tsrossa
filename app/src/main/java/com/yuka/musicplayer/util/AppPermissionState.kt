@@ -19,15 +19,18 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 
 /**
- * State holder for runtime app permissions (Storage, Notifications, DND, Battery).
+ * State holder for runtime app permissions (Storage, All Files Access, Notifications, DND, Battery).
  */
 class AppPermissionState(
     val isNotificationGranted: Boolean,
     val isStorageGranted: Boolean,
+    val isAllFilesAccessGranted: Boolean,
     val isDndGranted: Boolean,
     val isBatteryOptimizationIgnored: Boolean,
     val requestNotificationPermission: () -> Unit,
     val requestStoragePermission: () -> Unit,
+    val requestBasicStoragePermission: () -> Unit,
+    val requestAllFilesAccessPermission: () -> Unit,
     val requestDndPermission: () -> Unit,
     val requestBatteryOptimizationPermission: () -> Unit
 )
@@ -36,6 +39,7 @@ class AppPermissionState(
 fun rememberAppPermissionState(context: Context): AppPermissionState {
     var isNotificationGranted by remember { mutableStateOf(checkNotificationPermission(context)) }
     var isStorageGranted by remember { mutableStateOf(checkStoragePermission(context)) }
+    var isAllFilesAccessGranted by remember { mutableStateOf(isAllFilesAccessGranted(context)) }
     var isDndGranted by remember { mutableStateOf(checkDndPermission(context)) }
     var isBatteryOptimizationIgnored by remember { mutableStateOf(OemBatteryHelper.isBatteryOptimizationIgnored(context)) }
 
@@ -48,7 +52,7 @@ fun rememberAppPermissionState(context: Context): AppPermissionState {
     val legacyStorageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        isStorageGranted = granted
+        isStorageGranted = granted || checkStoragePermission(context)
     }
 
     val requestNotificationPermission = {
@@ -62,8 +66,22 @@ fun rememberAppPermissionState(context: Context): AppPermissionState {
         }
     }
 
-    val requestStoragePermission = {
+    val requestAllFilesAccessPermission = {
+        openAllFilesAccessSettings(context)
+    }
+
+    val requestBasicStoragePermission = {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            legacyStorageLauncher.launch(Manifest.permission.READ_MEDIA_AUDIO)
+        } else {
+            legacyStorageLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    val requestStoragePermission = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !isAllFilesAccessGranted) {
+            openAllFilesAccessSettings(context)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             legacyStorageLauncher.launch(Manifest.permission.READ_MEDIA_AUDIO)
         } else {
             legacyStorageLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -85,6 +103,7 @@ fun rememberAppPermissionState(context: Context): AppPermissionState {
             if (event == Lifecycle.Event.ON_RESUME) {
                 isNotificationGranted = checkNotificationPermission(context)
                 isStorageGranted = checkStoragePermission(context)
+                isAllFilesAccessGranted = isAllFilesAccessGranted(context)
                 isDndGranted = checkDndPermission(context)
                 isBatteryOptimizationIgnored = OemBatteryHelper.isBatteryOptimizationIgnored(context)
             }
@@ -95,14 +114,23 @@ fun rememberAppPermissionState(context: Context): AppPermissionState {
         }
     }
 
-    return remember(isNotificationGranted, isStorageGranted, isDndGranted, isBatteryOptimizationIgnored) {
+    return remember(
+        isNotificationGranted,
+        isStorageGranted,
+        isAllFilesAccessGranted,
+        isDndGranted,
+        isBatteryOptimizationIgnored
+    ) {
         AppPermissionState(
             isNotificationGranted = isNotificationGranted,
             isStorageGranted = isStorageGranted,
+            isAllFilesAccessGranted = isAllFilesAccessGranted,
             isDndGranted = isDndGranted,
             isBatteryOptimizationIgnored = isBatteryOptimizationIgnored,
             requestNotificationPermission = requestNotificationPermission,
             requestStoragePermission = requestStoragePermission,
+            requestBasicStoragePermission = requestBasicStoragePermission,
+            requestAllFilesAccessPermission = requestAllFilesAccessPermission,
             requestDndPermission = requestDndPermission,
             requestBatteryOptimizationPermission = requestBatteryOptimizationPermission
         )

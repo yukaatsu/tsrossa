@@ -119,6 +119,8 @@ struct AudioEngineState {
   std::atomic<bool> isSwapping{false};
   std::atomic<bool> isSwappingAck{false};
   std::atomic<int> swappingZeroUrbCount{0};
+  std::atomic<uint64_t> pausedZeroUrbCount{0};
+  std::atomic<int> consecutiveSubmitErrors{0};
   uint32_t iso_fixed_rem = 0; // Jitterless Fixed-Point Bresenham remainder accumulator
   std::atomic<float> targetVolume{1.0f};
   std::atomic<float> rawLinearVolume{1.0f};
@@ -159,6 +161,7 @@ struct AudioEngineState {
   // Default false = Universal 64-Bit DSP Mode (100% compatible with all DACs including AD1 & M06Pro 2)
   std::atomic<bool> preferHardwareVolume{false};
   std::atomic<float> appliedHardwareDb{0.0f}; // Actual dB currently absorbed by DAC hardware
+  std::atomic<bool> pendingHwToDspDrain{false}; // Wait for in-flight 1.0f URBs to drain before EP0 raises DAC to maxVolumeDb
   std::atomic<int> featureUnitId{-1};
   std::atomic<int> volumeChannel{0};
   std::atomic<bool> volumeMasterSupported{false};
