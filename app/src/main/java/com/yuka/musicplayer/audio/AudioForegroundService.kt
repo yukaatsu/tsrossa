@@ -33,73 +33,6 @@ class AudioForegroundService : Service() {
     private var cachedSeekPosSec: Double? = null
     private val serviceScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.Job())
     private var positionHeartbeatJob: kotlinx.coroutines.Job? = null
-    private var audioFlingerKeepAliveTrack: android.media.AudioTrack? = null
-
-    private fun startAudioFlingerKeepAlive() {
-        if (audioFlingerKeepAliveTrack != null) return
-        try {
-            val sampleRate = 8000
-            val numFrames = 4000 // 0.5s buffer
-            val bufferSizeBytes = numFrames * 2 // 16-bit mono = 2 bytes/frame
-            val silentPcm = ByteArray(bufferSizeBytes)
-
-            val track = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                android.media.AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .apply {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                    setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_NONE)
-                                }
-                            }
-                            .build()
-                    )
-                    .setAudioFormat(
-                        android.media.AudioFormat.Builder()
-                            .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(bufferSizeBytes)
-                    .setTransferMode(android.media.AudioTrack.MODE_STATIC)
-                    .build()
-            } else {
-                @Suppress("DEPRECATION")
-                android.media.AudioTrack(
-                    AudioManager.STREAM_MUSIC,
-                    sampleRate,
-                    android.media.AudioFormat.CHANNEL_OUT_MONO,
-                    android.media.AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSizeBytes,
-                    android.media.AudioTrack.MODE_STATIC
-                )
-            }
-
-            track.write(silentPcm, 0, bufferSizeBytes)
-            track.setLoopPoints(0, numFrames, -1) // Infinite static loop in AudioFlinger (0% CPU)
-            track.setVolume(0.0f)
-            track.play()
-            audioFlingerKeepAliveTrack = track
-            android.util.Log.i("AudioForegroundService", "AudioFlinger keep-alive track started (PID registered in Active Tracks)")
-        } catch (e: Throwable) {
-            android.util.Log.w("AudioForegroundService", "Failed to start AudioFlinger keep-alive: ${e.message}")
-        }
-    }
-
-    private fun stopAudioFlingerKeepAlive() {
-        try {
-            audioFlingerKeepAliveTrack?.let {
-                if (it.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
-                    it.stop()
-                }
-                it.release()
-            }
-        } catch (_: Throwable) {}
-        audioFlingerKeepAliveTrack = null
-    }
 
     private fun startPositionHeartbeat() {
         positionHeartbeatJob?.cancel()
@@ -217,6 +150,17 @@ class AudioForegroundService : Service() {
     }
 
     private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        if (PhoneSpeakerRoutingCoordinator.shouldIgnoreAudioFocusLossWhenDacConnected(
+                isDacConnected = AudioPlayerManager.isDacConnected,
+                focusChange = focusChange
+            ) && focusChange != AudioManager.AUDIOFOCUS_GAIN
+        ) {
+            android.util.Log.d(
+                "AudioForegroundService",
+                "AudioFocus change=$focusChange ignored while USB DAC is connected (phone speaker coexistence)."
+            )
+            return@OnAudioFocusChangeListener
+        }
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 // Ignore transient ducking (e.g. system gesture ticks, notification chimes).
@@ -256,6 +200,12 @@ class AudioForegroundService : Service() {
 
     private fun requestAudioFocus() {
         val am = audioManager ?: return
+        // Coexistence (#NOTE 1 & #NOTE 2): Do not monopolize Android AudioFocus while playing directly
+        // to external USB DAC so other apps, notifications, and calls freely use the phone speaker.
+        if (AudioPlayerManager.isDacConnected) {
+            abandonAudioFocus()
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (audioFocusRequest == null) {
                 audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -511,7 +461,6 @@ class AudioForegroundService : Service() {
 
     private fun handleStopRequest() {
         stopPositionHeartbeat()
-        stopAudioFlingerKeepAlive()
         abandonAudioFocus()
         AudioPlayerManager.release()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -525,7 +474,6 @@ class AudioForegroundService : Service() {
     
     override fun onDestroy() {
         stopPositionHeartbeat()
-        stopAudioFlingerKeepAlive()
         AudioPlayerManager.onNotificationUpdateRequired = null
         abandonAudioFocus()
         mediaSession?.let {
@@ -557,22 +505,21 @@ class AudioForegroundService : Service() {
                 AudioPlayerManager.requestPlayNext()
             }
             ACTION_PLAY -> {
+                // Zero AudioFlinger AudioTrack (0% OS resampling, #NOTE 2)
                 requestAudioFocus()
-                startAudioFlingerKeepAlive()
                 if (wakeLock?.isHeld != true) wakeLock?.acquire(10 * 60 * 60 * 1000L)
                 updateNotification()
             }
             ACTION_PAUSE -> {
-                stopAudioFlingerKeepAlive()
+                abandonAudioFocus()
                 if (wakeLock?.isHeld == true) wakeLock?.release()
                 updateNotification()
             }
             ACTION_UPDATE -> {
                 if (AudioPlayerManager.isPlaying) {
                     requestAudioFocus()
-                    startAudioFlingerKeepAlive()
                 } else {
-                    stopAudioFlingerKeepAlive()
+                    abandonAudioFocus()
                 }
                 updateNotification()
             }

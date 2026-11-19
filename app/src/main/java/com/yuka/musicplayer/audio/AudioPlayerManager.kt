@@ -9,6 +9,7 @@ import java.io.File
 object AudioPlayerManager {
     lateinit var audioEngine: AudioEngine
     lateinit var usbAudioController: UsbAudioController
+    private var appContext: Context? = null
     
     var isInitialized = false
         private set
@@ -35,6 +36,7 @@ object AudioPlayerManager {
     fun initialize(context: Context) {
         if (isInitialized) return
         
+        appContext = context.applicationContext
         audioEngine = AudioEngine()
         usbAudioController = UsbAudioController(context)
         
@@ -47,6 +49,8 @@ object AudioPlayerManager {
                 Log.e("AudioPlayerManager", "initUsbDac failed for FD $fd! Closing USB connection to avoid wedged state.")
                 usbAudioController.closeDevice()
             } else {
+                // Activate phone speaker redirection immediately for both Standby/PAUSE and PLAY (#NOTE 1)
+                PhoneSpeakerRoutingCoordinator.onDacConnected(context.applicationContext)
                 val dacName = try {
                     val infoJson = org.json.JSONObject(audioEngine.getDacInfo())
                     infoJson.optString("productName", "USB DAC")
@@ -100,6 +104,7 @@ object AudioPlayerManager {
     }
 
     fun handleDacDetached() {
+        PhoneSpeakerRoutingCoordinator.onDacDisconnected(appContext)
         audioEngine.closeUsbDac()
         audioEngine.pauseAudio()
         isPlaying = false
@@ -118,6 +123,7 @@ object AudioPlayerManager {
 
     fun release() {
         if (!isInitialized) return
+        PhoneSpeakerRoutingCoordinator.onDacDisconnected(appContext)
         try {
             audioEngine.pauseAudio()
             audioEngine.closeUsbDac()
