@@ -28,11 +28,16 @@ import com.yuka.musicplayer.util.ColorContrastHelper
 fun PeqDspSwitchNoticeDialog(
     visible: Boolean,
     title: String = "Switched to Universal 64-Bit DSP",
+    subtitle: String = "DSP & Volume Architecture Sync",
     message: String = "Because Parametric EQ (PEQ) is enabled, volume control has automatically switched from Hybrid Hardware UAC to Universal 64-Bit DSP. This ensures 10-band biquad filtering runs at full 64-bit floating-point precision.",
+    confirmText: String = "Yes",
+    cancelText: String = "No",
+    onConfirm: (() -> Unit)? = null,
     onDismissRequest: () -> Unit
 ) {
     val accent = LocalAccentColor.current
-    val onAccent = if (ColorContrastHelper.calculateLuminance(accent) > 0.45f) Color.Black else Color.White
+    val onAccent = ColorContrastHelper.getOnAccentColor(accent)
+    val onSurfaceColor = m3OnSurface()
 
     CyberBottomSheet(
         visible = visible,
@@ -62,13 +67,13 @@ fun PeqDspSwitchNoticeDialog(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = title,
-                        color = m3OnSurface(),
+                        color = onSurfaceColor,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = ModernSansFont
                     )
                     Text(
-                        text = "DSP & Volume Architecture Sync",
+                        text = subtitle,
                         color = accent,
                         fontSize = 11.sp,
                         fontFamily = TerminalFont,
@@ -84,12 +89,12 @@ fun PeqDspSwitchNoticeDialog(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
                     .background(m3SurfaceContainerHigh().copy(alpha = 0.7f))
-                    .border(0.8.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
+                    .border(0.8.dp, onSurfaceColor.copy(alpha = 0.10f), RoundedCornerShape(14.dp))
                     .padding(14.dp)
             ) {
                 Text(
                     text = message,
-                    color = m3OnSurface(),
+                    color = onSurfaceColor,
                     fontSize = 12.5.sp,
                     fontFamily = ModernSansFont,
                     lineHeight = 18.sp
@@ -98,22 +103,68 @@ fun PeqDspSwitchNoticeDialog(
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            TactileBox(
-                onClick = onDismissRequest,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(accent)
-            ) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "Got It",
-                        color = onAccent,
-                        fontFamily = ModernSansFont,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.5.sp
-                    )
+            if (onConfirm != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    TactileBox(
+                        onClick = onDismissRequest,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(m3SurfaceContainerHigh())
+                            .border(1.dp, onSurfaceColor.copy(alpha = 0.18f), RoundedCornerShape(12.dp))
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(
+                                text = cancelText,
+                                color = onSurfaceColor,
+                                fontFamily = ModernSansFont,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.5.sp
+                            )
+                        }
+                    }
+
+                    TactileBox(
+                        onClick = onConfirm,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(accent)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(
+                                text = confirmText,
+                                color = onAccent,
+                                fontFamily = ModernSansFont,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.5.sp
+                            )
+                        }
+                    }
+                }
+            } else {
+                TactileBox(
+                    onClick = onDismissRequest,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(accent)
+                ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "Got It",
+                            color = onAccent,
+                            fontFamily = ModernSansFont,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.5.sp
+                        )
+                    }
                 }
             }
 

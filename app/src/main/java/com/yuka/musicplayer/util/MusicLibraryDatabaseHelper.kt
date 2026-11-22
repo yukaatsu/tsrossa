@@ -27,6 +27,18 @@ class MusicLibraryDatabaseHelper private constructor(context: Context) :
                 instance ?: MusicLibraryDatabaseHelper(context).also { instance = it }
             }
         }
+
+        fun resetAndDeleteDatabase(context: Context) {
+            synchronized(this) {
+                try {
+                    instance?.close()
+                } catch (_: Throwable) {}
+                instance = null
+                try {
+                    context.applicationContext.deleteDatabase(DB_NAME)
+                } catch (_: Throwable) {}
+            }
+        }
     }
 
     override fun onCreate(db: SQLiteDatabase) {

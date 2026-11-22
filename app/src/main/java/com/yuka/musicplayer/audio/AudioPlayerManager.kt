@@ -39,6 +39,12 @@ object AudioPlayerManager {
         appContext = context.applicationContext
         audioEngine = AudioEngine()
         usbAudioController = UsbAudioController(context)
+
+        val prefs = com.yuka.musicplayer.core.prefs.AppPreferences.get(context)
+        val usbProfile = prefs.getInt("usb_buffer_profile", 1)
+        AudioEngine.applyBufferProfile(usbProfile)
+        val peqConfig = PeqPreferencesHelper.load(prefs)
+        PeqPreferencesHelper.applyToEngine(audioEngine, peqConfig)
         
         // Connect USB controller lifecycle directly to AudioPlayerManager
         usbAudioController.onDeviceReady = { fd ->
@@ -49,6 +55,9 @@ object AudioPlayerManager {
                 Log.e("AudioPlayerManager", "initUsbDac failed for FD $fd! Closing USB connection to avoid wedged state.")
                 usbAudioController.closeDevice()
             } else {
+                val currentPrefs = com.yuka.musicplayer.core.prefs.AppPreferences.get(context)
+                AudioEngine.applyBufferProfile(currentPrefs.getInt("usb_buffer_profile", 1))
+                PeqPreferencesHelper.applyToEngine(audioEngine, PeqPreferencesHelper.load(currentPrefs))
                 // Activate phone speaker redirection immediately for both Standby/PAUSE and PLAY (#NOTE 1)
                 PhoneSpeakerRoutingCoordinator.onDacConnected(context.applicationContext)
                 val dacName = try {
@@ -88,9 +97,11 @@ object AudioPlayerManager {
             if (isPlaying) {
                 audioEngine.pauseAudio()
                 isPlaying = false
-            } else {
+            } else if (isDacConnected) {
                 val resumed = audioEngine.resumeAudio()
                 isPlaying = resumed
+            } else {
+                isPlaying = false
             }
             notifyStateChanged()
         }

@@ -72,7 +72,7 @@ fun WarmupHudDialog(
                 .fillMaxWidth()
                 .shadow(elevation = 12.dp, shape = RoundedCornerShape(20.dp), spotColor = Color.Black.copy(alpha = 0.5f))
                 .clip(RoundedCornerShape(20.dp))
-                .background(m3SurfaceContainer())
+                .background(m3SurfaceContainer().copy(alpha = 1f))
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {

@@ -10,7 +10,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.yuka.musicplayer.audio.AudioEngine
 import com.yuka.musicplayer.model.RefusedTrackEntry
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 
 /**
@@ -39,7 +41,13 @@ data class DacTelemetryState(
 @Composable
 fun rememberDacTelemetry(
     audioEngine: AudioEngine,
-    isDacConnected: Boolean
+    isDacConnected: Boolean,
+    isDiagnosticsOpen: Boolean = false,
+    currentTrack: com.yuka.musicplayer.model.TrackInfo? = null,
+    isPlaying: Boolean = false,
+    isHardwareVolumeEnabled: Boolean = false,
+    isHardwareVolumeActive: Boolean = false,
+    isPeqEnabled: Boolean = false
 ): DacTelemetryState {
     var uacVersion by remember { mutableIntStateOf(0) }
     var claimedInterfaces by remember { mutableStateOf("") }
@@ -60,47 +68,29 @@ fun rememberDacTelemetry(
 
     LaunchedEffect(isDacConnected) {
         if (isDacConnected) {
-            uacVersion = audioEngine.getUacVersion()
-            claimedInterfaces = audioEngine.getClaimedInterfaces()
-            isHardwareVolumeLockedBySystem = audioEngine.isHardwareVolumeLockedBySystem()
-            isForceSoftwareVolume = audioEngine.isForceSoftwareVolume()
-            supportedBitDepths = audioEngine.getSupportedBitDepths()
-            supportedSampleRates = audioEngine.getSupportedSampleRates()
-
-            while (isDacConnected) {
-                negotiatedSampleRate = audioEngine.getSampleRate()
-                negotiatedBitDepth = audioEngine.getNegotiatedBitDepth()
-                sourceSampleRate = audioEngine.getSampleRate()
-                sourceBitDepth = audioEngine.getSourceBitDepth()
-                outputBitDepth = audioEngine.getNegotiatedBitDepth()
-                outputSampleRate = audioEngine.getSampleRate()
-                recentErrorCount = audioEngine.getRecentErrorCount()
-                isSampleRateUnverified = audioEngine.isSampleRateUnverified()
-                isDeviceWedged = audioEngine.isDeviceWedged()
-
-                try {
-                    val historyStr = audioEngine.getRefusedTrackHistory()
-                    if (historyStr.isNotEmpty() && historyStr != "[]") {
-                        val array = JSONArray(historyStr)
-                        val list = mutableListOf<RefusedTrackEntry>()
-                        for (i in 0 until array.length()) {
-                            val obj = array.getJSONObject(i)
-                            list.add(
-                                RefusedTrackEntry(
-                                    obj.getString("file"),
-                                    obj.getInt("bits"),
-                                    obj.getInt("rate"),
-                                    obj.getString("reason")
-                                )
-                            )
-                        }
-                        refusedTrackHistory = list
-                    } else {
-                        refusedTrackHistory = emptyList()
-                    }
-                } catch (_: Exception) {}
-
-                delay(1000)
+            withContext(Dispatchers.IO) {
+                uacVersion = audioEngine.getUacVersion()
+                claimedInterfaces = audioEngine.getClaimedInterfaces()
+                isHardwareVolumeLockedBySystem = audioEngine.isHardwareVolumeLockedBySystem()
+                isForceSoftwareVolume = audioEngine.isForceSoftwareVolume()
+                supportedBitDepths = audioEngine.getSupportedBitDepths()
+                supportedSampleRates = audioEngine.getSupportedSampleRates()
+                val rawNegBit = audioEngine.getNegotiatedBitDepth()
+                val rawRate = audioEngine.getSampleRate()
+                val rawSrcBit = audioEngine.getSourceBitDepth().takeIf { it > 0 } ?: (currentTrack?.bitDepth ?: 0)
+                val effOutBit = resolveEffectiveOutputBitDepth(
+                    sourceBitDepth = rawSrcBit,
+                    rawNegotiatedBitDepth = rawNegBit,
+                    supportedBitDepths = supportedBitDepths,
+                    isHardwareVolumeActive = isHardwareVolumeActive,
+                    isPeqEnabled = isPeqEnabled
+                )
+                sourceBitDepth = rawSrcBit
+                sourceSampleRate = rawRate.takeIf { it > 0 } ?: (currentTrack?.sampleRateHz ?: 0)
+                negotiatedBitDepth = effOutBit
+                negotiatedSampleRate = rawRate.takeIf { it > 0 } ?: (currentTrack?.sampleRateHz ?: 0)
+                outputBitDepth = effOutBit
+                outputSampleRate = negotiatedSampleRate
             }
         } else {
             uacVersion = 0
@@ -115,6 +105,107 @@ fun rememberDacTelemetry(
             supportedSampleRates = ""
             refusedTrackHistory = emptyList()
             recentErrorCount = 0
+        }
+    }
+
+    // Immediate reactive telemetry sync whenever track, playback, volume mode, or PEQ changes
+    // (works even when System Logs & Diagnostics modal is closed!)
+    LaunchedEffect(
+        isDacConnected,
+        currentTrack?.file?.absolutePath,
+        currentTrack?.bitDepth,
+        currentTrack?.sampleRateHz,
+        isPlaying,
+        isHardwareVolumeEnabled,
+        isHardwareVolumeActive,
+        isPeqEnabled,
+        supportedBitDepths
+    ) {
+        if (isDacConnected) {
+            withContext(Dispatchers.IO) {
+                val rawRate = audioEngine.getSampleRate()
+                val rawNegBit = audioEngine.getNegotiatedBitDepth()
+                val rawSrcBit = audioEngine.getSourceBitDepth()
+                val effectiveSrcBit = if (rawSrcBit > 0) rawSrcBit else (currentTrack?.bitDepth ?: 0)
+                val effectiveRate = if (rawRate > 0) rawRate else (currentTrack?.sampleRateHz ?: 0)
+                val effectiveOutBit = resolveEffectiveOutputBitDepth(
+                    sourceBitDepth = effectiveSrcBit,
+                    rawNegotiatedBitDepth = rawNegBit,
+                    supportedBitDepths = supportedBitDepths,
+                    isHardwareVolumeActive = isHardwareVolumeActive,
+                    isPeqEnabled = isPeqEnabled
+                )
+                val hwLocked = audioEngine.isHardwareVolumeLockedBySystem()
+                val forceSw = audioEngine.isForceSoftwareVolume()
+
+                sourceBitDepth = effectiveSrcBit
+                sourceSampleRate = effectiveRate
+                negotiatedBitDepth = effectiveOutBit
+                negotiatedSampleRate = effectiveRate
+                outputBitDepth = effectiveOutBit
+                outputSampleRate = effectiveRate
+                isHardwareVolumeLockedBySystem = hwLocked
+                isForceSoftwareVolume = forceSw
+            }
+        }
+    }
+
+    LaunchedEffect(isDacConnected, isDiagnosticsOpen, isHardwareVolumeActive, isPeqEnabled) {
+        if (isDacConnected && isDiagnosticsOpen) {
+            // Defer telemetry loop by 220ms so CyberBottomSheet entrance spring animation completes smoothly at 60/120 FPS
+            delay(220L)
+            while (isDacConnected && isDiagnosticsOpen) {
+                withContext(Dispatchers.IO) {
+                    val nSampleRate = audioEngine.getSampleRate().takeIf { it > 0 } ?: (currentTrack?.sampleRateHz ?: 0)
+                    val nBitDepth = audioEngine.getNegotiatedBitDepth()
+                    val sBitDepth = audioEngine.getSourceBitDepth().takeIf { it > 0 } ?: (currentTrack?.bitDepth ?: 0)
+                    val effOutBit = resolveEffectiveOutputBitDepth(
+                        sourceBitDepth = sBitDepth,
+                        rawNegotiatedBitDepth = nBitDepth,
+                        supportedBitDepths = supportedBitDepths,
+                        isHardwareVolumeActive = isHardwareVolumeActive,
+                        isPeqEnabled = isPeqEnabled
+                    )
+                    val errCount = audioEngine.getRecentErrorCount()
+                    val unverified = audioEngine.isSampleRateUnverified()
+                    val wedged = audioEngine.isDeviceWedged()
+                    val historyList = try {
+                        val historyStr = audioEngine.getRefusedTrackHistory()
+                        if (historyStr.isNotEmpty() && historyStr != "[]") {
+                            val array = JSONArray(historyStr)
+                            val list = mutableListOf<RefusedTrackEntry>()
+                            for (i in 0 until array.length()) {
+                                val obj = array.getJSONObject(i)
+                                list.add(
+                                    RefusedTrackEntry(
+                                        obj.getString("file"),
+                                        obj.getInt("bits"),
+                                        obj.getInt("rate"),
+                                        obj.getString("reason")
+                                    )
+                                )
+                            }
+                            list
+                        } else {
+                            emptyList()
+                        }
+                    } catch (_: Exception) {
+                        emptyList<RefusedTrackEntry>()
+                    }
+
+                    negotiatedSampleRate = nSampleRate
+                    negotiatedBitDepth = effOutBit
+                    sourceSampleRate = nSampleRate
+                    sourceBitDepth = sBitDepth
+                    outputBitDepth = effOutBit
+                    outputSampleRate = nSampleRate
+                    recentErrorCount = errCount
+                    isSampleRateUnverified = unverified
+                    isDeviceWedged = wedged
+                    refusedTrackHistory = historyList
+                }
+                delay(1000L)
+            }
         }
     }
 

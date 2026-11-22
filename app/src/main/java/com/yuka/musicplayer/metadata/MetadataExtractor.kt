@@ -99,8 +99,13 @@ fun extractMetadata(file: File): TrackInfo {
 
     // MQA Detection: check filename conventions and Vorbis Comment / ID3 header
     val isMqa = detectMqa(file)
+    if (bitmap != null) {
+        com.yuka.musicplayer.util.AlbumArtThumbnailCache.putHeroCover(file.absolutePath, bitmap)
+    }
     val blurredCoverArt = if (bitmap != null) {
-        WallpaperBlurHelper.createBlurredArtworkBackdrop(bitmap, targetSize = 72, blurRadius = 5)
+        WallpaperBlurHelper.createBlurredArtworkBackdrop(bitmap).also { blurred ->
+            com.yuka.musicplayer.util.AlbumArtThumbnailCache.putBlurredBackdrop(file.absolutePath, blurred)
+        }
     } else null
     val audioTags = AudioTagReader.readTags(file)
     val codec = when (file.extension.lowercase()) {

@@ -108,7 +108,7 @@ fun HelpPanel(onClose: () -> Unit) {
                 HelpSectionHeader("01. USB DAC & BIT-PERFECT AUDIO")
                 HelpItem("Bit-Perfect UAC2 Streaming", "Audio is streamed directly to your external USB DAC via exclusive asynchronous libusb isochronous transfers, bypassing the Android mixer and resampler for 100% bit-perfect signal purity.")
                 HelpItem("Volume Dot Indicator", "Amber Dot: 32-bit hardware volume control active in DAC chip.\nRed Dot: 64-bit dithered digital software attenuation.")
-                HelpItem("Do Not Disturb (DND) Integration", "Automatically silences system notifications during audio playback to prevent audio interruptions and sample rate renegotiations.")
+                HelpItem("System Audio Speaker Redirection", "Automatically routes Android system notifications and ringtones to the phone speaker while dedicating the USB DAC exclusively to bit-perfect music playback.")
             }
 
             item {

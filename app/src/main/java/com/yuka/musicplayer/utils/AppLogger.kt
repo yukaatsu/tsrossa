@@ -102,7 +102,10 @@ object AppLogger {
         if (message.contains("PHASE_CLIENT_ALREADY_HIDDEN", ignoreCase = true) ||
             message.contains("ViewPostIme pointer", ignoreCase = true) ||
             message.contains("call setFrameRateCategory", ignoreCase = true) ||
-            message.contains("onFocusEvent", ignoreCase = true)
+            message.contains("onFocusEvent", ignoreCase = true) ||
+            message.contains("Accessing hidden method", ignoreCase = true) ||
+            message.contains("hiddenapi", ignoreCase = true) ||
+            message.contains("setForceUse", ignoreCase = true)
         ) return true
 
         return false
@@ -114,9 +117,10 @@ object AppLogger {
     suspend fun syncFromProcessLogcat(maxLines: Int = 300) = withContext(Dispatchers.IO) {
         val pid = Process.myPid()
         val rawLines = mutableListOf<String>()
+        var proc: java.lang.Process? = null
         try {
             val cmd = arrayOf("logcat", "-d", "-v", "time", "-t", maxLines.toString(), "--pid=$pid")
-            val proc = Runtime.getRuntime().exec(cmd)
+            proc = Runtime.getRuntime().exec(cmd)
             BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
@@ -128,6 +132,10 @@ object AppLogger {
             }
         } catch (_: Exception) {
             return@withContext
+        } finally {
+            try {
+                proc?.destroy()
+            } catch (_: Exception) {}
         }
 
         if (rawLines.isEmpty()) return@withContext
@@ -227,9 +235,10 @@ object AppLogger {
     suspend fun readProcessLogcat(maxLines: Int = 250): List<String> = withContext(Dispatchers.IO) {
         val pid = Process.myPid()
         val result = mutableListOf<String>()
+        var proc: java.lang.Process? = null
         try {
             val cmd = arrayOf("logcat", "-d", "-v", "time", "-t", maxLines.toString(), "--pid=$pid")
-            val proc = Runtime.getRuntime().exec(cmd)
+            proc = Runtime.getRuntime().exec(cmd)
             BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
@@ -241,6 +250,10 @@ object AppLogger {
             }
         } catch (e: Exception) {
             result.add("[WARN] Could not read process logcat: ${e.message}")
+        } finally {
+            try {
+                proc?.destroy()
+            } catch (_: Exception) {}
         }
         result
     }

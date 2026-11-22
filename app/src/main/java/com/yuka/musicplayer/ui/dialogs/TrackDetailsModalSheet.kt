@@ -28,6 +28,7 @@ import com.yuka.musicplayer.ui.theme.m3OnSurface
 import com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant
 import com.yuka.musicplayer.util.TrackAlbumThumbnail
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
@@ -76,7 +77,7 @@ fun TrackDetailsModalSheet(
                 format = activeTarget.extension.uppercase().ifEmpty { "AUDIO" },
                 sampleRate = "--",
                 bitrate = "--",
-                fileSizeFormatted = formatFileSize(activeTarget.length()),
+                fileSizeFormatted = "--",
                 filePath = activeTarget.absolutePath
             )
         )
@@ -84,6 +85,7 @@ fun TrackDetailsModalSheet(
 
     LaunchedEffect(activeTarget) {
         withContext(Dispatchers.IO) {
+            delay(180L)
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(activeTarget.absolutePath)

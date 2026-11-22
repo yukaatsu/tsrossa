@@ -1,7 +1,6 @@
 package com.yuka.musicplayer.util
 
 import android.Manifest
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -106,11 +105,6 @@ fun checkNotificationPermission(context: Context): Boolean {
     } else {
         NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
-}
-
-fun checkDndPermission(context: Context): Boolean {
-    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-    return nm?.isNotificationPolicyAccessGranted ?: false
 }
 
 data class StorageVolumeRoot(

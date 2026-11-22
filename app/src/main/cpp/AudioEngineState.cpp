@@ -18,8 +18,20 @@ std::mutex g_apiMutex;
 void record_usb_diag(const std::string &msg) {
   std::lock_guard<std::mutex> lock(g_usbDiagMutex);
   LOGI("USB_DIAG: %s", msg.c_str());
-  if (g_lastUsbDiagnostic.size() + msg.size() > 8192) {
-    g_lastUsbDiagnostic.clear();
+  constexpr size_t kMaxDiagBytes = 8192;
+  constexpr size_t kKeepTailBytes = 6144;
+  if (g_lastUsbDiagnostic.size() + msg.size() + 1 > kMaxDiagBytes) {
+    if (g_lastUsbDiagnostic.size() > kKeepTailBytes) {
+      size_t cutPos = g_lastUsbDiagnostic.size() - kKeepTailBytes;
+      size_t nextNewline = g_lastUsbDiagnostic.find('\n', cutPos);
+      if (nextNewline != std::string::npos && nextNewline + 1 < g_lastUsbDiagnostic.size()) {
+        g_lastUsbDiagnostic.erase(0, nextNewline + 1);
+      } else {
+        g_lastUsbDiagnostic.erase(0, cutPos);
+      }
+    } else {
+      g_lastUsbDiagnostic.clear();
+    }
   }
   g_lastUsbDiagnostic.append(msg);
   g_lastUsbDiagnostic.push_back('\n');

@@ -223,13 +223,11 @@ fun PermissionSetupDialog(
     isNotificationGranted: Boolean,
     isStorageGranted: Boolean,
     isAllFilesAccessGranted: Boolean = false,
-    isDndGranted: Boolean,
     isBatteryOptimizationIgnored: Boolean = true,
     onRequestNotification: () -> Unit,
     onRequestStorage: () -> Unit,
     onRequestBasicStorage: () -> Unit = onRequestStorage,
     onRequestAllFilesAccess: () -> Unit = {},
-    onRequestDnd: () -> Unit,
     onRequestBatteryOptimization: () -> Unit = {},
     onComplete: () -> Unit
 ) {
@@ -362,19 +360,6 @@ fun PermissionSetupDialog(
                     desc = "Important on Xiaomi (HyperOS), OnePlus, Oppo, Vivo, & Samsung so bit-perfect playback isn't terminated when the screen turns off.",
                     actionLabel = if (isBatteryOptimizationIgnored) "Configured" else "Configure Battery Settings",
                     onAction = onRequestBatteryOptimization
-                )
-            }
-
-            item {
-                PermissionCard(
-                    icon = { com.yuka.musicplayer.ui.components.GlyphDoNotDisturb(color = accent, modifier = Modifier.size(18.dp)) },
-                    title = "Do Not Disturb (DND)",
-                    badge = if (isDndGranted) "ACTIVE" else "OPTIONAL",
-                    isGranted = isDndGranted,
-                    isEssential = false,
-                    desc = "Silences ringtones/notifications automatically during playback so audiophile streams aren't interrupted.",
-                    actionLabel = if (isDndGranted) "Active" else "Configure DND (Optional)",
-                    onAction = onRequestDnd
                 )
             }
         }

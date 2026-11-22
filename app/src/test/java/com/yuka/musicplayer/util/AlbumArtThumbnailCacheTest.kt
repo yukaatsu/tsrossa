@@ -4,6 +4,7 @@ import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AlbumArtThumbnailCacheTest {
@@ -35,5 +36,23 @@ class AlbumArtThumbnailCacheTest {
 
         assertNotNull(retrieved)
         assertEquals(testColor, retrieved)
+    }
+
+    @Test
+    fun testSoftKneeLumaCompression_isContinuousAndMonotonic() {
+        var prev = WallpaperBlurHelper.compressHighlightLuma(0)
+        assertEquals(0, prev)
+
+        for (luma in 1..255) {
+            val cur = WallpaperBlurHelper.compressHighlightLuma(luma)
+            val delta = cur - prev
+            assertTrue(
+                "compressHighlightLuma must be monotonic non-decreasing and step <= 1 (at luma=$luma: prev=$prev, cur=$cur)",
+                delta in 0..1
+            )
+            prev = cur
+        }
+
+        assertEquals("Max luma at 255 must be capped cleanly at 132", 132, WallpaperBlurHelper.compressHighlightLuma(255))
     }
 }

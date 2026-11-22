@@ -32,7 +32,16 @@ class AppModalActionHandler(
     private val getShuffledList: () -> List<File>,
     private val setShuffledList: (List<File>) -> Unit,
     private val syncPreparedNextTrack: () -> Unit,
-    private val playTrack: (File, Boolean, Boolean, PlaybackSource, String?) -> Unit,
+    private val playTrack: (
+        file: File,
+        isAutoAdvance: Boolean,
+        recordHistory: Boolean,
+        source: PlaybackSource?,
+        playlistId: String?,
+        targetSource: PlaybackSource?,
+        initialSeekSeconds: Double,
+        fromPriorityQueue: Boolean
+    ) -> Unit,
     private val onDismissPermissionDialog: () -> Unit,
     private val onDismissQueuePanel: () -> Unit,
     private val onDismissTrackOptions: () -> Unit,
@@ -63,7 +72,8 @@ class AppModalActionHandler(
     fun onSelectQueueTrack(file: File) {
         onDismissQueuePanel()
         val currentQueue = getPriorityQueue()
-        if (currentQueue.any { it.absolutePath == file.absolutePath }) {
+        val wasInQueue = currentQueue.any { it.absolutePath == file.absolutePath }
+        if (wasInQueue) {
             val updated = currentQueue.filter { it.absolutePath != file.absolutePath }
             setPriorityQueue(updated)
             AudioPlayerManager.priorityQueue = updated
@@ -73,13 +83,13 @@ class AppModalActionHandler(
         } else {
             PlaybackSource.LIBRARY
         }
-        playTrack(file, false, true, targetSource, null)
+        playTrack(file, false, true, targetSource, null, null, -1.0, wasInQueue)
     }
 
     fun onPlayTrackAction(target: File, targetSource: PlaybackSource) {
         onDismissTrackOptions()
         val playlistId = if (targetSource == PlaybackSource.PLAYLIST) getSelectedPlaylistId() else null
-        playTrack(target, false, true, targetSource, playlistId)
+        playTrack(target, false, true, targetSource, playlistId, null, -1.0, false)
     }
 
     fun onPlayNextInQueue(target: File) {

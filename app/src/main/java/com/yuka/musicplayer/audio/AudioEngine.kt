@@ -133,7 +133,6 @@ class AudioEngine {
     external fun pauseAudio()
     external fun resumeAudio(): Boolean
     external fun stopAudio()
-    external fun setVolume(volume: Float)
     external fun setSoftwareVolume(volume: Float)
     external fun isHardwareVolumeSupported(): Boolean
     external fun setHardwareVolumeEnabled(enabled: Boolean)

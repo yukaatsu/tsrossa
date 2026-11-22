@@ -24,12 +24,10 @@ fun PermissionsSettingsSection(
     isNotificationGranted: Boolean = true,
     isStorageGranted: Boolean = true,
     isAllFilesAccessGranted: Boolean = true,
-    isDndGranted: Boolean = false,
     isBatteryOptimizationIgnored: Boolean = true,
     onRequestNotification: () -> Unit = {},
     onRequestStorage: () -> Unit = {},
     onRequestAllFilesAccess: () -> Unit = {},
-    onRequestDnd: () -> Unit = {},
     onRequestBatteryOptimization: () -> Unit = {},
     onOpenPermissionDialog: () -> Unit = {}
 ) {
@@ -72,17 +70,6 @@ fun PermissionsSettingsSection(
             grantedText = "Unrestricted",
             deniedText = "Optimized",
             onActionClick = onRequestBatteryOptimization
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        PermissionStatusRow(
-            title = "Do Not Disturb (DND)",
-            subtitle = "Auto-mute notification sounds during playback",
-            isGranted = isDndGranted,
-            grantedText = "Active",
-            deniedText = "Optional",
-            onActionClick = onRequestDnd
         )
 
         Spacer(modifier = Modifier.height(14.dp))

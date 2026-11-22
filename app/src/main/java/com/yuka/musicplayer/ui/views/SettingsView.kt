@@ -60,12 +60,10 @@ fun SettingsView(
     isNotificationGranted: Boolean = true,
     isStorageGranted: Boolean = true,
     isAllFilesAccessGranted: Boolean = true,
-    isDndGranted: Boolean = false,
     isBatteryOptimizationIgnored: Boolean = true,
     onRequestNotification: () -> Unit = {},
     onRequestStorage: () -> Unit = {},
     onRequestAllFilesAccess: () -> Unit = {},
-    onRequestDnd: () -> Unit = {},
     onRequestBatteryOptimization: () -> Unit = {},
     onOpenPermissionDialog: () -> Unit = {},
     onOpenHelp: () -> Unit = {},
@@ -85,13 +83,14 @@ fun SettingsView(
     onModalBlurEnabledChange: (Boolean) -> Unit = {},
     makeFolderAsPlaylist: Boolean = false,
     onMakeFolderAsPlaylistChange: (Boolean) -> Unit = {},
+    visible: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val accent = LocalAccentColor.current
     var currentSubPage by remember(initialSubPage) { mutableStateOf(initialSubPage) }
 
     // Intercept back gesture: navigate to ROOT if in submenu, or return to previous tab if at ROOT
-    BackHandler(enabled = true) {
+    BackHandler(enabled = visible) {
         if (currentSubPage != SettingsSubPage.ROOT) {
             currentSubPage = SettingsSubPage.ROOT
         } else {
@@ -103,11 +102,25 @@ fun SettingsView(
         targetState = currentSubPage,
         transitionSpec = {
             if (targetState != SettingsSubPage.ROOT) {
-                (androidx.compose.animation.slideInHorizontally { it / 3 } + fadeIn() + androidx.compose.animation.scaleIn(initialScale = 0.96f)) togetherWith
-                        (androidx.compose.animation.slideOutHorizontally { -it / 3 } + fadeOut() + androidx.compose.animation.scaleOut(targetScale = 0.96f))
+                (androidx.compose.animation.slideInHorizontally(
+                    animationSpec = androidx.compose.animation.core.tween(210, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                ) { it / 4 } + fadeIn(
+                    animationSpec = androidx.compose.animation.core.tween(180)
+                )) togetherWith (androidx.compose.animation.slideOutHorizontally(
+                    animationSpec = androidx.compose.animation.core.tween(200, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                ) { -it / 5 } + fadeOut(
+                    animationSpec = androidx.compose.animation.core.tween(140)
+                ))
             } else {
-                (androidx.compose.animation.slideInHorizontally { -it / 3 } + fadeIn() + androidx.compose.animation.scaleIn(initialScale = 0.96f)) togetherWith
-                        (androidx.compose.animation.slideOutHorizontally { it / 3 } + fadeOut() + androidx.compose.animation.scaleOut(targetScale = 0.96f))
+                (androidx.compose.animation.slideInHorizontally(
+                    animationSpec = androidx.compose.animation.core.tween(210, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                ) { -it / 5 } + fadeIn(
+                    animationSpec = androidx.compose.animation.core.tween(180)
+                )) togetherWith (androidx.compose.animation.slideOutHorizontally(
+                    animationSpec = androidx.compose.animation.core.tween(200, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                ) { it / 4 } + fadeOut(
+                    animationSpec = androidx.compose.animation.core.tween(140)
+                ))
             }
         },
         label = "settingsSubPageTransition",
@@ -179,7 +192,7 @@ fun SettingsView(
                 // 4. Setup & Permissions Card
                 SettingsMenuCard(
                     title = "Setup & Permissions",
-                    subtitle = "Notifications, Storage access, Do Not Disturb, Battery",
+                    subtitle = "Notifications, Storage access, Battery optimization",
                     icon = { GlyphLock(color = accent, modifier = Modifier.size(20.dp)) },
                     onClick = { currentSubPage = SettingsSubPage.SETUP }
                 )
@@ -306,12 +319,10 @@ fun SettingsView(
                             isNotificationGranted = isNotificationGranted,
                             isStorageGranted = isStorageGranted,
                             isAllFilesAccessGranted = isAllFilesAccessGranted,
-                            isDndGranted = isDndGranted,
                             isBatteryOptimizationIgnored = isBatteryOptimizationIgnored,
                             onRequestNotification = onRequestNotification,
                             onRequestStorage = onRequestStorage,
                             onRequestAllFilesAccess = onRequestAllFilesAccess,
-                            onRequestDnd = onRequestDnd,
                             onRequestBatteryOptimization = onRequestBatteryOptimization,
                             onOpenPermissionDialog = onOpenPermissionDialog
                         )
@@ -325,7 +336,10 @@ fun SettingsView(
                     }
 
                     SettingsSubPage.ABOUT -> {
-                        DeveloperInfoSection()
+                        DeveloperInfoSection(
+                            onOpenLogs = onOpenLogs,
+                            onOpenHelp = onOpenHelp
+                        )
 
                         DonationSupportSection(
                             onOpenDonationModal = onOpenDonationModal

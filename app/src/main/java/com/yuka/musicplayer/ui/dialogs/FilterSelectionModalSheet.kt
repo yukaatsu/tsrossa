@@ -108,7 +108,7 @@ fun FilterSelectionModalSheet(
                     TactileBox(
                         onClick = { searchQuery = "" },
                         pressedScale = 0.85f,
-                        modifier = Modifier.size(26.dp).clip(CircleShape)
+                        modifier = Modifier.size(32.dp).clip(CircleShape)
                     ) {
                         GlyphClose(color = m3OnSurfaceVariant(), modifier = Modifier.size(14.dp))
                     }

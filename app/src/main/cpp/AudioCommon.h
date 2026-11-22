@@ -72,7 +72,12 @@ inline double fast_uniform_rand_channel(uint32_t ch) {
       0x9E3779B97F4A7C15ULL,
       0xBF58476D1CE4E5B9ULL
   };
-  uint64_t z = (states[ch & 1U] += 0x9E3779B97F4A7C15ULL);
+  static const uint64_t weyl[2] = {
+      0x9E3779B97F4A7C15ULL,
+      0xD1B54A32D192ED03ULL
+  };
+  uint32_t idx = ch & 1U;
+  uint64_t z = (states[idx] += weyl[idx]);
   z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
   z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
   z = z ^ (z >> 31);

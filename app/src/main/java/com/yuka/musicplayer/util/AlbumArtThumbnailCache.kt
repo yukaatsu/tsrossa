@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.palette.graphics.Palette
 import com.yuka.musicplayer.model.ScannedMusicItem
 import com.yuka.musicplayer.ui.theme.m3SurfaceContainerLow
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +45,8 @@ object AlbumArtThumbnailCache {
 
     // Direct lock-free ImageBitmap RAM map for zero-latency LazyColumn scrolling
     private val ramImageBitmapMap = ConcurrentHashMap<String, ImageBitmap>(512)
+    private val directPathColorMap = ConcurrentHashMap<String, Color>(1024)
+    private val directPathBlurredBackdropMap = ConcurrentHashMap<String, ImageBitmap>(512)
     private val negativeCache = ConcurrentHashMap<String, Boolean>(1024)
     private val fileKeyCache = ConcurrentHashMap<String, String>(1024)
 
@@ -92,6 +95,8 @@ object AlbumArtThumbnailCache {
 
     private val lruCache = BitmapLruCache(cacheSize)
     private val colorCache = SimpleLruCache<String, Color>(1024)
+    private val directPathHeroCoverMap = SimpleLruCache<String, ImageBitmap>(8)
+    private val directPathHeroBitmapMap = SimpleLruCache<String, Bitmap>(8)
 
     @Volatile
     private var diskCacheDir: File? = null
@@ -128,11 +133,63 @@ object AlbumArtThumbnailCache {
         ramImageBitmapMap[filePath] = bitmap.asImageBitmap()
     }
 
+    fun getBlurredBackdropImageBitmap(filePath: String): ImageBitmap? {
+        if (filePath.isEmpty()) return null
+        return directPathBlurredBackdropMap[filePath]
+    }
+
+    fun putBlurredBackdrop(filePath: String, blurredBitmap: Bitmap?) {
+        if (filePath.isEmpty() || blurredBitmap == null) return
+        directPathBlurredBackdropMap[filePath] = blurredBitmap.asImageBitmap()
+    }
+
+    fun getHeroCoverBitmap(filePath: String): Bitmap? {
+        if (filePath.isEmpty()) return null
+        return directPathHeroBitmapMap.get(filePath)
+    }
+
+    fun getHeroCoverImageBitmap(filePath: String): ImageBitmap? {
+        if (filePath.isEmpty()) return null
+        return directPathHeroCoverMap.get(filePath)
+    }
+
+    fun putHeroCover(filePath: String, bitmap: Bitmap?) {
+        if (filePath.isEmpty() || bitmap == null) return
+        directPathHeroBitmapMap.put(filePath, bitmap)
+        directPathHeroCoverMap.put(filePath, bitmap.asImageBitmap())
+    }
+
+    /**
+     * Non-blocking RAM-only dominant color lookup for main-thread playback transitions.
+     * Never performs disk I/O or file.exists() checks on the UI thread.
+     */
+    fun getCachedDominantColorFromRam(filePath: String, lastModified: Long = 0L): Color? {
+        if (filePath.isEmpty()) return null
+        directPathColorMap[filePath]?.let { if (it.alpha > 0.5f) return it }
+        if (lastModified > 0L) {
+            val key = fileKeyCache["$filePath:$lastModified"]
+            if (key != null) {
+                synchronized(colorCache) {
+                    val ramColor = colorCache.get(key)
+                    if (ramColor != null && ramColor.alpha > 0.5f) {
+                        directPathColorMap[filePath] = ramColor
+                        return ramColor
+                    }
+                }
+            }
+        }
+        return null
+    }
+
     fun getCachedDominantColor(filePath: String, lastModified: Long): Color? {
+        directPathColorMap[filePath]?.let { if (it.alpha > 0.5f) return it }
         val key = cacheKey(filePath, lastModified)
         synchronized(colorCache) {
             val ramColor = colorCache.get(key)
-            if (ramColor != null && ramColor.alpha > 0.5f) return ramColor
+            if (ramColor != null && ramColor.alpha > 0.5f) {
+                directPathColorMap[filePath] = ramColor
+                return ramColor
+            }
         }
         val dir = diskCacheDir ?: return null
         val colorFile = File(dir, "${key}_color_v4.txt")
@@ -151,6 +208,7 @@ object AlbumArtThumbnailCache {
                 synchronized(colorCache) {
                     colorCache.put(key, parsed)
                 }
+                directPathColorMap[filePath] = parsed
                 return parsed
             } catch (_: Throwable) {
                 colorFile.delete()
@@ -161,6 +219,7 @@ object AlbumArtThumbnailCache {
 
     fun putCachedDominantColor(filePath: String, lastModified: Long, color: Color) {
         if (color.alpha < 0.5f) return
+        directPathColorMap[filePath] = color
         val key = cacheKey(filePath, lastModified)
         synchronized(colorCache) {
             colorCache.put(key, color)
@@ -171,6 +230,35 @@ object AlbumArtThumbnailCache {
             val hex = String.format("#%08X", color.toArgb())
             colorFile.writeText(hex)
         } catch (_: Throwable) {}
+    }
+
+    private fun ensureColorAndBlurredBackdropCached(filePath: String, lastMod: Long, thumbnailBitmap: Bitmap) {
+        if (!directPathBlurredBackdropMap.containsKey(filePath)) {
+            runCatching {
+                val blurred = WallpaperBlurHelper.createBlurredArtworkBackdrop(thumbnailBitmap)
+                directPathBlurredBackdropMap[filePath] = blurred.asImageBitmap()
+            }
+        }
+        if (!directPathColorMap.containsKey(filePath)) {
+            val diskOrRamColor = getCachedDominantColor(filePath, lastMod)
+            if (diskOrRamColor != null) {
+                directPathColorMap[filePath] = diskOrRamColor
+            } else {
+                runCatching {
+                    val palette = Palette.from(thumbnailBitmap)
+                        .maximumColorCount(24)
+                        .clearFilters()
+                        .generate()
+                    val swatches = palette.swatches.map {
+                        ColorContrastHelper.SwatchData(it.rgb, it.population)
+                    }
+                    if (swatches.isNotEmpty()) {
+                        val dominant = ColorContrastHelper.selectDominantSwatchColor(swatches)
+                        putCachedDominantColor(filePath, lastMod, dominant)
+                    }
+                }
+            }
+        }
     }
 
     fun cacheKey(filePath: String, lastModified: Long): String {
@@ -191,11 +279,27 @@ object AlbumArtThumbnailCache {
     }
 
     /**
+     * On-demand pre-extraction for the actively playing track and the prepared next track ONLY.
+     * Never called during LazyColumn scrolling.
+     */
+    suspend fun prepareTrackVisuals(filePath: String, knownLastModified: Long = 0L): ImageBitmap? = withContext(Dispatchers.IO) {
+        if (filePath.isEmpty() || negativeCache[filePath] == true) return@withContext null
+        directPathBlurredBackdropMap[filePath]?.let { existing ->
+            if (directPathColorMap.containsKey(filePath)) return@withContext existing
+        }
+        val thumb = loadThumbnail(filePath, targetSizePx = 96, knownLastModified = knownLastModified) ?: return@withContext null
+        val lastMod = if (knownLastModified > 0L) knownLastModified else runCatching { File(filePath).lastModified() }.getOrDefault(0L)
+        ensureColorAndBlurredBackdropCached(filePath, lastMod, thumb)
+        return@withContext directPathBlurredBackdropMap[filePath]
+    }
+
+    /**
      * Pre-warms thumbnails into RAM in the background so scrolling through the Library
      * reads directly from [ramImageBitmapMap] with zero disk I/O or recomposition stutter.
-     * Throttled with micro-delays to eliminate 35MB-42MB GC AllocSpace spikes during startup/scrolling.
+     * Throttled with micro-delays to eliminate GC AllocSpace spikes during startup/scrolling.
      */
     suspend fun prewarmLibraryThumbnails(items: List<ScannedMusicItem>) = withContext(Dispatchers.IO) {
+        kotlinx.coroutines.delay(500)
         var prewarmedCount = 0
         for (item in items) {
             if (!item.isSupported) continue
@@ -206,10 +310,10 @@ object AlbumArtThumbnailCache {
             }
             loadThumbnail(path, targetSizePx = 96, knownLastModified = item.dateModified)
             prewarmedCount++
-            if (prewarmedCount % 4 == 0) {
-                kotlinx.coroutines.delay(20) // Yield thread so young generation GC can collect ByteArrays smoothly
+            if (prewarmedCount % 3 == 0) {
+                kotlinx.coroutines.delay(30) // Yield thread so young generation GC can collect ByteArrays smoothly
             }
-            if (prewarmedCount >= 60) break // Limit initial prewarm batch so startup remains light
+            if (prewarmedCount >= 24) break // Limit initial prewarm batch so startup & early scroll remain buttery smooth
         }
     }
 
@@ -327,6 +431,10 @@ object AlbumArtThumbnailCache {
 
     fun clearCache() {
         lruCache.evictAll()
+        directPathColorMap.clear()
+        directPathBlurredBackdropMap.clear()
+        directPathHeroCoverMap.evictAll()
+        directPathHeroBitmapMap.evictAll()
         negativeCache.clear()
         fileKeyCache.clear()
         synchronized(colorCache) { colorCache.evictAll() }

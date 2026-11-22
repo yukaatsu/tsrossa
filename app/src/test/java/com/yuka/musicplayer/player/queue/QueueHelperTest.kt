@@ -7,7 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.File
 
-open class QueueHelperTest {
+class QueueHelperTest {
 
     private val track1 = File("/music/track1.flac")
     private val track2 = File("/music/track2.flac")
@@ -260,19 +260,20 @@ open class QueueHelperTest {
     }
 
     @Test
-    fun `calculatePreviousTrack recovers stale shuffle index and returns previous track`() {
+    fun `resolvePrevTrack recovers stale shuffle index and returns previous track`() {
         val shuffled = listOf(track2, track3, track1)
         // currentTrack is track3 (index 1 in shuffled), but currentShuffleIndex is -1
-        val prev = QueueHelper.calculatePreviousTrack(
+        val result = QueueHelper.resolvePrevTrack(
             playbackHistory = mutableListOf(),
             activeList = defaultList,
-            currentTrack = track3,
+            currentTrackFile = track3,
             isShuffleEnabled = true,
             shuffledList = shuffled,
             currentShuffleIndex = -1,
-            repeatMode = 0
+            repeatMode = RepeatMode.OFF
         )
-        assertEquals(track2, prev)
+        assertEquals(track2, result.prevFile)
+        assertEquals(0, result.updatedShuffleIndex)
     }
 
     @Test
@@ -337,6 +338,87 @@ open class QueueHelperTest {
         )
         assertEquals(track3, result.nextFile)
         assertEquals(1, result.updatedShuffleIndex)
+    }
+
+    @Test
+    fun `resolveNextTrack with sequenceAnchorFile resumes at R plus 1 after queue track finishes in shuffle OFF`() {
+        // Track list: R (idx 0), R_next (idx 1), R_third (idx 2), K (idx 3), K_next (idx 4)
+        val trackR = File("/music/01_R.flac")
+        val trackRNext = File("/music/02_R_plus_1.flac")
+        val trackRThird = File("/music/03_R_plus_2.flac")
+        val trackK = File("/music/04_K.flac")
+        val trackKNext = File("/music/05_K_plus_1.flac")
+        val fullList = listOf(trackR, trackRNext, trackRThird, trackK, trackKNext)
+
+        // Track K just finished playing. Queue is now empty.
+        // Current playing track was K, but sequenceAnchor was R.
+        val currentTrackInfo = createTrackInfo(trackK)
+        val result = QueueHelper.resolveNextTrack(
+            isAutoAdvance = true,
+            consumeQueue = true,
+            priorityQueue = emptyList(),
+            currentTrack = currentTrackInfo,
+            repeatMode = RepeatMode.OFF,
+            activeList = fullList,
+            isShuffleEnabled = false,
+            shuffledList = emptyList(),
+            currentShuffleIndex = -1,
+            sequenceAnchorFile = trackR
+        )
+
+        // Must resolve to R+1, NOT K+1!
+        assertEquals(trackRNext, result.nextFile)
+        assertEquals(false, result.fromPriorityQueue)
+    }
+
+    @Test
+    fun `resolveNextTrack with sequenceAnchorFile resumes at shuffle deck next after queue track finishes in shuffle ON`() {
+        val trackR = File("/music/01_R.flac")
+        val trackS1 = File("/music/02_S1.flac")
+        val trackS2 = File("/music/03_S2.flac")
+        val trackK = File("/music/04_K.flac")
+        val shuffledDeck = listOf(trackR, trackS1, trackS2, trackK)
+
+        // Track K was played from queue while shuffle was ON. Current playing track is K, anchor is R.
+        val currentTrackInfo = createTrackInfo(trackK)
+        val result = QueueHelper.resolveNextTrack(
+            isAutoAdvance = true,
+            consumeQueue = true,
+            priorityQueue = emptyList(),
+            currentTrack = currentTrackInfo,
+            repeatMode = RepeatMode.OFF,
+            activeList = listOf(trackR, trackS1, trackS2, trackK),
+            isShuffleEnabled = true,
+            shuffledList = shuffledDeck,
+            currentShuffleIndex = 0, // was at track R
+            sequenceAnchorFile = trackR
+        )
+
+        // Must resume to S1 (deck item after R), NOT item after K
+        assertEquals(trackS1, result.nextFile)
+        assertEquals(1, result.updatedShuffleIndex)
+    }
+
+    @Test
+    fun `calculateUpcomingTracks with sequenceAnchorFile shows tracks following anchor`() {
+        val trackR = File("/music/01_R.flac")
+        val trackRNext = File("/music/02_R_plus_1.flac")
+        val trackRThird = File("/music/03_R_plus_2.flac")
+        val trackK = File("/music/04_K.flac")
+        val fullList = listOf(trackR, trackRNext, trackRThird, trackK)
+
+        // Currently playing track K from queue, anchor is R
+        val upcoming = QueueHelper.calculateUpcomingTracks(
+            currentTrack = createTrackInfo(trackK),
+            activeList = fullList,
+            isShuffleEnabled = false,
+            shuffledList = emptyList(),
+            currentShuffleIndex = -1,
+            repeatMode = RepeatMode.OFF,
+            sequenceAnchorFile = trackR
+        )
+
+        assertEquals(listOf(trackRNext, trackRThird, trackK), upcoming)
     }
 }
 

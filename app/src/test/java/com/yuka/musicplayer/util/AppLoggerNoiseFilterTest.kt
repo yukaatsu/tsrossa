@@ -24,6 +24,8 @@ class AppLoggerNoiseFilterTest {
         assertTrue(AppLogger.isNoisyFrameworkLog("SomeTag", "Handling ViewPostIme pointer 0"))
         assertTrue(AppLogger.isNoisyFrameworkLog("SomeTag", "call setFrameRateCategory: category=0"))
         assertTrue(AppLogger.isNoisyFrameworkLog("SomeTag", "received onFocusEvent for window"))
+        assertTrue(AppLogger.isNoisyFrameworkLog("com.yuka.musicplayer", "Accessing hidden method Landroid/media/AudioSystem;->setForceUse(II)I (blocked, reflection, denied)"))
+        assertTrue(AppLogger.isNoisyFrameworkLog("AudioSystem", "setForceUse() error -1"))
     }
 
     @Test

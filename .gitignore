@@ -2,6 +2,13 @@
 # Dokumen Internal, Audit & Catatan Pengembang
 # ==========================================
 AUDIT-PLANNING/
+AUDIT-ANALISA/
+PLANNING-EKSEKUSI/
+JFline/
+changlogs.md
+CHANGELOG.md
+feature-del-req.md
+list.md
 test-bug.md
 bug-note*.md
 *.tmp

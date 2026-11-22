@@ -75,6 +75,8 @@ struct AudioEngineState {
   bool isAsync = false;
   int maxPacketSize = 0;
   std::atomic<int> currentAltSetting{0};
+  std::atomic<int> lastActiveAltSetting{0};
+  std::atomic<bool> isAutoSuspending{false};
 
   std::vector<AltSettingInfo> validAlts;
 
@@ -186,6 +188,12 @@ struct AudioEngineState {
   std::vector<int> claimedInterfaces;
   std::atomic<int> consecutiveErrors{0};
   uint64_t lastErrorTimeMs = 0;
+
+  void resetErrorCounters() {
+    consecutiveErrors.store(0, std::memory_order_relaxed);
+    consecutiveSubmitErrors.store(0, std::memory_order_relaxed);
+    lastErrorTimeMs = 0;
+  }
 
   std::atomic<int> sourceBitDepth{0};
   std::atomic<int> sourceBitDepthNext{0};

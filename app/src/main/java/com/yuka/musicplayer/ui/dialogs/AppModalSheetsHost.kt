@@ -39,6 +39,8 @@ fun AppModalSheetsHost(
     isDacConnected: Boolean,
     isPlaying: Boolean,
     telemetry: com.yuka.musicplayer.ui.diagnostics.DacTelemetryState,
+    isHardwareVolumeActive: Boolean = false,
+    isPeqEnabled: Boolean = false,
     // Dialog visibility states
     showSystemLogs: Boolean,
     onDismissSystemLogs: () -> Unit,
@@ -55,13 +57,11 @@ fun AppModalSheetsHost(
     isNotificationGranted: Boolean,
     isStorageGranted: Boolean,
     isAllFilesAccessGranted: Boolean = false,
-    isDndGranted: Boolean,
     isBatteryOptimizationIgnored: Boolean = true,
     onRequestNotification: () -> Unit,
     onRequestStorage: () -> Unit,
     onRequestBasicStorage: () -> Unit = onRequestStorage,
     onRequestAllFilesAccess: () -> Unit = {},
-    onRequestDnd: () -> Unit,
     onRequestBatteryOptimization: () -> Unit = {},
     onCompletePermissions: () -> Unit,
     // Update states
@@ -125,6 +125,8 @@ fun AppModalSheetsHost(
             supportedSampleRates = telemetry.supportedSampleRates,
             supportedBitDepths = telemetry.supportedBitDepths,
             refusedTrackHistory = telemetry.refusedTrackHistory,
+            isHardwareVolumeActive = isHardwareVolumeActive,
+            isPeqEnabled = isPeqEnabled,
             onClose = onDismissSystemLogs
         )
     }
@@ -197,13 +199,11 @@ fun AppModalSheetsHost(
             isNotificationGranted = isNotificationGranted,
             isStorageGranted = isStorageGranted,
             isAllFilesAccessGranted = isAllFilesAccessGranted,
-            isDndGranted = isDndGranted,
             isBatteryOptimizationIgnored = isBatteryOptimizationIgnored,
             onRequestNotification = onRequestNotification,
             onRequestStorage = onRequestStorage,
             onRequestBasicStorage = onRequestBasicStorage,
             onRequestAllFilesAccess = onRequestAllFilesAccess,
-            onRequestDnd = onRequestDnd,
             onRequestBatteryOptimization = onRequestBatteryOptimization,
             onComplete = onCompletePermissions
         )

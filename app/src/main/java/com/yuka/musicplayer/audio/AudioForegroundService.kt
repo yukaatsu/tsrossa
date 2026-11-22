@@ -51,53 +51,6 @@ class AudioForegroundService : Service() {
         positionHeartbeatJob = null
     }
 
-    private var cachedCoverTrackPath: String? = null
-    private var cachedSafeCover1024: Bitmap? = null
-    private var cachedSafeCover512: Bitmap? = null
-
-    private fun getSafeCoverArt(rawBitmap: Bitmap?, trackPath: String?, maxDimension: Int = 1024): Bitmap? {
-        if (rawBitmap == null) {
-            cachedCoverTrackPath = null
-            cachedSafeCover1024 = null
-            cachedSafeCover512 = null
-            return null
-        }
-        if (cachedCoverTrackPath == trackPath) {
-            if (maxDimension >= 1024 && cachedSafeCover1024 != null) return cachedSafeCover1024
-            if (maxDimension <= 512 && cachedSafeCover512 != null) return cachedSafeCover512
-        }
-
-        val width = rawBitmap.width
-        val height = rawBitmap.height
-        val scaled = if (width > maxDimension || height > maxDimension) {
-            try {
-                val ratio = width.toFloat() / height.toFloat()
-                val targetW: Int
-                val targetH: Int
-                if (ratio >= 1f) {
-                    targetW = maxDimension
-                    targetH = (maxDimension / ratio).toInt().coerceAtLeast(1)
-                } else {
-                    targetH = maxDimension
-                    targetW = (maxDimension * ratio).toInt().coerceAtLeast(1)
-                }
-                Bitmap.createScaledBitmap(rawBitmap, targetW, targetH, true)
-            } catch (_: Exception) {
-                rawBitmap
-            }
-        } else {
-            rawBitmap
-        }
-
-        cachedCoverTrackPath = trackPath
-        if (maxDimension >= 1024) {
-            cachedSafeCover1024 = scaled
-        } else {
-            cachedSafeCover512 = scaled
-        }
-        return scaled
-    }
-
     private val mediaSessionCallback = object : MediaSessionCompat.Callback() {
         override fun onPlay() {
             cachedSeekPosSec = null
@@ -188,10 +141,12 @@ class AudioForegroundService : Service() {
                 com.yuka.musicplayer.utils.AppLogger.i("AUDIO", "AudioFocus: AUDIOFOCUS_GAIN (pausedByTransient=$pausedByTransientLoss)")
                 if (pausedByTransientLoss) {
                     pausedByTransientLoss = false
-                    val resumed = AudioPlayerManager.audioEngine.resumeAudio()
-                    if (resumed) {
-                        AudioPlayerManager.isPlaying = true
-                        AudioPlayerManager.notifyStateChanged()
+                    if (AudioPlayerManager.isDacConnected) {
+                        val resumed = AudioPlayerManager.audioEngine.resumeAudio()
+                        if (resumed) {
+                            AudioPlayerManager.isPlaying = true
+                            AudioPlayerManager.notifyStateChanged()
+                        }
                     }
                 }
             }
@@ -298,7 +253,7 @@ class AudioForegroundService : Service() {
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, album)
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
 
-        getSafeCoverArt(track?.coverArt, track?.file?.absolutePath, maxDimension = 1024)?.let { safeArt ->
+        MediaNotificationHelper.getSafeCoverArt(track?.coverArt, track?.file?.absolutePath, maxDimension = 1024)?.let { safeArt ->
             metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, safeArt)
             metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, safeArt)
         }
@@ -351,78 +306,21 @@ class AudioForegroundService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        } else {
-            PendingIntent.FLAG_UPDATE_CURRENT
-        }
-
-        // 1. Content Intent (Tapping notification opens MainActivity)
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-            ?: Intent(this, com.yuka.musicplayer.MainActivity::class.java)
-        launchIntent.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        val contentPendingIntent = PendingIntent.getActivity(this, 0, launchIntent, flags)
-
-        // 2. Transport Pending Intents
-        val prevIntent = Intent(this, AudioForegroundService::class.java).apply { action = ACTION_PREV }
-        val prevPendingIntent = PendingIntent.getService(this, 1, prevIntent, flags)
-
-        val togglePlayIntent = Intent(this, AudioForegroundService::class.java).apply { action = ACTION_TOGGLE_PLAY }
-        val togglePlayPendingIntent = PendingIntent.getService(this, 2, togglePlayIntent, flags)
-
-        val nextIntent = Intent(this, AudioForegroundService::class.java).apply { action = ACTION_NEXT }
-        val nextPendingIntent = PendingIntent.getService(this, 3, nextIntent, flags)
-
-        val stopIntent = Intent(this, AudioForegroundService::class.java).apply { action = ACTION_STOP }
-        val stopPendingIntent = PendingIntent.getService(this, 4, stopIntent, flags)
-
         val track = AudioPlayerManager.currentTrack
         val isPlaying = AudioPlayerManager.isPlaying ||
             (AudioPlayerManager.isInitialized && AudioPlayerManager.audioEngine.isPlaying())
         val isDac = AudioPlayerManager.isDacConnected
 
-        val title = track?.title ?: "tsrossa Audiophile Player"
-        val subtitle = if (track != null) {
-            val dacLabel = if (isDac) "Bit-Perfect UAC2" else "Audio Ready"
-            "${track.artist} • $dacLabel"
-        } else {
-            if (isDac) "USB DAC Connected" else "Standby"
-        }
-
-        val playPauseIcon = if (isPlaying) {
-            R.drawable.ic_notif_pause
-        } else {
-            R.drawable.ic_notif_play
-        }
-        val playPauseTitle = if (isPlaying) "Pause" else "Play"
-
-        // Sync MediaSession metadata & state for Android 11–15 System Media Player
         syncMediaMetadata()
         syncPlaybackState(isPlaying)
 
-        // Native Android / One UI Rich MediaStyle attached to session token
-        val mediaStyle = MediaStyle()
-            .setMediaSession(mediaSession?.sessionToken)
-            .setShowActionsInCompactView(0, 1, 2)
-
-        val scaledCover = getSafeCoverArt(track?.coverArt, track?.file?.absolutePath, maxDimension = 512)
-
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(subtitle)
-            .setSmallIcon(R.drawable.ic_stat_tsrossa)
-            .setContentIntent(contentPendingIntent)
-            .setStyle(mediaStyle)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setOnlyAlertOnce(true)
-            .setOngoing(isPlaying)
-            .addAction(R.drawable.ic_notif_prev, "Previous", prevPendingIntent)
-            .addAction(playPauseIcon, playPauseTitle, togglePlayPendingIntent)
-            .addAction(R.drawable.ic_notif_next, "Next", nextPendingIntent)
-            .addAction(R.drawable.ic_notif_close, "Close", stopPendingIntent)
-            .setLargeIcon(scaledCover)
-
-        return builder.build()
+        return MediaNotificationHelper.buildNotification(
+            context = this,
+            mediaSession = mediaSession,
+            track = track,
+            isPlaying = isPlaying,
+            isDac = isDac
+        )
     }
 
     private var lastNotificationTime = 0L
@@ -548,15 +446,7 @@ class AudioForegroundService : Service() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val serviceChannel = NotificationChannel(
-                CHANNEL_ID,
-                "Bit-Perfect Audio Engine",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(serviceChannel)
-        }
+        MediaNotificationHelper.createNotificationChannel(this)
     }
 
     companion object {

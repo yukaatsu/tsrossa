@@ -80,9 +80,12 @@ public:
         const double sin_w0 = std::sin(w0);
         const double A = std::pow(10.0, gainDb / 40.0);
 
-        // Pure Robert Bristow-Johnson Audio EQ Cookbook bandwidth (zero artificial upper-treble choking):
-        // Preserves full 8 kHz - 16 kHz air, harmonic sparkle, and open soundstage.
-        const double alpha = sin_w0 / (2.0 * safeQ);
+        // Pure Robert Bristow-Johnson Audio EQ Cookbook bandwidth with gentle Nyquist decramping:
+        // Preserves full 8 kHz - 16 kHz air, harmonic sparkle, and open soundstage without upper-treble phase crowding.
+        double alpha = sin_w0 / (2.0 * safeQ);
+        if (filterType == PEQ_FILTER_PEAKING && safeFreq > 0.16 * sampleRate) {
+            alpha *= std::pow(std::cos(w0 * 0.5), 0.18);
+        }
 
         double b0 = 1.0, b1 = 0.0, b2 = 0.0, a0 = 1.0, a1 = 0.0, a2 = 0.0;
 
@@ -145,16 +148,16 @@ public:
     }
 
     /**
-     * Transparent Linear-Core Peak Guard (-0.05 dBFS linear core):
-     * - 100.0000% bit-linear (y = x, 0.0000% THD/IMD) up to -0.05 dBFS (99.43% of full scale).
-     * - Smooth anti-wraparound ceiling only in the final 0.57% margin so dense multi-instrument
-     *   peaks never suffer intermodulation distortion ("tercampur di ujung") during normal playback.
+     * Transparent Linear-Core Peak Guard (-0.35 dBFS linear core = 96.05% FS zero-IMD):
+     * - 100.0000% bit-linear (y = x, 0.0000% THD/IMD) up to -0.35 dBFS (96.05% of full scale).
+     * - Smooth musical tanh soft-knee across top 3.95% headroom ensures dense multi-instrument
+     *   peaks never compress harshly or congest ("tercampur di ujung").
      */
     static inline double applyMasteringCeilingPcm32(double x) {
         constexpr double kFullScalePos = 2147483647.0;
         constexpr double kFullScaleNeg = 2147483648.0;
-        constexpr double kLinearThreshold = 2135157948.0; // 0.99426007 * 2147483647.0 (-0.05 dBFS)
-        constexpr double kKneeSpanPos = kFullScalePos - kLinearThreshold; // 12325699.0
+        constexpr double kLinearThreshold = 2062670024.0; // 0.96050567 * 2147483647.0 (-0.35 dBFS)
+        constexpr double kKneeSpanPos = kFullScalePos - kLinearThreshold; // 84813623.0
         constexpr double kInvKneeSpanPos = 1.0 / kKneeSpanPos;
 
         if (x > kLinearThreshold) {
@@ -192,8 +195,14 @@ struct ParametricEqState {
         for (int i = 0; i < kNumPeqBands; ++i) {
             bandParams[i].freqHz = defaultFreqs[i];
             bandParams[i].gainDb = 0.0;
-            // True 1-octave Constant-Q: 0.707 Butterworth for shelves, 1.41 (sqrt(2)) for surgical peaking separation
-            bandParams[i].q = (i == 0 || i == 9) ? 0.707 : 1.41;
+            // Multi-Zone Q calibration:
+            // - Bands 0 & 9: 0.707 (Butterworth shelf)
+            // - Bands 1 & 2: 0.95 (Sub-bass & Mid-bass punch)
+            // - Bands 3 & 4: 1.25 (Lower & Center Midrange body)
+            // - Bands 5..8: 1.41 (Upper Mid & Treble surgical presence)
+            bandParams[i].q = (i == 0 || i == 9) ? 0.707 :
+                              (i == 1 || i == 2) ? 0.95 :
+                              (i == 3 || i == 4) ? 1.25 : 1.41;
             bandParams[i].filterType = (i == 0) ? PEQ_FILTER_LOW_SHELF :
                                        (i == 9) ? PEQ_FILTER_HIGH_SHELF : PEQ_FILTER_PEAKING;
             bandParams[i].enabled = true;

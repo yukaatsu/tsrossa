@@ -499,7 +499,7 @@ void close_usb_dac_internal() {
       std::lock_guard<std::mutex> lock(g_stateMutex);
       for (int iface : g_audioState.claimedInterfaces) {
         int rr = libusb_release_interface(g_audioState.usbHandle, iface);
-        if (rr != 0)
+        if (rr != 0 && rr != LIBUSB_ERROR_NO_DEVICE && rr != LIBUSB_ERROR_NOT_FOUND)
           LOGE("libusb_release_interface error: %s", libusb_error_name(rr));
       }
       g_audioState.claimedInterfaces.clear();
@@ -515,6 +515,9 @@ void close_usb_dac_internal() {
     g_audioState.sampleRate.store(0);
     g_audioState.channels.store(0);
     g_audioState.currentAltSetting.store(0);
+    g_audioState.lastActiveAltSetting.store(0);
+    g_audioState.isAutoSuspending.store(false);
+    g_audioState.resetErrorCounters();
     g_audioState.hasValidatedRate.store(false);
     g_audioState.isPlaying.store(false);
     g_audioState.isSwapping.store(false);
@@ -688,6 +691,10 @@ bool init_usb_dac_internal(int fd) {
   g_audioState.isSwappingAck.store(false);
   g_audioState.lastIsoPacketTimeNs.store(0);
   g_audioState.sampleRateUnverified.store(false);
+  g_audioState.currentAltSetting.store(0);
+  g_audioState.lastActiveAltSetting.store(0);
+  g_audioState.isAutoSuspending.store(false);
+  g_audioState.resetErrorCounters();
   g_audioState.volumeChannel = 0;
 
   struct ClockSourceCandidate {
@@ -988,9 +995,10 @@ bool init_usb_dac_internal(int fd) {
     if (source_bytes > 4)
       source_bytes = 4;
 
-    const bool dsp_high_precision_alt =
-        g_audioState.peqState.enabled.load(std::memory_order_relaxed) ||
-        !g_audioState.preferHardwareVolume.load(std::memory_order_relaxed);
+    const bool peq_active = g_audioState.peqState.enabled.load(std::memory_order_relaxed);
+    const bool sw_vol_attenuating = !g_audioState.preferHardwareVolume.load(std::memory_order_relaxed) &&
+                                    (g_audioState.rawLinearVolume.load(std::memory_order_relaxed) < 0.999f);
+    const bool dsp_high_precision_alt = peq_active || sw_vol_attenuating;
 
     AltSettingInfo best_alt = g_audioState.validAlts[0];
     int best_score = -1;

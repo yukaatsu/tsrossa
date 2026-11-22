@@ -4,6 +4,7 @@
 #include "UsbDacController.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -18,6 +19,65 @@
 #include <unistd.h>
 
 void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer);
+
+static int activate_streaming_altsetting_with_retry(
+    int iface_num,
+    int altsetting,
+    int &out_ioctl_res,
+    int &out_ioctl_errno) {
+  out_ioctl_res = -999;
+  out_ioctl_errno = 0;
+  if (g_audioState.usbHandle == nullptr || iface_num < 0) {
+    return LIBUSB_ERROR_NO_DEVICE;
+  }
+
+  int r = LIBUSB_ERROR_OTHER;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    errno = 0;
+    r = libusb_set_interface_alt_setting(g_audioState.usbHandle, iface_num, altsetting);
+    if (r == 0) {
+      // SUCCESS via libusb: Do NOT inspect stale thread-local errno!
+      out_ioctl_res = -999;
+      out_ioctl_errno = 0;
+      return 0;
+    }
+    if (r == LIBUSB_ERROR_NO_DEVICE) {
+      return r;
+    }
+    if (attempt < 2 &&
+        (r == LIBUSB_ERROR_BUSY || r == LIBUSB_ERROR_PIPE ||
+         r == LIBUSB_ERROR_IO || r == LIBUSB_ERROR_TIMEOUT)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    } else {
+      break;
+    }
+  }
+
+  // Fallback to direct usbfs ioctl(USBDEVFS_SETINTERFACE) with EAGAIN/EBUSY retry backoff
+  if (r != 0 && g_audioState.usbFd >= 0) {
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      struct usbdevfs_setinterface setintf;
+      memset(&setintf, 0, sizeof(setintf));
+      setintf.interface = static_cast<unsigned int>(iface_num);
+      setintf.altsetting = static_cast<unsigned int>(altsetting);
+      errno = 0;
+      out_ioctl_res = ioctl(g_audioState.usbFd, USBDEVFS_SETINTERFACE, &setintf);
+      out_ioctl_errno = (out_ioctl_res < 0) ? errno : 0;
+      if (out_ioctl_res == 0) {
+        return r;
+      }
+      if (out_ioctl_errno == ENODEV) {
+        break;
+      }
+      if (attempt < 2 && (out_ioctl_errno == EAGAIN || out_ioctl_errno == EBUSY)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      } else {
+        break;
+      }
+    }
+  }
+  return r;
+}
 
 bool start_iso_streaming_thread(const char *thread_name) {
   if (g_audioState.isoThread != nullptr || g_audioState.usbHandle == nullptr) {
@@ -37,9 +97,11 @@ bool start_iso_streaming_thread(const char *thread_name) {
     }
   }
   g_audioState.stopIsoThread.store(false);
+  g_audioState.isAutoSuspending.store(false);
   g_audioState.isoThreadStarted.store(false);
   g_audioState.isoThreadExited.store(false);
   g_audioState.stallFaultReported.store(false);
+  g_audioState.resetErrorCounters();
   g_audioState.isSwapping.store(false);
   g_audioState.swappingZeroUrbCount.store(0);
   g_audioState.isSwappingAck.store(false);
@@ -218,6 +280,22 @@ bool start_iso_streaming_thread(const char *thread_name) {
         libusb_free_transfer(t);
       }
       g_audioState.transfers.clear();
+    }
+
+    // Put DAC streaming interface into true UAC zero-bandwidth standby (altsetting=0) on idle auto-suspend
+    // Prevents SPV5048 / UAC2 asynchronous FIFO starvation & firmware watchdog resets while paused.
+    if (g_audioState.isAutoSuspending.load(std::memory_order_acquire) &&
+        !g_audioState.isPlaying.load(std::memory_order_acquire) &&
+        g_audioState.usbHandle != nullptr &&
+        g_audioState.usbAudioInterface >= 0) {
+      int curAlt = g_audioState.currentAltSetting.load(std::memory_order_relaxed);
+      if (curAlt > 0) {
+        g_audioState.lastActiveAltSetting.store(curAlt, std::memory_order_release);
+      }
+      libusb_set_interface_alt_setting(g_audioState.usbHandle, g_audioState.usbAudioInterface, 0);
+      g_audioState.currentAltSetting.store(0, std::memory_order_release);
+      g_audioState.resetErrorCounters();
+      LOGI("[AudioStreamer] Isochronous stream auto-suspended to UAC altsetting=0 (hardware standby).");
     }
 
     // Safely report USB stall fault on exit without synchronous JNI / AttachCurrentThread in audio thread
@@ -439,6 +517,8 @@ void stop_and_join_iso_thread(const char* caller_reason) {
   }
   g_audioState.transfers.clear();
   g_audioState.activeIsoTransfers.store(0);
+  g_audioState.isAutoSuspending.store(false);
+  g_audioState.resetErrorCounters();
 }
 
 void playAudio_cleanup_on_negotiation_failure() {
@@ -468,6 +548,7 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
   }
 
   // Handle transient vs critical errors
+  bool transfer_had_error = false;
   if (transfer->status == LIBUSB_TRANSFER_ERROR ||
       transfer->status == LIBUSB_TRANSFER_TIMED_OUT ||
       transfer->status == LIBUSB_TRANSFER_STALL ||
@@ -476,6 +557,11 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
     if (g_audioState.stopIsoThread.load() || g_audioState.usbHandle == nullptr) {
       g_audioState.activeIsoTransfers.fetch_sub(1);
       return;
+    }
+
+    transfer_had_error = true;
+    if (transfer->status == LIBUSB_TRANSFER_STALL) {
+      libusb_clear_halt(g_audioState.usbHandle, g_audioState.epAddress);
     }
 
     uint64_t now = get_time_ms();
@@ -587,10 +673,11 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
     uint64_t pausedUrbs = g_audioState.pausedZeroUrbCount.fetch_add(1) + 1;
     uint32_t pauseLimitUrbs = (usb_frames_per_sec >= 8000) ? 375 : 50;
     if (pausedUrbs > pauseLimitUrbs) {
+      g_audioState.isAutoSuspending.store(true, std::memory_order_release);
+      g_audioState.stopIsoThread.store(true, std::memory_order_release);
       int active = g_audioState.activeIsoTransfers.fetch_sub(1) - 1;
       if (active <= 0) {
-        LOGI("[AudioStreamer] Isochronous stream paused idle auto-suspend complete (standby).");
-        g_audioState.stopIsoThread.store(true);
+        LOGI("[AudioStreamer] Isochronous stream paused idle auto-suspend draining complete.");
       }
       return;
     }
@@ -601,6 +688,26 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
   g_audioState.isSwappingAck.store(false);
   int data_offset = 0;
 
+  // On a bus/transfer error callback, do NOT consume pcmIndex from pcmBuffer;
+  // fill zero-silence frames and probe resubmit to verify link health or detect physical unplug.
+  if (transfer_had_error) {
+    for (int i = 0; i < num_packets; i++) {
+      int audio_frames_to_send = (int)base_frames;
+      g_audioState.iso_fixed_rem += remainder_rate;
+      if (g_audioState.iso_fixed_rem >= usb_frames_per_sec) {
+        audio_frames_to_send++;
+        g_audioState.iso_fixed_rem -= usb_frames_per_sec;
+      }
+      const int bytes_per_frame = g_audioState.channels.load() * g_audioState.subframeSize.load();
+      int bytes_to_send = audio_frames_to_send * bytes_per_frame;
+      if (bytes_to_send > g_audioState.maxPacketSize && bytes_per_frame > 0) {
+        bytes_to_send = (g_audioState.maxPacketSize / bytes_per_frame) * bytes_per_frame;
+      }
+      memset(buffer + data_offset, 0, bytes_to_send);
+      transfer->iso_packet_desc[i].length = bytes_to_send;
+      data_offset += bytes_to_send;
+    }
+  } else {
   for (int i = 0; i < num_packets; i++) {
     int audio_frames_to_send = (int)base_frames;
     g_audioState.iso_fixed_rem += remainder_rate;
@@ -807,9 +914,9 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
             bool apply_dither = (src[s] != 0) && (peq_effectively_active || (frame_vol < 0.9999 && frame_vol > 0.00001));
 
             if (sf_size == 4) {
-              // 32-bit container: restore decorrelated stereo TPDF dither at LSB for holographic imaging
+              // 32-bit container: restore decorrelated stereo TPDF dither scaled to 24-bit DAC boundary
               if (apply_dither) {
-                scaled32 += fast_tpdf_dither(ch);
+                scaled32 += fast_tpdf_dither(ch) * 128.0;
               }
               int64_t q32 = std::llrint(scaled32);
               if (q32 > 2147483647LL) q32 = 2147483647LL;
@@ -875,8 +982,7 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
                                  g_audioState.sourceBitDepthNext.load());
 
           if (format_changed) {
-            LOGW("Gapless aborted due to format change. Notifying track finished for normal advance.");
-            g_audioState.hasNextTrack.store(false);
+            LOGW("Gapless aborted due to format change. Preserving pre-buffered pcmBufferNext for fast advance.");
             g_audioState.isFinished.store(true);
             g_audioState.isPlaying.store(false);
 
@@ -966,32 +1072,30 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
     transfer->iso_packet_desc[i].length = bytes_to_send;
     data_offset += bytes_to_send;
   }
+  }
 
   if (!g_audioState.stopIsoThread.load()) {
     int r = libusb_submit_transfer(transfer);
-    if (r != 0) {
+    if (r == LIBUSB_ERROR_PIPE) {
+      libusb_clear_halt(g_audioState.usbHandle, g_audioState.epAddress);
+      r = libusb_submit_transfer(transfer);
+    }
+    if (r == LIBUSB_ERROR_NO_DEVICE || r == LIBUSB_ERROR_NOT_FOUND) {
+      // Physical USB disconnect detected: exit cleanly without polluting I/O Error Count or emitting stall fault
+      g_audioState.activeIsoTransfers.fetch_sub(1);
+      g_audioState.stopIsoThread.store(true, std::memory_order_release);
+      g_audioState.resetErrorCounters();
+    } else if (r != 0) {
       LOGE("libusb_submit_transfer failed: %d", r);
-      if (r == LIBUSB_ERROR_PIPE) {
-        libusb_clear_halt(g_audioState.usbHandle, g_audioState.epAddress);
-        r = libusb_submit_transfer(transfer);
-      }
-      if (r != 0) {
-        int remaining = g_audioState.activeIsoTransfers.fetch_sub(1) - 1;
-        int errStreak = g_audioState.consecutiveSubmitErrors.fetch_add(1) + 1;
-        // Do not crash/kill stream on single glitch; only declare stall if all URBs fail or streak >= 5
-        if (remaining <= 0 || errStreak >= 5) {
-          g_audioState.stopIsoThread.store(true);
-          if (g_audioState.isPlaying.load()) {
-            g_audioState.stallFaultReported.store(true);
-            std::lock_guard<std::mutex> lock(g_controlMutex);
-            ControlRequest evReq;
-            evReq.type = REQ_EVENT_USB_STALL_FAULT;
-            g_controlQueue.push(evReq);
-            g_controlCv.notify_one();
-          }
+      int remaining = g_audioState.activeIsoTransfers.fetch_sub(1) - 1;
+      int errStreak = g_audioState.consecutiveSubmitErrors.fetch_add(1) + 1;
+      // Do not crash/kill stream on single glitch; only declare stall if all URBs fail or streak >= 5
+      if (remaining <= 0 || errStreak >= 5) {
+        g_audioState.stopIsoThread.store(true, std::memory_order_release);
+        if (g_audioState.isPlaying.load()) {
+          // Single dispatch site: isoThread exit block safely pushes REQ_EVENT_USB_STALL_FAULT off callback
+          g_audioState.stallFaultReported.store(true, std::memory_order_release);
         }
-      } else {
-        g_audioState.consecutiveSubmitErrors.store(0);
       }
     } else {
       g_audioState.consecutiveSubmitErrors.store(0);
@@ -1048,7 +1152,8 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   }
   InitializingTrackGuard initGuard;
   g_audioState.pausedZeroUrbCount.store(0);
-  g_audioState.consecutiveSubmitErrors.store(0);
+  g_audioState.isAutoSuspending.store(false);
+  g_audioState.resetErrorCounters();
   g_audioState.seekGeneration.fetch_add(1, std::memory_order_acq_rel);
   g_audioState.sampleRateUnverified.store(false);
   g_audioState.isFinished = false;
@@ -1072,7 +1177,10 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
     bool format_match = (g_audioState.sampleRate.load() == g_audioState.sampleRateNext.load()) &&
                         (g_audioState.channels.load() == g_audioState.channelsNext.load()) &&
                         (g_audioState.sourceBitDepth.load() == g_audioState.sourceBitDepthNext.load());
-    if (format_match && g_audioState.isoThread != nullptr && !g_audioState.stopIsoThread.load() &&
+    if (format_match && g_audioState.isoThread != nullptr &&
+        !g_audioState.isoThreadExited.load() &&
+        !g_audioState.stopIsoThread.load() &&
+        !g_audioState.isAutoSuspending.load() &&
         g_audioState.activeIsoTransfers.load() > 0) {
       LOGI("playAudio: INSTANT GAPLESS HANDOVER for manual Next -> %s", savedPath.c_str());
 
@@ -1287,7 +1395,12 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
 
   // === STEP 1: ALLOCATE & PRELOAD AUDIO BUFFER IN RAM BEFORE HARDWARE USB RECONFIG ===
   if (!reusedPrebuffer) {
-    if (g_audioState.isoThread != nullptr) {
+    bool iso_running_for_swap = (g_audioState.isoThread != nullptr &&
+                                 !g_audioState.isoThreadExited.load() &&
+                                 !g_audioState.stopIsoThread.load() &&
+                                 !g_audioState.isAutoSuspending.load() &&
+                                 g_audioState.activeIsoTransfers.load() > 0);
+    if (iso_running_for_swap) {
       g_audioState.swappingZeroUrbCount.store(0);
       g_audioState.isSwappingAck.store(false);
       g_audioState.isSwapping.store(true);
@@ -1320,7 +1433,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       }
     }
 
-    if (g_audioState.isoThread != nullptr) {
+    if (iso_running_for_swap && g_audioState.isoThread != nullptr) {
       auto swap_start = std::chrono::steady_clock::now();
       while (!g_audioState.isSwappingAck.load() && !g_audioState.stopIsoThread.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -1390,9 +1503,10 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   if (target_sf < 2) target_sf = 2;
   if (target_sf > 4) target_sf = 4;
 
-  const bool dsp_high_precision_alt =
-      g_audioState.peqState.enabled.load(std::memory_order_relaxed) ||
-      !g_audioState.preferHardwareVolume.load(std::memory_order_relaxed);
+  const bool peq_active = g_audioState.peqState.enabled.load(std::memory_order_relaxed);
+  const bool sw_vol_attenuating = !g_audioState.preferHardwareVolume.load(std::memory_order_relaxed) &&
+                                  (g_audioState.rawLinearVolume.load(std::memory_order_relaxed) < 0.999f);
+  const bool dsp_high_precision_alt = peq_active || sw_vol_attenuating;
 
   // Sync PEQ sample rate if necessary
   uint32_t activeBank = g_audioState.peqState.activeBankIndex.load(std::memory_order_relaxed);
@@ -1446,7 +1560,11 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   bool rate_changed = (oldSampleRate != newSampleRate);
   bool alt_changed = has_selected_alt && (selected_alt.subframe_size != oldSubframeSize || selected_alt.altsetting != oldAltSetting);
   bool altsetting_changed = false;
-  bool stream_was_stopped = (g_audioState.isoThread == nullptr || g_audioState.activeIsoTransfers.load() == 0);
+  bool stream_was_stopped = (g_audioState.isoThread == nullptr ||
+                             g_audioState.isoThreadExited.load() ||
+                             g_audioState.stopIsoThread.load() ||
+                             g_audioState.isAutoSuspending.load() ||
+                             g_audioState.activeIsoTransfers.load() == 0);
 
   bool needs_reconfig = alt_changed ||
                         rate_changed ||
@@ -1533,19 +1651,23 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
 
         uint8_t verify_data[4] = {0};
         int rv = -1;
+        uint32_t verified_sr = 0;
         for (int retry = 0; retry < 5; retry++) {
           rv = libusb_control_transfer(
               g_audioState.usbHandle,
               0xA1, 0x01, (0x01 << 8),
               (g_audioState.clockSourceId << 8) | g_audioState.acInterfaceNum,
               verify_data, 4, 1000);
-          if (rv >= 4) break;
+          if (rv >= 4) {
+            verified_sr = verify_data[0] | (verify_data[1] << 8) |
+                          (verify_data[2] << 16) | (verify_data[3] << 24);
+            if (verified_sr == newSampleRate) {
+              break;
+            }
+          }
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        uint32_t verified_sr = 0;
         if (rv >= 4) {
-          verified_sr = verify_data[0] | (verify_data[1] << 8) |
-                        (verify_data[2] << 16) | (verify_data[3] << 24);
           g_audioState.lastKnownGoodSampleRate.store(newSampleRate);
           g_audioState.hasValidatedRate.store(true);
         } else {
@@ -1579,22 +1701,23 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       LOGI("playAudio: Activating streaming altsetting %d (bit depth %d bytes)...",
            selected_alt.altsetting, selected_alt.subframe_size);
       auto settle_start = std::chrono::steady_clock::now();
-      int r = libusb_set_interface_alt_setting(
-           g_audioState.usbHandle, selected_alt.interface_num, selected_alt.altsetting);
       int ioctl_alt_res = -999;
-      if (r != 0 && g_audioState.usbFd >= 0) {
-        struct usbdevfs_setinterface setintf;
-        memset(&setintf, 0, sizeof(setintf));
-        setintf.interface = (unsigned int)selected_alt.interface_num;
-        setintf.altsetting = (unsigned int)selected_alt.altsetting;
-        ioctl_alt_res = ioctl(g_audioState.usbFd, USBDEVFS_SETINTERFACE, &setintf);
+      int ioctl_errno = 0;
+      int r = activate_streaming_altsetting_with_retry(
+          selected_alt.interface_num, selected_alt.altsetting, ioctl_alt_res, ioctl_errno);
+      if (r == 0 && ioctl_alt_res == -999) {
+        snprintf(dbg, sizeof(dbg),
+                 "Activate Altsetting: iface=%d alt=%d ep=0x%02X maxPkt=%d pktsPerSec=%d -> libusb=0 (%s), ioctl=SKIPPED (errno=0 OK)",
+                 selected_alt.interface_num, selected_alt.altsetting, selected_alt.ep_out,
+                 selected_alt.max_packet_size, selected_alt.packets_per_sec,
+                 libusb_error_name(r));
+      } else {
+        snprintf(dbg, sizeof(dbg),
+                 "Activate Altsetting: iface=%d alt=%d ep=0x%02X maxPkt=%d pktsPerSec=%d -> libusb=%d (%s), ioctl=%d (errno=%d %s)",
+                 selected_alt.interface_num, selected_alt.altsetting, selected_alt.ep_out,
+                 selected_alt.max_packet_size, selected_alt.packets_per_sec,
+                 r, libusb_error_name(r), ioctl_alt_res, ioctl_errno, strerror(ioctl_errno));
       }
-      int ioctl_errno = (ioctl_alt_res < 0) ? errno : 0;
-      snprintf(dbg, sizeof(dbg),
-               "Activate Altsetting: iface=%d alt=%d ep=0x%02X maxPkt=%d pktsPerSec=%d -> libusb=%d (%s), ioctl=%d (errno=%d %s)",
-               selected_alt.interface_num, selected_alt.altsetting, selected_alt.ep_out,
-               selected_alt.max_packet_size, selected_alt.packets_per_sec,
-               r, libusb_error_name(r), ioctl_alt_res, ioctl_errno, strerror(ioctl_errno));
       record_usb_diag(dbg);
 
       // TIER 1 SELF-HEALING NATIVE RESET:
@@ -1603,8 +1726,10 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       if (r != 0 && ioctl_alt_res != 0 && g_audioState.usbFd >= 0) {
         snprintf(dbg, sizeof(dbg), "Tier 1 USB Recovery: Resetting USB device (FD=%d) via USBDEVFS_RESET...", g_audioState.usbFd);
         record_usb_diag(dbg);
+        errno = 0;
         int reset_res = ioctl(g_audioState.usbFd, USBDEVFS_RESET, 0);
-        snprintf(dbg, sizeof(dbg), "USBDEVFS_RESET result: %d (errno=%d %s)", reset_res, errno, strerror(errno));
+        int reset_errno = (reset_res < 0) ? errno : 0;
+        snprintf(dbg, sizeof(dbg), "USBDEVFS_RESET result: %d (errno=%d %s)", reset_res, reset_errno, strerror(reset_errno));
         record_usb_diag(dbg);
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
 
@@ -1631,17 +1756,17 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
           std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
 
-        r = libusb_set_interface_alt_setting(
-            g_audioState.usbHandle, selected_alt.interface_num, selected_alt.altsetting);
-        if (r != 0 && g_audioState.usbFd >= 0) {
-          struct usbdevfs_setinterface setintf;
-          memset(&setintf, 0, sizeof(setintf));
-          setintf.interface = (unsigned int)selected_alt.interface_num;
-          setintf.altsetting = (unsigned int)selected_alt.altsetting;
-          ioctl_alt_res = ioctl(g_audioState.usbFd, USBDEVFS_SETINTERFACE, &setintf);
+        ioctl_alt_res = -999;
+        ioctl_errno = 0;
+        r = activate_streaming_altsetting_with_retry(
+            selected_alt.interface_num, selected_alt.altsetting, ioctl_alt_res, ioctl_errno);
+        if (r == 0 && ioctl_alt_res == -999) {
+          snprintf(dbg, sizeof(dbg), "Tier 1 Recovery Altsetting retry -> libusb=0 (%s), ioctl=SKIPPED (errno=0 OK)",
+                   libusb_error_name(r));
+        } else {
+          snprintf(dbg, sizeof(dbg), "Tier 1 Recovery Altsetting retry -> libusb=%d (%s), ioctl=%d (errno=%d %s)",
+                   r, libusb_error_name(r), ioctl_alt_res, ioctl_errno, strerror(ioctl_errno));
         }
-        snprintf(dbg, sizeof(dbg), "Tier 1 Recovery Altsetting retry -> libusb=%d (%s), ioctl=%d",
-                 r, libusb_error_name(r), ioctl_alt_res);
         record_usb_diag(dbg);
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -1661,6 +1786,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       }
       g_audioState.subframeSize.store(selected_alt.subframe_size);
       g_audioState.currentAltSetting.store(selected_alt.altsetting);
+      g_audioState.lastActiveAltSetting.store(selected_alt.altsetting);
       g_audioState.iso_fixed_rem = 0;
       altsetting_changed = true;
       set_volume(g_audioState.rawLinearVolume);
@@ -1756,11 +1882,15 @@ bool resume_audio_internal() {
 
   g_audioState.isSwapping.store(false);
   g_audioState.pausedZeroUrbCount.store(0);
-  g_audioState.consecutiveSubmitErrors.store(0);
+  g_audioState.resetErrorCounters();
 
-  // 2. If isoThread auto-suspended after >= 3 seconds of continuous pause, wake it directly
-  //    from the exact paused pcmIndex in RAM instead of restarting the track from 0:00!
-  if ((g_audioState.isoThread == nullptr || g_audioState.isoThreadExited.load() ||
+  // 2. If isoThread auto-suspended after >= 3 seconds of continuous pause (or is mid-auto-suspend),
+  //    join it cleanly, restore altsetting from hardware standby (alt=0 -> lastActiveAltSetting),
+  //    and wake directly from the exact paused pcmIndex in RAM instead of restarting from 0:00!
+  if ((g_audioState.isoThread == nullptr ||
+       g_audioState.isoThreadExited.load() ||
+       g_audioState.stopIsoThread.load() ||
+       g_audioState.isAutoSuspending.load() ||
        g_audioState.activeIsoTransfers.load() == 0) &&
       g_audioState.usbHandle != nullptr) {
     LOGI("resumeAudio: Waking isochronous stream from >3s pause auto-suspend at frame %llu / %llu",
@@ -1770,15 +1900,15 @@ bool resume_audio_internal() {
 
     int iface = g_audioState.usbAudioInterface;
     int alt = g_audioState.currentAltSetting.load();
+    if (alt <= 0) {
+      alt = g_audioState.lastActiveAltSetting.load();
+    }
     if (iface >= 0 && alt > 0) {
-      int r = libusb_set_interface_alt_setting(g_audioState.usbHandle, iface, alt);
-      if (r != 0 && g_audioState.usbFd >= 0) {
-        struct usbdevfs_setinterface setintf;
-        memset(&setintf, 0, sizeof(setintf));
-        setintf.interface = (unsigned int)iface;
-        setintf.altsetting = (unsigned int)alt;
-        ioctl(g_audioState.usbFd, USBDEVFS_SETINTERFACE, &setintf);
-      }
+      int ioctl_res = -999;
+      int ioctl_err = 0;
+      activate_streaming_altsetting_with_retry(iface, alt, ioctl_res, ioctl_err);
+      g_audioState.currentAltSetting.store(alt);
+      g_audioState.lastActiveAltSetting.store(alt);
     }
 
     uint32_t sr = g_audioState.sampleRate.load();
@@ -1808,6 +1938,7 @@ bool resume_audio_internal() {
 void stop_audio_internal() {
   g_audioState.isPlaying = false;
   g_audioState.isSwapping.store(false);
+  g_audioState.isAutoSuspending.store(false);
   g_audioState.needGaplessDecoderHandoff.store(false);
   stop_and_join_decode_thread();
   {
@@ -1818,6 +1949,7 @@ void stop_audio_internal() {
     }
   }
   stop_and_join_iso_thread("stopAudio");
+  g_audioState.resetErrorCounters();
   if (g_audioState.usbHandle != nullptr && g_audioState.usbAudioInterface >= 0) {
     libusb_set_interface_alt_setting(g_audioState.usbHandle, g_audioState.usbAudioInterface, 0);
     g_audioState.currentAltSetting.store(0);
@@ -2113,16 +2245,12 @@ bool trigger_warmup_internal(int durationMs) {
     std::this_thread::sleep_for(std::chrono::milliseconds(25));
 
     // 4. Activate streaming altsetting
-    int r = libusb_set_interface_alt_setting(g_audioState.usbHandle, alt.interface_num, alt.altsetting);
-    if (r != 0 && g_audioState.usbFd >= 0) {
-      struct usbdevfs_setinterface setintf;
-      memset(&setintf, 0, sizeof(setintf));
-      setintf.interface = (unsigned int)alt.interface_num;
-      setintf.altsetting = (unsigned int)alt.altsetting;
-      ioctl(g_audioState.usbFd, USBDEVFS_SETINTERFACE, &setintf);
-    }
+    int warmup_ioctl_res = -999;
+    int warmup_ioctl_err = 0;
+    activate_streaming_altsetting_with_retry(alt.interface_num, alt.altsetting, warmup_ioctl_res, warmup_ioctl_err);
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     g_audioState.currentAltSetting.store(alt.altsetting);
+    g_audioState.lastActiveAltSetting.store(alt.altsetting);
   } else if (g_audioState.subframeSize.load() == 0) {
     g_audioState.subframeSize.store(4);
   }

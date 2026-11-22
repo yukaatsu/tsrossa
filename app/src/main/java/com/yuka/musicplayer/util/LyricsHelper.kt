@@ -1,6 +1,7 @@
 package com.yuka.musicplayer.util
 
 import android.media.MediaMetadataRetriever
+import androidx.compose.runtime.Immutable
 import java.io.File
 import java.nio.charset.Charset
 
@@ -11,12 +12,14 @@ enum class VoiceType {
     BACKGROUND  // Backing Vocal (bg: or [bg:...])
 }
 
+@Immutable
 data class LyricWord(
     val startTimeSec: Double,
     val endTimeSec: Double,
     val text: String
 )
 
+@Immutable
 data class LyricLine(
     val timeSec: Double,
     val text: String,
@@ -27,6 +30,7 @@ data class LyricLine(
     val backgroundWords: List<LyricWord> = emptyList()
 )
 
+@Immutable
 data class ParsedLyrics(
     val isSynced: Boolean,
     val isWordSynced: Boolean = false,

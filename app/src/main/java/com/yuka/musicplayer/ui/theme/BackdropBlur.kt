@@ -78,33 +78,28 @@ fun RegisterModalBlur(visible: Boolean) {
 fun ModalBlurContainer(
     modifier: Modifier = Modifier,
     extraBlurActive: Boolean = false,
+    suppressBlur: Boolean = false,
     maxBlurRadius: Dp = 3.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
     val modalBlurEnabled = LocalModalBlurEnabled.current
-    val isBlurred = modalBlurEnabled && (LocalModalBlurCount.current.intValue > 0 || extraBlurActive)
+    val isBlurred = !suppressBlur && modalBlurEnabled && (LocalModalBlurCount.current.intValue > 0 || extraBlurActive)
     val maxBlurPx = with(LocalDensity.current) { maxBlurRadius.toPx() }
-    val animatedBlurPx by animateFloatAsState(
-        targetValue = if (isBlurred) maxBlurPx else 0f,
-        animationSpec = tween(
-            durationMillis = if (isBlurred) 180 else 150,
-            easing = FastOutSlowInEasing
-        ),
-        label = "smoothModalBackdropBlurPx"
-    )
+    val cachedBlurEffect = remember(maxBlurPx) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && maxBlurPx > 0.5f) {
+            BlurEffect(
+                radiusX = maxBlurPx,
+                radiusY = maxBlurPx,
+                edgeTreatment = TileMode.Clamp
+            )
+        } else {
+            null
+        }
+    }
 
     Box(
         modifier = modifier.graphicsLayer {
-            val radiusPx = animatedBlurPx
-            renderEffect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && radiusPx > 0.5f) {
-                BlurEffect(
-                    radiusX = radiusPx,
-                    radiusY = radiusPx,
-                    edgeTreatment = TileMode.Clamp
-                )
-            } else {
-                null
-            }
+            renderEffect = if (isBlurred) cachedBlurEffect else null
         },
         content = content
     )

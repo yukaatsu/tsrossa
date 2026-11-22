@@ -130,4 +130,56 @@ class ColorContrastHelperTest {
         assertTrue(ColorContrastHelper.calculateLuminance(whiteOnLight) < 0.35f)
         assertTrue(ColorContrastHelper.calculateLuminance(greenOnLight) < 0.35f)
     }
+
+    @Test
+    fun getOnAccentColor_returnsDarkObsidianOnBrightAccentsAndWhiteOnDarkAccents() {
+        val obsidian = Color(0xFF0E0D13)
+        // Bright accents (White, Monochrome Silver, Terminal Green, Subtle Mint, Cyan, Amber) -> dark text/icons
+        assertEquals(obsidian, ColorContrastHelper.getOnAccentColor(Color.White))
+        assertEquals(obsidian, ColorContrastHelper.getOnAccentColor(Color(0xFFF0F0F0)))
+        assertEquals(obsidian, ColorContrastHelper.getOnAccentColor(Color(0xFF00FF00)))
+        assertEquals(obsidian, ColorContrastHelper.getOnAccentColor(Color(0xFF64FFDA)))
+        assertEquals(obsidian, ColorContrastHelper.getOnAccentColor(Color(0xFF00E5FF)))
+        assertEquals(obsidian, ColorContrastHelper.getOnAccentColor(Color(0xFFFFB300)))
+
+        // Dark accents -> crisp white text/icons
+        assertEquals(Color.White, ColorContrastHelper.getOnAccentColor(Color(0xFF008542)))
+        assertEquals(Color.White, ColorContrastHelper.getOnAccentColor(Color(0xFF4A148C)))
+        assertEquals(Color.White, ColorContrastHelper.getOnAccentColor(Color(0xFF1B5E20)))
+    }
+
+    @Test
+    fun ensureThemeContrast_andNormalizeDynamicAccent_enforceWcagLuminanceFloorAndCeiling() {
+        val trickyArtworkColors = listOf(
+            Color(0xFF0A1880), // Deep Blue
+            Color(0xFF1A0066), // Indigo
+            Color(0xFF3B0066), // Deep Purple
+            Color(0xFF660011), // Dark Crimson Red
+            Color(0xFFFFFFFF), // Bright White
+            Color(0xFFFFEE00)  // Bright Yellow
+        )
+
+        trickyArtworkColors.forEach { raw ->
+            val normalized = ColorContrastHelper.normalizeDynamicAccent(raw)
+            val normalizedLum = ColorContrastHelper.calculateLuminance(normalized)
+            assertTrue(
+                "normalizeDynamicAccent($raw) must have luminance >= 0.34f, got $normalizedLum",
+                normalizedLum >= 0.34f
+            )
+
+            val darkAccent = ColorContrastHelper.ensureThemeContrast(raw, isDarkTheme = true)
+            val darkLum = ColorContrastHelper.calculateLuminance(darkAccent)
+            assertTrue(
+                "ensureThemeContrast($raw, isDark=true) must have luminance >= 0.34f, got $darkLum",
+                darkLum >= 0.34f
+            )
+
+            val lightAccent = ColorContrastHelper.ensureThemeContrast(raw, isDarkTheme = false)
+            val lightLum = ColorContrastHelper.calculateLuminance(lightAccent)
+            assertTrue(
+                "ensureThemeContrast($raw, isDark=false) must have luminance <= 0.24f, got $lightLum",
+                lightLum <= 0.24f
+            )
+        }
+    }
 }

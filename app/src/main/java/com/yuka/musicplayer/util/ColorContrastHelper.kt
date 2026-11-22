@@ -23,6 +23,19 @@ object ColorContrastHelper {
         return (0.2126f * r + 0.7152f * g + 0.0722f * b)
     }
 
+    /**
+     * Returns a high-contrast foreground color (deep obsidian #0E0D13 or crisp white #FFFFFF)
+     * for text, icons, and switch thumbs rendered directly on top of a solid [accentColor] surface.
+     * Guarantees WCAG contrast legibility even when [accentColor] is bright silver/white, neon green, mint, or cyan.
+     */
+    fun getOnAccentColor(accentColor: Color): Color {
+        return if (calculateLuminance(accentColor) > 0.42f) {
+            Color(0xFF0E0D13)
+        } else {
+            Color.White
+        }
+    }
+
     data class SwatchData(val rgb: Int, val population: Int)
 
     /**
@@ -176,16 +189,31 @@ object ColorContrastHelper {
         // hsv[1] is Saturation (0..1) -> keep vibrant but prevent muddy oversaturation or washed-out pale tones
         val origSat = hsv[1]
         hsv[1] = if (origSat >= 0.20f) {
-            hsv[1].coerceIn(0.35f, 0.88f)
+            hsv[1].coerceIn(0.35f, 0.85f)
         } else {
             hsv[1].coerceIn(0.22f, 0.45f)
         }
 
-        // hsv[2] is Value (0..1) -> calibrate brightness for dark theme (#000000 / #070A12)
-        // Ensure contrast floor: minimum brightness 0.74f, maximum 0.95f
-        hsv[2] = hsv[2].coerceIn(0.74f, 0.95f)
+        // hsv[2] is Value (0..1) -> calibrate brightness for dark theme
+        hsv[2] = hsv[2].coerceIn(0.78f, 0.96f)
 
-        return hsvToColor(hsv[0], hsv[1], hsv[2])
+        var candidate = hsvToColor(hsv[0], hsv[1], hsv[2])
+        // Enforce WCAG relative luminance floor (L >= 0.34f) so deep blue/indigo/purple/crimson
+        // accents never blend into dark or blurred album artwork canvases.
+        var guard = 0
+        while (calculateLuminance(candidate) < 0.34f && guard < 24) {
+            if (hsv[2] < 0.98f) {
+                hsv[2] = (hsv[2] + 0.04f).coerceAtMost(0.98f)
+            } else if (hsv[1] > 0.24f) {
+                hsv[1] = (hsv[1] - 0.04f).coerceAtLeast(0.24f)
+            } else {
+                break
+            }
+            candidate = hsvToColor(hsv[0], hsv[1], hsv[2])
+            guard++
+        }
+
+        return candidate
     }
 
     private fun rgbToHsv(r: Float, g: Float, b: Float, outHsv: FloatArray) {
@@ -270,8 +298,7 @@ object ColorContrastHelper {
      */
     fun ensureThemeContrast(color: Color, isDarkTheme: Boolean): Color {
         if (isDarkTheme) {
-            val lum = calculateLuminance(color)
-            if (lum < 0.18f) {
+            if (calculateLuminance(color) < 0.34f) {
                 return normalizeDynamicAccent(color)
             }
             return color
@@ -284,17 +311,17 @@ object ColorContrastHelper {
             val delta = maxVal - minVal
 
             if (delta < 0.08f) {
-                val darkVal = (0.16f + (1f - maxVal) * 0.12f).coerceIn(0.12f, 0.30f)
+                val darkVal = (0.14f + (1f - maxVal) * 0.10f).coerceIn(0.12f, 0.26f)
                 return Color(darkVal, darkVal, darkVal, 1.0f)
             }
 
             val hsv = FloatArray(3)
             rgbToHsv(r, g, b, hsv)
             hsv[1] = hsv[1].coerceIn(0.55f, 0.95f)
-            hsv[2] = hsv[2].coerceIn(0.30f, 0.60f)
+            hsv[2] = hsv[2].coerceIn(0.26f, 0.54f)
 
             var candidate = hsvToColor(hsv[0], hsv[1], hsv[2])
-            while (calculateLuminance(candidate) >= 0.35f && hsv[2] > 0.20f) {
+            while (calculateLuminance(candidate) > 0.24f && hsv[2] > 0.16f) {
                 hsv[2] -= 0.04f
                 candidate = hsvToColor(hsv[0], hsv[1], hsv[2])
             }

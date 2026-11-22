@@ -144,7 +144,8 @@ fun ApplicationUpdatesSection(
 
 @Composable
 fun DeveloperInfoSection(
-    onOpenLogs: (() -> Unit)? = null
+    onOpenLogs: (() -> Unit)? = null,
+    onOpenHelp: (() -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val accent = LocalAccentColor.current
@@ -278,6 +279,64 @@ fun DeveloperInfoSection(
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp
                     )
+                }
+            }
+
+            if (onOpenLogs != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                TactileBox(
+                    onClick = onOpenLogs,
+                    pressedScale = 0.94f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(accent.copy(alpha = 0.16f))
+                        .padding(vertical = 10.dp, horizontal = 14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        GlyphChatTeardropText(color = accent, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "System Logs & Diagnostics",
+                            color = accent,
+                            fontFamily = ModernSansFont,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+
+            if (onOpenHelp != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                TactileBox(
+                    onClick = onOpenHelp,
+                    pressedScale = 0.94f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(accent.copy(alpha = 0.16f))
+                        .padding(vertical = 10.dp, horizontal = 14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        com.yuka.musicplayer.ui.components.GlyphQuestion(color = accent, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Help & Documentation",
+                            color = accent,
+                            fontFamily = ModernSansFont,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
                 }
             }
         }

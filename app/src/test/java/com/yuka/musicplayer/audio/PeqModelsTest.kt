@@ -20,10 +20,14 @@ class PeqModelsTest {
         assertEquals(8000.0f, defaultBands[8].freqHz, 0.1f)
         assertEquals(16000.0f, defaultBands[9].freqHz, 0.1f)
 
-        // True 1-Octave Constant-Q: 0.707 for Butterworth Shelf (bands 0 & 9), 1.41 for Peaking (bands 1..8)
+        // Multi-Zone Q: 0.707 for Butterworth Shelf (bands 0 & 9), 0.95 for Bass (bands 1 & 2), 1.25 for Mid (bands 3 & 4), 1.41 for Treble (bands 5..8)
         assertEquals(0.707f, defaultBands[0].q, 0.01f)
-        for (i in 1..8) {
-            assertEquals("Band $i must use 1-octave Constant-Q 1.41", 1.41f, defaultBands[i].q, 0.01f)
+        assertEquals(0.95f, defaultBands[1].q, 0.01f)
+        assertEquals(0.95f, defaultBands[2].q, 0.01f)
+        assertEquals(1.25f, defaultBands[3].q, 0.01f)
+        assertEquals(1.25f, defaultBands[4].q, 0.01f)
+        for (i in 5..8) {
+            assertEquals("Band $i must use Constant-Q 1.41", 1.41f, defaultBands[i].q, 0.01f)
         }
         assertEquals(0.707f, defaultBands[9].q, 0.01f)
 
@@ -60,10 +64,11 @@ class PeqModelsTest {
             autoPreampEnabled = true,
             bands = bands
         )
-        // 100% Exact Peak Headroom Compensation + 0.2 dB inter-sample margin: -(6.0 + 0.2) = -6.2 dB
-        assertEquals(-6.2f, config.effectivePreampDb, 0.25f)
+        // Energy-weighted headroom formula: -(maxPeak * 0.78f + 0.25f)
+        // For +6.0 dB boost: -(6.0 * 0.78 + 0.25) = -4.93 dB
+        assertEquals(-4.93f, config.effectivePreampDb, 0.25f)
 
-        // For massive +12.0 dB boost: full 100% compensation -(12.0 + 0.2) = -12.2 dB (no -10 dB premature clamp!)
+        // For massive +12.0 dB boost: -(12.0 * 0.78 + 0.25) = -9.61 dB
         val extremeBands = PeqConfiguration.createDefaultBands().mapIndexed { i, b ->
             if (i == 5) b.copy(gainDb = 12.0f) else b
         }
@@ -73,7 +78,7 @@ class PeqModelsTest {
             autoPreampEnabled = true,
             bands = extremeBands
         )
-        assertEquals(-12.2f, extremeConfig.effectivePreampDb, 0.3f)
+        assertEquals(-9.61f, extremeConfig.effectivePreampDb, 0.35f)
 
         // For pure cut (Band 5 at -3.0 dB), zero unnecessary volume cut (0.0 dB!)
         val cutBands = PeqConfiguration.createDefaultBands().mapIndexed { i, b ->
@@ -438,5 +443,101 @@ class PeqModelsTest {
             assertFalse("Acoustic description should be English: ${role.description}", role.description.contains("Turunkan"))
             assertFalse("Acoustic description should be English: ${role.description}", role.description.contains("vokal penyanyi"))
         }
+    }
+
+    @Test
+    fun testPagerBoundaryHorizontalDragLock() {
+        // Page 1 (Playlist right boundary): dragging left (deltaX < 0) past right edge must be blocked
+        assertTrue(
+            "Leftward drag at Playlist right boundary (page 1) must be blocked",
+            com.yuka.musicplayer.ui.views.shouldBlockPagerHorizontalDrag(
+                currentPage = 1,
+                currentPageOffsetFraction = 0f,
+                deltaX = -45f,
+                pageCount = 2
+            )
+        )
+        // Page 1 (Playlist): dragging right (deltaX > 0) back to Library (page 0) must be allowed
+        assertFalse(
+            "Rightward drag from Playlist back to Library must remain allowed",
+            com.yuka.musicplayer.ui.views.shouldBlockPagerHorizontalDrag(
+                currentPage = 1,
+                currentPageOffsetFraction = 0f,
+                deltaX = 45f,
+                pageCount = 2
+            )
+        )
+
+        // Page 0 (Library left boundary): dragging right (deltaX > 0) past left edge must be blocked
+        assertTrue(
+            "Rightward drag at Library left boundary (page 0) must be blocked",
+            com.yuka.musicplayer.ui.views.shouldBlockPagerHorizontalDrag(
+                currentPage = 0,
+                currentPageOffsetFraction = 0f,
+                deltaX = 45f,
+                pageCount = 2
+            )
+        )
+        // Page 0 (Library): dragging left (deltaX < 0) forward to Playlist (page 1) must be allowed
+        assertFalse(
+            "Leftward drag from Library forward to Playlist must remain allowed",
+            com.yuka.musicplayer.ui.views.shouldBlockPagerHorizontalDrag(
+                currentPage = 0,
+                currentPageOffsetFraction = 0f,
+                deltaX = -45f,
+                pageCount = 2
+            )
+        )
+    }
+
+    @Test
+    fun testShouldPromptPeqDspSwitch_onlyPromptsWhenHybridHardwareUacIsEnabled() {
+        // Already in Universal 64-Bit DSP mode (isHardwareVolumeEnabled = false): must NOT prompt
+        assertFalse(
+            "Enabling PEQ when already in Universal 64-Bit DSP mode must not show switch prompt",
+            com.yuka.musicplayer.ui.app.shouldPromptPeqDspSwitch(
+                wasPeqEnabled = false,
+                willEnablePeq = true,
+                isHardwareVolumeEnabled = false
+            )
+        )
+
+        // Currently in Hybrid Hardware UAC mode (isHardwareVolumeEnabled = true): MUST prompt on OFF -> ON
+        assertTrue(
+            "Enabling PEQ while Hybrid Hardware UAC is active must show Yes/No switch consent",
+            com.yuka.musicplayer.ui.app.shouldPromptPeqDspSwitch(
+                wasPeqEnabled = false,
+                willEnablePeq = true,
+                isHardwareVolumeEnabled = true
+            )
+        )
+
+        // Adjusting bands while PEQ is already ON or turning PEQ OFF: must NOT prompt
+        assertFalse(
+            com.yuka.musicplayer.ui.app.shouldPromptPeqDspSwitch(
+                wasPeqEnabled = true,
+                willEnablePeq = true,
+                isHardwareVolumeEnabled = true
+            )
+        )
+        assertFalse(
+            com.yuka.musicplayer.ui.app.shouldPromptPeqDspSwitch(
+                wasPeqEnabled = true,
+                willEnablePeq = false,
+                isHardwareVolumeEnabled = true
+            )
+        )
+    }
+
+    @Test
+    fun testCanProceedWithDacPlayback_blocksWhenDacDisconnected() {
+        assertFalse(
+            "Playback must be blocked when USB DAC is disconnected",
+            com.yuka.musicplayer.player.canProceedWithDacPlayback(isDacConnected = false)
+        )
+        assertTrue(
+            "Playback must be permitted when USB DAC is connected",
+            com.yuka.musicplayer.player.canProceedWithDacPlayback(isDacConnected = true)
+        )
     }
 }

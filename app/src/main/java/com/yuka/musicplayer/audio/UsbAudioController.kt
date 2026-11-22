@@ -20,6 +20,7 @@ class UsbAudioController(context: Context) {
     private var openedDeviceName: String? = null
     private var pendingPermissionDeviceName: String? = null
     private var pendingPermissionTimestampMs: Long = 0L
+    private var lastEmptyScanTimestampMs: Long = 0L
 
     // Callback when a valid USB Audio device is ready (permission granted and opened)
     var onDeviceReady: ((Int) -> Unit)? = null
@@ -74,6 +75,11 @@ class UsbAudioController(context: Context) {
                     }
                     log("ACTION_USB_DEVICE_DETACHED received for: ${device?.productName ?: "unknown"}")
                     if (device != null && isAudioDevice(device)) {
+                        val activeName = synchronized(usbLock) { openedDeviceName }
+                        if (activeName != null && device.deviceName != activeName) {
+                            log("Detached USB audio device (${device.deviceName}) is not active DAC ($activeName). Ignoring.")
+                            return
+                        }
                         log("USB Audio device detached: $device")
                         onDeviceDetached?.invoke()
                         closeDevice()
@@ -106,6 +112,16 @@ class UsbAudioController(context: Context) {
     fun scanAndRequestPermission() {
         synchronized(usbLock) {
             val deviceList = usbManager.deviceList
+            val nowMs = System.currentTimeMillis()
+            if (deviceList.isEmpty() && usbDeviceConnection == null &&
+                (nowMs - lastEmptyScanTimestampMs) in 0 until 400L) {
+                return
+            }
+            if (deviceList.isEmpty()) {
+                lastEmptyScanTimestampMs = nowMs
+            } else {
+                lastEmptyScanTimestampMs = 0L
+            }
             log("scanAndRequestPermission: Found ${deviceList.size} USB devices.")
             for ((name, dev) in deviceList) {
                 val isAudio = isAudioDevice(dev)
@@ -284,6 +300,9 @@ class UsbAudioController(context: Context) {
 
     fun closeDevice() {
         synchronized(usbLock) {
+            if (usbDeviceConnection == null && openedDeviceName == null) {
+                return
+            }
             log("closeDevice() called. Current connection: $usbDeviceConnection")
             try {
                 usbDeviceConnection?.close()

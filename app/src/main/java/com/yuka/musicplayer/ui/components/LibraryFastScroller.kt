@@ -55,13 +55,17 @@ fun LibraryFastScroller(
     val thumbHeightDp = 28.dp
     val thumbHeightPx = with(density) { thumbHeightDp.toPx() }
 
-    // Live scroll position calculation when not dragging
+    // Live scroll position calculation when not dragging (smooth sub-item interpolation)
     val derivedScrollProgress by remember(itemCount) {
         derivedStateOf {
             if (itemCount <= 1) 0f
             else {
                 val firstIdx = lazyListState.firstVisibleItemIndex
-                (firstIdx.toFloat() / (itemCount - 1).toFloat()).coerceIn(0f, 1f)
+                val firstItemSize = lazyListState.layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: 0
+                val subItemFraction = if (firstItemSize > 0) {
+                    (lazyListState.firstVisibleItemScrollOffset.toFloat() / firstItemSize.toFloat()).coerceIn(0f, 1f)
+                } else 0f
+                ((firstIdx.toFloat() + subItemFraction) / (itemCount - 1).toFloat()).coerceIn(0f, 1f)
             }
         }
     }

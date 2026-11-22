@@ -78,12 +78,14 @@ fun CyberBottomSheet(
             dragOffsetY = 0f
             if (progress.value < 0.01f) {
                 progress.snapTo(0f)
+                // Wait 1 frame for Popup window attach & initial layout pass so spring starts at 0f with zero skipped frames
+                withFrameNanos { }
             }
             progress.animateTo(
                 targetValue = 1f,
                 animationSpec = spring(
-                    dampingRatio = 0.82f,
-                    stiffness = 380f
+                    dampingRatio = 0.84f,
+                    stiffness = 400f
                 )
             )
         } else {
@@ -91,18 +93,21 @@ fun CyberBottomSheet(
             if (progress.value > 0.01f) {
                 progress.animateTo(
                     targetValue = 0f,
-                    animationSpec = tween(durationMillis = 190, easing = FastOutSlowInEasing)
+                    animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)
                 )
             }
             isMounted = false
+            isDismissing = false
             dragOffsetY = 0f
         }
     }
 
-    if (isMounted) {
+    if (visible || isMounted) {
         // Unregister blur the exact instant dismissal starts so backdrop unblurs smoothly in parallel
         RegisterModalBlur(visible = visible && !isDismissing)
 
+        // Keep modal sheet surface 100% opaque across all background modes (OLED, SIGNATURE, ARTWORK)
+        // so underlying screen text/artwork never bleeds through modal popups.
         val sheetSurface = m3SurfaceBase().copy(alpha = 1f)
         val accent = LocalAccentColor.current
         var isFullscreen by remember(wrapHeight) { mutableStateOf(!wrapHeight) }
