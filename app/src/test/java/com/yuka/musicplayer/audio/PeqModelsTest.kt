@@ -540,4 +540,97 @@ class PeqModelsTest {
             com.yuka.musicplayer.player.canProceedWithDacPlayback(isDacConnected = true)
         )
     }
+
+    @Test
+    fun `calculateFastScrollerProgress interpolates smoothly from top to viewport-adjusted bottom`() {
+        // At top of list (index 0, offset 0) -> 0.0f
+        assertEquals(
+            0f,
+            com.yuka.musicplayer.ui.components.calculateFastScrollerProgress(
+                itemCount = 20,
+                firstVisibleItemIndex = 0,
+                firstVisibleItemScrollOffset = 0,
+                firstVisibleItemSize = 180,
+                rowItemSize = 180,
+                usableViewportHeightPx = 1260 // 7 items visible span -> maxFirstIndex = 13
+            ),
+            0.001f
+        )
+
+        // Halfway down scrollable range (index 6 + 90px/180px = 6.5 / 13.0) -> 0.5f
+        assertEquals(
+            0.5f,
+            com.yuka.musicplayer.ui.components.calculateFastScrollerProgress(
+                itemCount = 20,
+                firstVisibleItemIndex = 6,
+                firstVisibleItemScrollOffset = 90,
+                firstVisibleItemSize = 180,
+                rowItemSize = 180,
+                usableViewportHeightPx = 1260
+            ),
+            0.001f
+        )
+
+        // At bottom of list when 7 items fill the viewport (firstVisibleItemIndex = 13) -> 1.0f
+        assertEquals(
+            1.0f,
+            com.yuka.musicplayer.ui.components.calculateFastScrollerProgress(
+                itemCount = 20,
+                firstVisibleItemIndex = 13,
+                firstVisibleItemScrollOffset = 0,
+                firstVisibleItemSize = 180,
+                rowItemSize = 180,
+                usableViewportHeightPx = 1260
+            ),
+            0.001f
+        )
+    }
+
+    @Test
+    fun `resolvePagerTargetPage and resolveViewStateForPagerPage keep navbar and pager synchronized`() {
+        assertEquals(
+            0,
+            com.yuka.musicplayer.ui.views.resolvePagerTargetPage(
+                viewState = com.yuka.musicplayer.model.ViewState.LIBRARY,
+                currentPage = 1
+            )
+        )
+        assertEquals(
+            1,
+            com.yuka.musicplayer.ui.views.resolvePagerTargetPage(
+                viewState = com.yuka.musicplayer.model.ViewState.PLAYLIST,
+                currentPage = 0
+            )
+        )
+        // Non-tab states preserve current pager page
+        assertEquals(
+            1,
+            com.yuka.musicplayer.ui.views.resolvePagerTargetPage(
+                viewState = com.yuka.musicplayer.model.ViewState.SETTINGS,
+                currentPage = 1
+            )
+        )
+
+        // Pager page -> ViewState resolution across repeated Library <-> Playlist switches
+        assertEquals(
+            com.yuka.musicplayer.model.ViewState.PLAYLIST,
+            com.yuka.musicplayer.ui.views.resolveViewStateForPagerPage(
+                page = 1,
+                currentViewState = com.yuka.musicplayer.model.ViewState.LIBRARY
+            )
+        )
+        assertEquals(
+            com.yuka.musicplayer.model.ViewState.LIBRARY,
+            com.yuka.musicplayer.ui.views.resolveViewStateForPagerPage(
+                page = 0,
+                currentViewState = com.yuka.musicplayer.model.ViewState.PLAYLIST
+            )
+        )
+        assertNull(
+            com.yuka.musicplayer.ui.views.resolveViewStateForPagerPage(
+                page = 0,
+                currentViewState = com.yuka.musicplayer.model.ViewState.SETTINGS
+            )
+        )
+    }
 }

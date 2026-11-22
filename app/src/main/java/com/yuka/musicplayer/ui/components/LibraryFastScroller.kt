@@ -23,7 +23,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.ui.theme.LocalAccentColor
@@ -32,7 +31,36 @@ import com.yuka.musicplayer.ui.theme.glassMorphic
 import com.yuka.musicplayer.ui.theme.m3OnSurface
 import com.yuka.musicplayer.ui.theme.m3SubtleFill
 import com.yuka.musicplayer.ui.theme.m3SurfaceBase
-import kotlin.math.roundToInt
+
+/**
+ * Pure calculation of normalized [0f..1f] scroll progress for [LibraryFastScroller].
+ * Accounts for sub-item pixel offset and the number of items fitting in the usable viewport
+ * so the scrollbar thumb smoothly reaches 1.0f when the user scrolls to the bottom of the list.
+ */
+internal fun calculateFastScrollerProgress(
+    itemCount: Int,
+    firstVisibleItemIndex: Int,
+    firstVisibleItemScrollOffset: Int,
+    firstVisibleItemSize: Int,
+    rowItemSize: Int,
+    usableViewportHeightPx: Int
+): Float {
+    if (itemCount <= 1) return 0f
+    val subItemFraction = if (firstVisibleItemSize > 0) {
+        (firstVisibleItemScrollOffset.toFloat() / firstVisibleItemSize.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val effectiveRowSize = if (rowItemSize > 0) rowItemSize else firstVisibleItemSize
+    val visibleItemsSpan = if (effectiveRowSize > 0 && usableViewportHeightPx > 0) {
+        (usableViewportHeightPx.toFloat() / effectiveRowSize.toFloat()).coerceAtLeast(1f)
+    } else {
+        1f
+    }
+    val maxFirstIndexFloat = (itemCount.toFloat() - visibleItemsSpan).coerceAtLeast(1f)
+    val currentItemPosFloat = (firstVisibleItemIndex.toFloat() + subItemFraction).coerceAtLeast(0f)
+    return (currentItemPosFloat / maxFirstIndexFloat).coerceIn(0f, 1f)
+}
 
 @Composable
 fun LibraryFastScroller(
@@ -55,20 +83,37 @@ fun LibraryFastScroller(
     val thumbHeightDp = 28.dp
     val thumbHeightPx = with(density) { thumbHeightDp.toPx() }
 
-    // Live scroll position calculation when not dragging (smooth sub-item interpolation)
-    val derivedScrollProgress by remember(itemCount) {
+    // Live scroll position calculation when not dragging (smooth sub-item + viewport-aware interpolation)
+    val derivedScrollProgress by remember(lazyListState, itemCount) {
         derivedStateOf {
-            if (itemCount <= 1) 0f
-            else {
-                val firstIdx = lazyListState.firstVisibleItemIndex
-                val firstItemSize = lazyListState.layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: 0
-                val subItemFraction = if (firstItemSize > 0) {
-                    (lazyListState.firstVisibleItemScrollOffset.toFloat() / firstItemSize.toFloat()).coerceIn(0f, 1f)
-                } else 0f
-                ((firstIdx.toFloat() + subItemFraction) / (itemCount - 1).toFloat()).coerceIn(0f, 1f)
-            }
+            val layoutInfo = lazyListState.layoutInfo
+            val visibleItems = layoutInfo.visibleItemsInfo
+            val firstItemSize = visibleItems.firstOrNull()?.size ?: 0
+            val rowItemSize = visibleItems.maxOfOrNull { it.size } ?: firstItemSize
+            val usableViewportHeightPx = (
+                layoutInfo.viewportEndOffset -
+                    layoutInfo.viewportStartOffset -
+                    layoutInfo.afterContentPadding -
+                    layoutInfo.beforeContentPadding
+                ).coerceAtLeast(1)
+            calculateFastScrollerProgress(
+                itemCount = itemCount,
+                firstVisibleItemIndex = lazyListState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffset = lazyListState.firstVisibleItemScrollOffset,
+                firstVisibleItemSize = firstItemSize,
+                rowItemSize = rowItemSize,
+                usableViewportHeightPx = usableViewportHeightPx
+            )
         }
     }
+
+    // Evaluated inside LibraryFastScroller's isolated Composable scope so Compose 1.5.4
+    // reliably observes snapshot changes on every scroll frame without recomposing LazyColumn.
+    val activeProgress = if (isDragging) dragProgress else derivedScrollProgress
+    val maxScrollableDistancePx = (barHeightPx - thumbHeightPx).coerceAtLeast(0f)
+    val thumbOffsetPx = (activeProgress.coerceIn(0f, 1f) * maxScrollableDistancePx)
+        .coerceIn(0f, maxScrollableDistancePx)
+    val thumbOffsetDp = with(density) { thumbOffsetPx.toDp() }
 
     // Letter is ONLY evaluated when dragging, preventing recomposition storms during regular scroll
     val currentLetter by remember(letterProvider, isDragging, itemCount) {
@@ -96,7 +141,7 @@ fun LibraryFastScroller(
                         isDragging = true
                         val p = ((offset.y - (thumbHeightPx / 2f)) / maxScrollable).coerceIn(0f, 1f)
                         dragProgress = p
-                        val targetIndex = (p * (itemCount - 1)).toInt()
+                        val targetIndex = (p * (itemCount - 1)).toInt().coerceIn(0, itemCount - 1)
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onScrollToIndex(targetIndex)
                     },
@@ -110,7 +155,7 @@ fun LibraryFastScroller(
                         change.consume()
                         val p = ((change.position.y - (thumbHeightPx / 2f)) / maxScrollable).coerceIn(0f, 1f)
                         dragProgress = p
-                        val targetIndex = (p * (itemCount - 1)).toInt()
+                        val targetIndex = (p * (itemCount - 1)).toInt().coerceIn(0, itemCount - 1)
                         onScrollToIndex(targetIndex)
                     }
                 )
@@ -126,16 +171,11 @@ fun LibraryFastScroller(
                 .background(m3SubtleFill(alpha = if (isDragging) 0.25f else 0.12f))
         )
 
-        // Active thumb pill: uses layout-phase offset lambda so scrolling never triggers Composition
+        // Active thumb pill (centered horizontally in 16.dp width, 6.dp wide)
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .offset {
-                    val p = if (isDragging) dragProgress else derivedScrollProgress
-                    val maxScrollable = (barHeightPx - thumbHeightPx).coerceAtLeast(0f)
-                    val offsetPx = (p * maxScrollable).roundToInt()
-                    IntOffset(0, offsetPx)
-                }
+                .offset(y = thumbOffsetDp)
                 .size(width = 6.dp, height = thumbHeightDp)
                 .clip(RoundedCornerShape(3.dp))
                 .background(if (isDragging) accent else m3OnSurface().copy(alpha = 0.40f))
@@ -148,12 +188,10 @@ fun LibraryFastScroller(
             exit = fadeOut() + scaleOut(),
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset {
-                    val maxScrollable = (barHeightPx - thumbHeightPx).coerceAtLeast(0f)
-                    val offsetPx = (dragProgress * maxScrollable).roundToInt()
-                    val bubbleOffsetPx = (offsetPx - with(density) { 12.dp.roundToPx() }).coerceAtLeast(0)
-                    IntOffset(with(density) { (-46).dp.roundToPx() }, bubbleOffsetPx)
-                }
+                .offset(
+                    x = (-46).dp,
+                    y = (thumbOffsetDp - 12.dp).coerceAtLeast(0.dp)
+                )
         ) {
             Box(
                 modifier = Modifier

@@ -9,7 +9,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -44,6 +48,37 @@ internal fun shouldBlockPagerHorizontalDrag(
     val atRightBoundary = currentPage >= (pageCount - 1) && currentPageOffsetFraction >= -0.001f
     if (atRightBoundary && deltaX < 0f) return true
     return false
+}
+
+/**
+ * Maps the active [ViewState] to its corresponding 2-page HorizontalPager index (0 = LIBRARY, 1 = PLAYLIST).
+ * When [viewState] is a non-tab state (e.g. TRACK or SETTINGS), preserves [currentPage] so the
+ * underlying pager never silently jumps back to Page 0.
+ */
+internal fun resolvePagerTargetPage(
+    viewState: ViewState,
+    currentPage: Int
+): Int {
+    return when (viewState) {
+        ViewState.LIBRARY -> 0
+        ViewState.PLAYLIST -> 1
+        else -> currentPage.coerceIn(0, 1)
+    }
+}
+
+/**
+ * Maps a settled/active HorizontalPager [page] index (0 or 1) back to its [ViewState]
+ * so [BottomNavigationBar] always mirrors the active panel. Returns null if the app is currently
+ * in a non-tab overlay state ([ViewState.TRACK] or [ViewState.SETTINGS]).
+ */
+internal fun resolveViewStateForPagerPage(
+    page: Int,
+    currentViewState: ViewState
+): ViewState? {
+    if (currentViewState == ViewState.TRACK || currentViewState == ViewState.SETTINGS) {
+        return null
+    }
+    return if (page <= 0) ViewState.LIBRARY else ViewState.PLAYLIST
 }
 
 /**
@@ -112,16 +147,29 @@ fun AppScreenContent(
         pageCount = { 2 }
     )
 
-    val targetPage = when (viewState) {
-        ViewState.LIBRARY -> 0
-        ViewState.PLAYLIST -> 1
-        else -> 0
-    }
+    val currentViewState by rememberUpdatedState(viewState)
+    val currentOnNavChange by rememberUpdatedState(onNavChange)
+    var isProgrammaticScroll by remember { mutableStateOf(false) }
+    val lastPagerDrivenViewState = remember { mutableStateOf<ViewState?>(null) }
 
-    // 1. Synchronize pager whenever targetPage (viewState) changes, even if a previous scroll was in progress
-    //    or if currentPageOffsetFraction was left non-zero.
-    LaunchedEffect(targetPage) {
+    val targetPage = resolvePagerTargetPage(
+        viewState = viewState,
+        currentPage = pagerState.currentPage
+    )
+
+    // 1. Navbar -> Pager synchronization: when user taps BottomNavigationBar (or external state changes viewState),
+    //    animate pager to targetPage. Skips redundant animation if viewState change originated from user pager swipe.
+    LaunchedEffect(viewState, targetPage) {
+        if (lastPagerDrivenViewState.value == viewState) {
+            lastPagerDrivenViewState.value = null
+            return@LaunchedEffect
+        }
+        lastPagerDrivenViewState.value = null
+        if (viewState != ViewState.LIBRARY && viewState != ViewState.PLAYLIST) {
+            return@LaunchedEffect
+        }
         if (pagerState.currentPage != targetPage || pagerState.currentPageOffsetFraction.absoluteValue > 0.0005f) {
+            isProgrammaticScroll = true
             try {
                 pagerState.animateScrollToPage(
                     page = targetPage,
@@ -131,15 +179,20 @@ fun AppScreenContent(
                         easing = androidx.compose.animation.core.FastOutSlowInEasing
                     )
                 )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 runCatching { pagerState.scrollToPage(targetPage, 0f) }
+            } finally {
+                isProgrammaticScroll = false
             }
         }
     }
 
-    // 2. Self-Healing Center-Snap Guard: whenever user touch/scroll stops (isScrollInProgress == false),
-    //    if the pager is ever left at a fractional horizontal offset (e.g. edge gesture cancel at right boundary),
-    //    immediately animate/snap it back to exact center (pageOffsetFraction = 0f) and sync viewState.
+    // 2. Pager -> Navbar synchronization + Self-Healing Center-Snap Guard:
+    //    Uses rememberUpdatedState(viewState) so the closure never holds a stale initial ViewState.
+    //    Updates BottomNavigationBar indicator immediately when a user swipe crosses the midpoint
+    //    and guarantees exact center alignment + state sync once scrolling stops.
     LaunchedEffect(pagerState) {
         snapshotFlow {
             Triple(
@@ -148,15 +201,41 @@ fun AppScreenContent(
                 pagerState.currentPageOffsetFraction
             )
         }.collect { (isScrolling, currentPage, offsetFraction) ->
-            if (!isScrolling) {
-                if (offsetFraction.absoluteValue > 0.0005f) {
-                    val snapPage = if (offsetFraction > 0.5f) {
+            if (isProgrammaticScroll) return@collect
+
+            if (isScrolling) {
+                val activePage = currentPage.coerceIn(0, 1)
+                val activeTarget = resolveViewStateForPagerPage(
+                    page = activePage,
+                    currentViewState = currentViewState
+                )
+                if (activeTarget != null && currentViewState != activeTarget) {
+                    lastPagerDrivenViewState.value = activeTarget
+                    currentOnNavChange(activeTarget)
+                }
+            } else {
+                val snapPage = if (offsetFraction.absoluteValue > 0.0005f) {
+                    if (offsetFraction > 0.5f) {
                         (currentPage + 1).coerceIn(0, 1)
                     } else if (offsetFraction < -0.5f) {
                         (currentPage - 1).coerceIn(0, 1)
                     } else {
                         currentPage.coerceIn(0, 1)
                     }
+                } else {
+                    currentPage.coerceIn(0, 1)
+                }
+
+                val settledTarget = resolveViewStateForPagerPage(
+                    page = snapPage,
+                    currentViewState = currentViewState
+                )
+                if (settledTarget != null && currentViewState != settledTarget) {
+                    lastPagerDrivenViewState.value = settledTarget
+                    currentOnNavChange(settledTarget)
+                }
+
+                if (offsetFraction.absoluteValue > 0.0005f) {
                     try {
                         pagerState.animateScrollToPage(
                             page = snapPage,
@@ -166,13 +245,10 @@ fun AppScreenContent(
                                 stiffness = androidx.compose.animation.core.Spring.StiffnessMedium
                             )
                         )
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (_: Exception) {
                         runCatching { pagerState.scrollToPage(snapPage, 0f) }
-                    }
-                } else {
-                    val settledTarget = if (currentPage == 0) ViewState.LIBRARY else ViewState.PLAYLIST
-                    if (viewState != settledTarget && viewState != ViewState.TRACK && viewState != ViewState.SETTINGS) {
-                        onNavChange(settledTarget)
                     }
                 }
             }
