@@ -12,6 +12,7 @@ object PeqPreferencesHelper {
     private const val PREF_PEQ_USER_PRESETS_JSON = "peq_user_presets_json"
     private const val PREF_PEQ_LAST_CUSTOM_SNAPSHOT_JSON = "peq_last_custom_snapshot_json"
     private const val PREF_PEQ_Q_MIGRATED_V3 = "peq_q_migrated_v3"
+    private const val PREF_PEQ_Q_MIGRATED_V4 = "peq_q_migrated_v4"
 
     const val SHARE_CODE_PREFIX = PeqPresetCodec.SHARE_CODE_PREFIX
 
@@ -20,7 +21,7 @@ object PeqPreferencesHelper {
         val preampDb = prefs.getFloat(PREF_PEQ_PREAMP_DB, 0.0f)
         val autoPreamp = prefs.getBoolean(PREF_PEQ_AUTO_PREAMP, true)
         val loadedPresetId = prefs.getString(PREF_PEQ_PRESET, "flat") ?: "flat"
-        val needQMigration = !prefs.getBoolean(PREF_PEQ_Q_MIGRATED_V3, false)
+        val needQMigrationV4 = !prefs.getBoolean(PREF_PEQ_Q_MIGRATED_V4, false)
 
         val defaultBands = PeqConfiguration.createDefaultBands()
         val loadedBands = defaultBands.map { band ->
@@ -31,10 +32,12 @@ object PeqPreferencesHelper {
             val typeId = prefs.getInt("${pfx}type", band.filterType.id)
             val bandEnabled = prefs.getBoolean("${pfx}enabled", band.enabled)
 
-            val finalQ = if (needQMigration && band.index in 1..4 &&
-                (abs(savedQ - 0.75f) < 0.02f || abs(savedQ - 0.85f) < 0.02f || abs(savedQ - 1.05f) < 0.02f || abs(savedQ - 1.41f) < 0.02f)
+            val finalQ = if (needQMigrationV4 && band.index in 1..8 &&
+                (abs(savedQ - 0.75f) < 0.02f || abs(savedQ - 0.85f) < 0.02f ||
+                    abs(savedQ - 0.95f) < 0.02f || abs(savedQ - 1.05f) < 0.02f ||
+                    abs(savedQ - 1.25f) < 0.02f)
             ) {
-                band.q // Upgrade to Multi-Zone Q (0.95 for bass, 1.25 for mid)
+                band.q // Upgrade legacy/wide default Q to surgical 1-octave Constant-Q (1.41f)
             } else {
                 savedQ
             }
@@ -48,8 +51,10 @@ object PeqPreferencesHelper {
             )
         }
 
-        if (needQMigration) {
-            val editor = prefs.edit().putBoolean(PREF_PEQ_Q_MIGRATED_V3, true)
+        if (needQMigrationV4) {
+            val editor = prefs.edit()
+                .putBoolean(PREF_PEQ_Q_MIGRATED_V3, true)
+                .putBoolean(PREF_PEQ_Q_MIGRATED_V4, true)
             loadedBands.forEach { b ->
                 editor.putFloat("peq_band_${b.index}_q", b.q)
             }

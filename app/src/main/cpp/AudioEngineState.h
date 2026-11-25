@@ -40,6 +40,10 @@ struct AltSettingInfo {
   uint8_t ep_feedback = 0;
   bool is_async = false;
   int packets_per_sec = 0;
+  int bit_resolution = 0;           // bBitResolution from FORMAT_TYPE (e.g. 16, 24, 32)
+  int num_channels = 2;             // bNrChannels from AS_GENERAL / FORMAT_TYPE
+  uint8_t ep_feedback_bInterval = 0;
+  int ep_feedback_max_pkt = 0;
 };
 
 struct RefusedTrackInfo {
@@ -73,7 +77,10 @@ struct AudioEngineState {
   uint8_t epAddress = 0;
   uint8_t epFeedback = 0;
   bool isAsync = false;
+  uint8_t epFeedbackBInterval = 0;
+  int epFeedbackMaxPkt = 0;
   int maxPacketSize = 0;
+  std::atomic<int> negotiatedBitResolution{0}; // Actual DAC bBitResolution (16/24/32)
   std::atomic<int> currentAltSetting{0};
   std::atomic<int> lastActiveAltSetting{0};
   std::atomic<bool> isAutoSuspending{false};
@@ -123,7 +130,8 @@ struct AudioEngineState {
   std::atomic<int> swappingZeroUrbCount{0};
   std::atomic<uint64_t> pausedZeroUrbCount{0};
   std::atomic<int> consecutiveSubmitErrors{0};
-  uint32_t iso_fixed_rem = 0; // Jitterless Fixed-Point Bresenham remainder accumulator
+  uint32_t iso_fixed_rem = 0; // Jitterless Fixed-Point Bresenham remainder accumulator (immune to 160-192ms DMA feedback phase lag)
+  uint32_t consecutiveSilentFrames = 0; // Sustained digital-silence counter for glitchless dither gating
   std::atomic<float> targetVolume{1.0f};
   std::atomic<float> rawLinearVolume{1.0f};
   
@@ -221,6 +229,8 @@ struct AudioEngineState {
 
   // Professional 10-Band Parametric EQ State (Zero OS Resampling, Direct USB DSP)
   ParametricEqState peqState;
+  // Stereo-Linked Lookahead Peak Limiter (owned exclusively by real-time iso_callback thread)
+  StereoLinkedPeakLimiter peqLimiter;
 };
 
 extern AudioEngineState g_audioState;

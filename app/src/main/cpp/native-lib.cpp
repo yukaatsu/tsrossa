@@ -317,7 +317,18 @@ Java_com_yuka_musicplayer_audio_AudioEngine_getTimingTelemetry(JNIEnv *env, jobj
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_yuka_musicplayer_audio_AudioEngine_setPeqEnabled(JNIEnv *env, jobject thiz, jboolean enabled) {
-  g_audioState.peqState.enabled.store(enabled == JNI_TRUE, std::memory_order_release);
+  const bool enableBool = (enabled == JNI_TRUE);
+  const bool wasEnabled = g_audioState.peqState.enabled.load(std::memory_order_relaxed);
+  if (enableBool) {
+    uint32_t sr = g_audioState.sampleRate.load(std::memory_order_relaxed);
+    if (sr > 0) {
+      g_audioState.peqState.updateCoefficients(sr);
+    }
+    if (!wasEnabled) {
+      g_audioState.peqState.requestStateReset();
+    }
+  }
+  g_audioState.peqState.enabled.store(enableBool, std::memory_order_release);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -419,5 +430,5 @@ Java_com_yuka_musicplayer_audio_AudioEngine_setPeqFullConfig(
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_yuka_musicplayer_audio_AudioEngine_resetPeqState(JNIEnv *env, jobject thiz) {
-  g_audioState.peqState.resetFilterStates();
+  g_audioState.peqState.requestStateReset();
 }

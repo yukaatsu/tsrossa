@@ -20,6 +20,14 @@
 
 void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer);
 
+// NOTE (Batch 15 Control-Theory Invariant):
+// Tsrossa intentionally maintains a deep 160-192 ms OUT xHCI DMA queue (20-24 URBs x 64 uframes)
+// for rock-solid Android background/UI jitter immunity. Closing a proportional UAC2 explicit
+// feedback IN loop around a 160-192 ms transport dead-time violates Nyquist phase margin
+// (180 deg lag at ~3.1 Hz) against small 1-3 ms DAC FIFOs and triggers periodic FIFO
+// overflow/underflow limit-cycle oscillation (audible high-pitched squeal) plus 1,000 IRQ/s
+// DWC3 xHCI contention. Packet framing therefore strictly uses deterministic fixed-point Bresenham.
+
 static int activate_streaming_altsetting_with_retry(
     int iface_num,
     int altsetting,
@@ -150,6 +158,7 @@ bool start_iso_streaming_thread(const char *thread_name) {
     int packet_size = g_audioState.maxPacketSize;
     if (packet_size <= 0) packet_size = 1024;
     g_audioState.activeIsoTransfers.store(0);
+    g_audioState.consecutiveSilentFrames = 0;
 
     uint32_t init_sr = g_audioState.sampleRate.load();
     if (init_sr == 0) init_sr = 44100;
@@ -709,7 +718,7 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
     }
   } else {
   for (int i = 0; i < num_packets; i++) {
-    int audio_frames_to_send = (int)base_frames;
+    int audio_frames_to_send = static_cast<int>(base_frames);
     g_audioState.iso_fixed_rem += remainder_rate;
     if (g_audioState.iso_fixed_rem >= usb_frames_per_sec) {
       audio_frames_to_send++;
@@ -777,51 +786,73 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
       }
 
       if (frames_to_read > 0) {
-        size_t channels = g_audioState.channels.load();
-        size_t num_samples = frames_to_read * channels;
-        int sf_size = g_audioState.subframeSize.load();
+        const size_t channels = g_audioState.channels.load(std::memory_order_relaxed);
+        const size_t num_samples = frames_to_read * channels;
+        const int sf_size = g_audioState.subframeSize.load(std::memory_order_relaxed);
+        const int bit_res = g_audioState.negotiatedBitResolution.load(std::memory_order_relaxed);
+        const uint32_t active_sr = (sr > 0) ? sr : 48000U;
 
-        float raw_vol = g_audioState.rawLinearVolume.load();
+        float raw_vol = g_audioState.rawLinearVolume.load(std::memory_order_relaxed);
         float target_vol = 1.0f;
         if (raw_vol <= 0.0f) {
           target_vol = 0.0f;
         } else if (raw_vol < 1.0f) {
           float desired_db = compute_perceptual_db(raw_vol);
-          float hw_db = g_audioState.isHardwareVolumeActive.load()
-                            ? g_audioState.appliedHardwareDb.load()
+          float hw_db = g_audioState.isHardwareVolumeActive.load(std::memory_order_relaxed)
+                            ? g_audioState.appliedHardwareDb.load(std::memory_order_relaxed)
                             : 0.0f;
           float residual_db = desired_db - hw_db;
           target_vol = (residual_db < -0.05f) ? db_to_linear_gain(residual_db) : 1.0f;
         }
 
-        float delta = 0.0f;
-        if (std::abs(target_vol - g_audioState.currentVolume) > 0.0001f && frames_to_read > 0) {
-          size_t ramp_frames = std::max((size_t)512, frames_to_read);
-          delta = (target_vol - g_audioState.currentVolume) / (float)ramp_frames;
+        // True 15ms linear click-free volume ramp (replaces Zeno's Paradox + per-frame atomic CAS!)
+        double cur_vol = static_cast<double>(g_audioState.currentVolume.load());
+        const double tgt_vol = static_cast<double>(target_vol);
+        const double max_step_per_frame = 1.0 / std::max(64.0, static_cast<double>(active_sr) * 0.015);
+        double vol_delta = 0.0;
+        if (std::abs(tgt_vol - cur_vol) > 0.00005) {
+          vol_delta = (tgt_vol > cur_vol) ? max_step_per_frame : -max_step_per_frame;
         } else {
-          g_audioState.currentVolume = target_vol;
+          cur_vol = tgt_vol;
         }
 
         int32_t *src = g_audioState.pcmBuffer.data() + (bufFrame * channels);
         uint8_t *dst_bytes = (uint8_t *)(buffer + data_offset + bytes_filled);
 
-        const bool peq_enabled = g_audioState.peqState.enabled.load(std::memory_order_relaxed);
-        const uint32_t activeBank = g_audioState.peqState.activeBankIndex.load(std::memory_order_acquire);
-        const PeqCoeffBank &bank = g_audioState.peqState.banks[activeBank];
+        // Lock-free atomic state reset (filter TDF-II + Stereo-Linked Lookahead Limiter) on RT thread
+        if (g_audioState.peqState.consumeStateResetIfPending()) {
+          g_audioState.peqState.resetFilterStates();
+          g_audioState.peqLimiter.reset(active_sr);
+          g_audioState.consecutiveSilentFrames = 0;
+        }
+
+        const bool peq_enabled = g_audioState.peqState.enabled.load(std::memory_order_acquire);
+        // Copy small (~440 B) coefficient bank by value onto stack -> 100% immune to UI drag data race!
+        const PeqCoeffBank bank = g_audioState.peqState.snapshotActiveBank();
         const bool peq_effectively_active = peq_enabled && bank.hasActiveFilter;
 
-        // BIT-PERFECT BYPASS: Active if PEQ is OFF or Flat (0 dB filters & 0 dB preamp), and volume is at unity (1.0)
-        if (!peq_effectively_active && g_audioState.currentVolume >= 0.9999f && target_vol >= 0.9999f && delta == 0.0f) {
-          g_audioState.bitPerfectDirectPassActive.store(true);
+        // BIT-PERFECT BYPASS: Active if PEQ is OFF or Flat, and volume is at unity (1.0)
+        if (!peq_effectively_active && cur_vol >= 0.9999 && tgt_vol >= 0.9999 && vol_delta == 0.0) {
+          g_audioState.currentVolume.store(1.0f);
+          g_audioState.bitPerfectDirectPassActive.store(true, std::memory_order_relaxed);
           const int src_bits = g_audioState.sourceBitDepth.load(std::memory_order_relaxed);
           if (sf_size == 4) {
-            // 32-bit subslot container (UAC standard Type I PCM):
-            // In dr_flac and dr_wav, samples are always scaled to full 32-bit signed range (left-aligned).
-            // Direct 32-bit integer transfer preserves bit-perfect audio for all bit depths (16-bit, 24-bit, 32-bit).
-            memcpy(dst_bytes, src, num_samples * sizeof(int32_t));
+            if (bit_res == 24 && src_bits > 24) {
+              for (size_t s = 0; s < num_samples; s++) {
+                int64_t val = (static_cast<int64_t>(src[s]) + 0x80LL) >> 8;
+                if (val > 8388607LL) val = 8388607LL;
+                if (val < -8388608LL) val = -8388608LL;
+                int32_t val32 = static_cast<int32_t>(static_cast<uint32_t>(static_cast<int32_t>(val)) << 8);
+                dst_bytes[s * 4]     = static_cast<uint8_t>(val32 & 0xFF);
+                dst_bytes[s * 4 + 1] = static_cast<uint8_t>((val32 >> 8) & 0xFF);
+                dst_bytes[s * 4 + 2] = static_cast<uint8_t>((val32 >> 16) & 0xFF);
+                dst_bytes[s * 4 + 3] = static_cast<uint8_t>((val32 >> 24) & 0xFF);
+              }
+            } else {
+              memcpy(dst_bytes, src, num_samples * sizeof(int32_t));
+            }
           } else if (sf_size == 2) {
             if (src_bits > 16) {
-              // Down-converting higher bit depth to 16-bit container: unbiased mid-tread rounding
               for (size_t s = 0; s < num_samples; s++) {
                 int64_t val = (static_cast<int64_t>(src[s]) + 0x8000LL) >> 16;
                 if (val > 32767LL) val = 32767LL;
@@ -831,7 +862,6 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
                 dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
               }
             } else {
-              // Exact 1:1 16-bit source -> 16-bit container bit-perfect shift
               for (size_t s = 0; s < num_samples; s++) {
                 int32_t val16 = src[s] >> 16;
                 dst_bytes[s * 2]     = static_cast<uint8_t>(val16 & 0xFF);
@@ -840,7 +870,6 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
             }
           } else if (sf_size == 3) {
             if (src_bits > 24) {
-              // Down-converting 32-bit source to 24-bit container: unbiased mid-tread rounding
               for (size_t s = 0; s < num_samples; s++) {
                 int64_t val = (static_cast<int64_t>(src[s]) + 0x80LL) >> 8;
                 if (val > 8388607LL) val = 8388607LL;
@@ -851,7 +880,6 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
                 dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
               }
             } else {
-              // Exact 1:1 <=24-bit source -> 24-bit container bit-perfect shift
               for (size_t s = 0; s < num_samples; s++) {
                 int32_t val24 = src[s] >> 8;
                 dst_bytes[s * 3]     = static_cast<uint8_t>(val24 & 0xFF);
@@ -861,99 +889,140 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
             }
           }
         } else {
-          g_audioState.bitPerfectDirectPassActive.store(false);
-          double frame_vol = static_cast<double>(g_audioState.currentVolume);
+          g_audioState.bitPerfectDirectPassActive.store(false, std::memory_order_relaxed);
+          if (peq_effectively_active) {
+            g_audioState.peqLimiter.ensureSampleRate(active_sr);
+          }
 
-          // Frame-locked volume scaling with optional 10-band PEQ and decorrelated dual-channel TPDF dither (IACC = 0.0)
-          for (size_t s = 0; s < num_samples; s++) {
-            uint32_t ch = static_cast<uint32_t>(s % channels);
-            if (ch == 0) {
-              if (delta != 0.0f) {
-                g_audioState.currentVolume += delta;
-                if ((delta > 0.0f && g_audioState.currentVolume > target_vol) ||
-                    (delta < 0.0f && g_audioState.currentVolume < target_vol)) {
-                  g_audioState.currentVolume = target_vol;
-                  delta = 0.0f;
-                }
-              }
-              frame_vol = static_cast<double>(g_audioState.currentVolume);
-              if (frame_vol > 1.0) frame_vol = 1.0;
-              if (frame_vol < 0.0) frame_vol = 0.0;
-            }
+          const uint32_t chCount = static_cast<uint32_t>(std::min<size_t>(channels, static_cast<size_t>(kMaxPeqChannels)));
+          const bool need_24bit_quant_in_32 = (sf_size == 4 && bit_res == 24);
+          constexpr uint32_t kSilenceGateFrames = 64U; // ~1.45ms continuous digital silence before gating dither off
 
-            double x = static_cast<double>(src[s]);
-
-            if (peq_effectively_active && ch < kMaxPeqChannels) {
-              // 1. Master Preamp
-              x *= bank.preampLinear;
-
-              // 2. Cascade 10 Biquad filters in Transposed Direct Form II (unclamped 64-bit float internal headroom)
-              for (int b = 0; b < kNumPeqBands; ++b) {
-                const BiquadCoeffs &c = bank.bands[b];
-                if (!c.isIdentity) {
-                  BiquadState &st = g_audioState.peqState.filterStates[ch][b];
-                  const double y = c.b0 * x + st.z1;
-                  st.z1 = c.b1 * x - c.a1 * y + st.z2;
-                  st.z2 = c.b2 * x - c.a2 * y;
-                  x = y;
-                }
+          // FRAME-MAJOR 64-Bit Floating-Point DSP Loop (zero `% channels`, zero per-frame atomic CAS, 100% stereo-linked!)
+          for (size_t f = 0; f < frames_to_read; ++f) {
+            if (vol_delta != 0.0) {
+              cur_vol += vol_delta;
+              if ((vol_delta > 0.0 && cur_vol >= tgt_vol) ||
+                  (vol_delta < 0.0 && cur_vol <= tgt_vol)) {
+                cur_vol = tgt_vol;
+                vol_delta = 0.0;
               }
             }
+            const double frame_vol = std::max(0.0, std::min(1.0, cur_vol));
+            const size_t base_s = f * channels;
 
-            // 3. Apply frame-locked software volume BEFORE output ceiling guard
-            //    so any volume attenuation provides genuine physical headroom for dense transients.
-            double scaled32 = x * frame_vol;
+            double frame_samples[kMaxPeqChannels];
+            bool frame_is_silent = true;
 
-            // 4. Transparent Linear-Core Peak Guard (-0.05 dBFS linear core = 99.43% FS zero-IMD)
+            // 1. Preamp + 10-Band TDF-II Biquad Cascade + Frame-Locked Software Volume
+            for (uint32_t ch = 0; ch < chCount; ++ch) {
+              const int32_t raw_in = src[base_s + ch];
+              if (raw_in != 0) frame_is_silent = false;
+              double x = static_cast<double>(raw_in);
+
+              if (peq_effectively_active) {
+                x *= bank.preampLinear;
+                for (int b = 0; b < kNumPeqBands; ++b) {
+                  const BiquadCoeffs &c = bank.bands[b];
+                  if (!c.isIdentity) {
+                    BiquadState &st = g_audioState.peqState.filterStates[ch][b];
+                    const double y = c.b0 * x + st.z1;
+                    st.z1 = c.b1 * x - c.a1 * y + st.z2;
+                    st.z2 = c.b2 * x - c.a2 * y;
+                    x = y;
+                  }
+                }
+              }
+
+              const double scaled = x * frame_vol;
+              if (std::abs(scaled) >= 1.0) frame_is_silent = false;
+              frame_samples[ch] = scaled;
+            }
+
+            // 2. Stereo-Linked Smooth Lookahead Peak Limiter (-0.10 dBFS linear core, 0.000 dB ILD shift!)
             if (peq_effectively_active) {
-              scaled32 = ParametricEqEngine::applyMasteringCeilingPcm32(scaled32);
+              g_audioState.peqLimiter.processFrame(frame_samples, chCount);
+              for (uint32_t ch = 0; ch < chCount; ++ch) {
+                if (std::abs(frame_samples[ch]) >= 1.0) frame_is_silent = false;
+              }
             }
 
-            // Silence-gated Dual-Channel Decorrelated Stereo TPDF Dither (IACC = 0.0) across all bit-depths
-            // Linearizes quantization tails, restores micro-detail, reverb decay, and wide open soundstage.
-            bool apply_dither = (src[s] != 0) && (peq_effectively_active || (frame_vol < 0.9999 && frame_vol > 0.00001));
+            // 3. Sustained Digital-Silence Dither Gate (eliminates zero-crossing dither pumping!)
+            if (frame_is_silent) {
+              if (g_audioState.consecutiveSilentFrames < kSilenceGateFrames) {
+                g_audioState.consecutiveSilentFrames++;
+              }
+            } else {
+              g_audioState.consecutiveSilentFrames = 0;
+            }
+            const bool apply_dither =
+                (g_audioState.consecutiveSilentFrames < kSilenceGateFrames) &&
+                (peq_effectively_active || (frame_vol < 0.9999 && frame_vol > 0.00001));
 
-            if (sf_size == 4) {
-              // 32-bit container: restore decorrelated stereo TPDF dither scaled to 24-bit DAC boundary
-              if (apply_dither) {
-                scaled32 += fast_tpdf_dither(ch) * 128.0;
+            // 4. Exact 1.0x Lipshitz-Vanderkooy Decorrelated Stereo TPDF Dither & Bit-Resolution Quantization
+            for (uint32_t ch = 0; ch < chCount; ++ch) {
+              const size_t s = base_s + ch;
+              double scaled32 = frame_samples[ch];
+
+              if (sf_size == 4) {
+                if (need_24bit_quant_in_32) {
+                  // DAC declares bSubslotSize=4, bBitResolution=24: exact 24-bit 1.0-LSB TPDF + left-aligned << 8
+                  double scaled24 = scaled32 * (1.0 / 256.0);
+                  if (apply_dither) {
+                    scaled24 += fast_tpdf_dither(ch);
+                  }
+                  int64_t q24 = std::llrint(scaled24);
+                  if (q24 > 8388607LL) q24 = 8388607LL;
+                  if (q24 < -8388608LL) q24 = -8388608LL;
+                  int32_t val32 = static_cast<int32_t>(static_cast<uint32_t>(static_cast<int32_t>(q24)) << 8);
+                  dst_bytes[s * 4]     = static_cast<uint8_t>(val32 & 0xFF);
+                  dst_bytes[s * 4 + 1] = static_cast<uint8_t>((val32 >> 8) & 0xFF);
+                  dst_bytes[s * 4 + 2] = static_cast<uint8_t>((val32 >> 16) & 0xFF);
+                  dst_bytes[s * 4 + 3] = static_cast<uint8_t>((val32 >> 24) & 0xFF);
+                } else {
+                  // True 32-bit container: full 1.0-LSB TPDF at 24-bit Delta-Sigma modulator boundary (256.0 = -141.5 dBFS RMS)
+                  if (apply_dither) {
+                    scaled32 += fast_tpdf_dither(ch) * 256.0;
+                  }
+                  int64_t q32 = std::llrint(scaled32);
+                  if (q32 > 2147483647LL) q32 = 2147483647LL;
+                  if (q32 < -2147483648LL) q32 = -2147483648LL;
+                  int32_t val32 = static_cast<int32_t>(q32);
+                  dst_bytes[s * 4]     = static_cast<uint8_t>(val32 & 0xFF);
+                  dst_bytes[s * 4 + 1] = static_cast<uint8_t>((val32 >> 8) & 0xFF);
+                  dst_bytes[s * 4 + 2] = static_cast<uint8_t>((val32 >> 16) & 0xFF);
+                  dst_bytes[s * 4 + 3] = static_cast<uint8_t>((val32 >> 24) & 0xFF);
+                }
+              } else if (sf_size == 3) {
+                // 24-bit packed container: exact 1.0-LSB TPDF dither
+                double scaled24 = scaled32 * (1.0 / 256.0);
+                if (apply_dither) {
+                  scaled24 += fast_tpdf_dither(ch);
+                }
+                int64_t q24 = std::llrint(scaled24);
+                if (q24 > 8388607LL) q24 = 8388607LL;
+                if (q24 < -8388608LL) q24 = -8388608LL;
+                int32_t val24 = static_cast<int32_t>(q24);
+                dst_bytes[s * 3]     = static_cast<uint8_t>(val24 & 0xFF);
+                dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
+                dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
+              } else if (sf_size == 2) {
+                // 16-bit container: exact 1.0-LSB Lipshitz-Vanderkooy TPDF dither (fixes 0.5x half-dither HD3!)
+                double scaled16 = scaled32 * (1.0 / 65536.0);
+                if (apply_dither) {
+                  scaled16 += fast_tpdf_dither(ch);
+                }
+                int64_t q16 = std::llrint(scaled16);
+                if (q16 > 32767LL) q16 = 32767LL;
+                if (q16 < -32768LL) q16 = -32768LL;
+                int32_t val16 = static_cast<int32_t>(q16);
+                dst_bytes[s * 2]     = static_cast<uint8_t>(val16 & 0xFF);
+                dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
               }
-              int64_t q32 = std::llrint(scaled32);
-              if (q32 > 2147483647LL) q32 = 2147483647LL;
-              if (q32 < -2147483648LL) q32 = -2147483648LL;
-              int32_t val32 = static_cast<int32_t>(q32);
-              dst_bytes[s * 4]     = static_cast<uint8_t>(val32 & 0xFF);
-              dst_bytes[s * 4 + 1] = static_cast<uint8_t>((val32 >> 8) & 0xFF);
-              dst_bytes[s * 4 + 2] = static_cast<uint8_t>((val32 >> 16) & 0xFF);
-              dst_bytes[s * 4 + 3] = static_cast<uint8_t>((val32 >> 24) & 0xFF);
-            } else if (sf_size == 3) {
-              // 24-bit container: scale to true 24-bit domain (divide by 256.0) and round with std::llrint
-              double scaled24 = scaled32 * (1.0 / 256.0);
-              if (apply_dither) {
-                scaled24 += fast_tpdf_dither(ch);
-              }
-              int64_t q24 = std::llrint(scaled24);
-              if (q24 > 8388607LL) q24 = 8388607LL;
-              if (q24 < -8388608LL) q24 = -8388608LL;
-              int32_t val24 = static_cast<int32_t>(q24);
-              dst_bytes[s * 3]     = static_cast<uint8_t>(val24 & 0xFF);
-              dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
-              dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
-            } else if (sf_size == 2) {
-              // 16-bit container: scale to true 16-bit domain (divide by 65536.0) with silence-gated 0.5 LSB TPDF dither
-              // Eliminates 16-bit quantization granulation & preserves micro-detail without idle background hiss.
-              double scaled16 = scaled32 * (1.0 / 65536.0);
-              if (apply_dither) {
-                scaled16 += fast_tpdf_dither(ch) * 0.5;
-              }
-              int64_t q16 = std::llrint(scaled16);
-              if (q16 > 32767LL) q16 = 32767LL;
-              if (q16 < -32768LL) q16 = -32768LL;
-              int32_t val16 = static_cast<int32_t>(q16);
-              dst_bytes[s * 2]     = static_cast<uint8_t>(val16 & 0xFF);
-              dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
             }
           }
+          // Single atomic store per packet (zero per-frame CAS contention!)
+          g_audioState.currentVolume.store(static_cast<float>(cur_vol));
         }
 
         uint64_t expectedPcmIdx = static_cast<uint64_t>(currentIndex);
@@ -1011,7 +1080,7 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
           g_audioState.channels.store(g_audioState.channelsNext.load());
           g_audioState.sourceBitDepth.store(g_audioState.sourceBitDepthNext.load());
           g_audioState.hasNextTrack.store(false);
-          g_audioState.peqState.resetFilterStates();
+          g_audioState.peqState.requestStateReset();
           g_audioState.peqState.updateCoefficients(g_audioState.sampleRate.load());
 
           uint64_t nextTotal = g_audioState.nextTotalFrames.load();
@@ -1215,7 +1284,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       g_audioState.channels.store(g_audioState.channelsNext.load());
       g_audioState.sourceBitDepth.store(g_audioState.sourceBitDepthNext.load());
       g_audioState.hasNextTrack.store(false);
-      g_audioState.peqState.resetFilterStates();
+      g_audioState.peqState.requestStateReset();
       g_audioState.peqState.updateCoefficients(g_audioState.sampleRate.load());
       size_t handoverFrames = g_audioState.pcmBuffer.size() / g_audioState.channels.load();
       uint64_t handoverTotal = g_audioState.nextTotalFrames.load();
@@ -1242,6 +1311,12 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       } else {
         g_audioState.decoderCv.notify_one();
       }
+      // Match normal same-format transition: brief 15ms zero-pad + linear 0.0 -> target_vol micro-ramp
+      // after isSwapping hard-cut so manual Next never emits a step-discontinuity click/chirp.
+      uint32_t handover_sr = g_audioState.sampleRate.load();
+      if (handover_sr == 0) handover_sr = 44100;
+      g_audioState.warmupSilenceFrames.store(static_cast<uint32_t>(handover_sr * 0.015));
+      g_audioState.currentVolume.store(0.0f);
       g_audioState.isSwapping.store(false);
       g_audioState.isPlaying.store(true);
       if (ack_timeout) {
@@ -1503,14 +1578,14 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   if (target_sf < 2) target_sf = 2;
   if (target_sf > 4) target_sf = 4;
 
-  const bool peq_active = g_audioState.peqState.enabled.load(std::memory_order_relaxed);
+  const PeqCoeffBank peqSnap = g_audioState.peqState.snapshotActiveBank();
+  const bool peq_active = g_audioState.peqState.enabled.load(std::memory_order_relaxed) && peqSnap.hasActiveFilter;
   const bool sw_vol_attenuating = !g_audioState.preferHardwareVolume.load(std::memory_order_relaxed) &&
                                   (g_audioState.rawLinearVolume.load(std::memory_order_relaxed) < 0.999f);
   const bool dsp_high_precision_alt = peq_active || sw_vol_attenuating;
 
   // Sync PEQ sample rate if necessary
-  uint32_t activeBank = g_audioState.peqState.activeBankIndex.load(std::memory_order_relaxed);
-  if (g_audioState.peqState.banks[activeBank].sampleRate != newSampleRate) {
+  if (peqSnap.sampleRate != newSampleRate) {
     g_audioState.peqState.updateCoefficients(newSampleRate);
   }
 
@@ -1546,6 +1621,10 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
           else score = 50;
         }
       }
+      if (a.num_channels == 2) {
+        score += 500;
+      }
+      score += a.bit_resolution;
       if (score > best_score) {
         best_score = score;
         selected_alt = a;
@@ -1582,7 +1661,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   g_audioState.sampleRate.store(newSampleRate);
   g_audioState.channels.store(newChannels);
   g_audioState.sourceBitDepth.store(newSourceBitDepth);
-  g_audioState.peqState.resetFilterStates();
+  g_audioState.peqState.requestStateReset();
   g_audioState.peqState.updateCoefficients(newSampleRate);
 
   // === STEP 2: HARDWARE USB INTERFACE & CLOCK NEGOTIATION (STRICT ALSA UAC2 ORDER) ===
@@ -1778,6 +1857,9 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       g_audioState.epAddress = selected_alt.ep_out;
       g_audioState.epFeedback = selected_alt.ep_feedback;
       g_audioState.isAsync = selected_alt.is_async;
+      g_audioState.epFeedbackBInterval = selected_alt.ep_feedback_bInterval;
+      g_audioState.epFeedbackMaxPkt = selected_alt.ep_feedback_max_pkt;
+      g_audioState.negotiatedBitResolution.store(selected_alt.bit_resolution);
       g_audioState.maxPacketSize = selected_alt.max_packet_size;
       if (selected_alt.packets_per_sec > 0) {
         g_audioState.usb_frames_per_sec.store(selected_alt.packets_per_sec);
@@ -2157,7 +2239,7 @@ bool seek_to_internal(double targetSeconds) {
       // Fallback if activeDecoder is null but targetFrame is within decoded linear buffer
       g_audioState.pcmIndex.store(targetFrame, std::memory_order_release);
     }
-    g_audioState.peqState.resetFilterStates();
+    g_audioState.peqState.requestStateReset();
   }
 
   g_audioState.decoderCv.notify_one();
@@ -2207,8 +2289,13 @@ bool trigger_warmup_internal(int durationMs) {
   if (!g_audioState.validAlts.empty()) {
     const auto &alt = g_audioState.validAlts[0];
     g_audioState.subframeSize.store(alt.subframe_size);
+    g_audioState.negotiatedBitResolution.store(alt.bit_resolution);
     g_audioState.maxPacketSize = alt.max_packet_size;
     g_audioState.epAddress = alt.ep_out;
+    g_audioState.epFeedback = alt.ep_feedback;
+    g_audioState.isAsync = alt.is_async;
+    g_audioState.epFeedbackBInterval = alt.ep_feedback_bInterval;
+    g_audioState.epFeedbackMaxPkt = alt.ep_feedback_max_pkt;
     g_audioState.usbAudioInterface = alt.interface_num;
 
     libusb_claim_interface(g_audioState.usbHandle, alt.interface_num);

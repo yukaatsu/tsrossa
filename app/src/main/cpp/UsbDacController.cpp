@@ -362,6 +362,86 @@ int get_subframe_size(const struct libusb_interface_descriptor *alt) {
   return 2; // default to 16-bit
 }
 
+struct AltAudioFormatInfo {
+  bool is_pcm = true;        // False ONLY when AS_GENERAL explicitly declares non-PCM (e.g. DSD_RAW / IEEE_FLOAT)
+  int subframe_size = 2;     // bSubslotSize / bSubframeSize (bytes: 2, 3, or 4)
+  int bit_resolution = 16;   // bBitResolution (bits: 16, 24, or 32)
+  int num_channels = 2;      // bNrChannels (default stereo = 2)
+};
+
+static AltAudioFormatInfo parse_alt_audio_format(
+    const struct libusb_interface_descriptor *alt,
+    int uac_version) {
+  AltAudioFormatInfo info;
+  bool found_format_type = false;
+  bool found_as_general = false;
+
+  auto scan_extra = [&](const unsigned char *extra, int extra_length) {
+    int pos = 0;
+    while (pos + 2 < extra_length) {
+      int len = extra[pos];
+      if (len < 3 || pos + len > extra_length) break;
+      int type = extra[pos + 1];
+      int subtype = extra[pos + 2];
+      if (type == 0x24 && subtype == 0x01) { // AS_GENERAL
+        found_as_general = true;
+        if (uac_version == 2 && len >= 16) {
+          uint8_t fmt_type = extra[pos + 5];
+          uint32_t bm_formats = static_cast<uint32_t>(extra[pos + 6]) |
+                                (static_cast<uint32_t>(extra[pos + 7]) << 8) |
+                                (static_cast<uint32_t>(extra[pos + 8]) << 16) |
+                                (static_cast<uint32_t>(extra[pos + 9]) << 24);
+          info.is_pcm = (fmt_type == 1) && ((bm_formats & 0x00000001U) != 0);
+          if (extra[pos + 10] > 0) info.num_channels = extra[pos + 10];
+        } else if (uac_version == 1 && len >= 7) {
+          uint16_t w_format_tag = static_cast<uint16_t>(extra[pos + 5]) |
+                                  (static_cast<uint16_t>(extra[pos + 6]) << 8);
+          info.is_pcm = (w_format_tag == 0x0001);
+        }
+      } else if (type == 0x24 && subtype == 0x02) { // FORMAT_TYPE
+        if (pos + 3 < extra_length && extra[pos + 3] == 1) { // FORMAT_TYPE_I
+          if (len == 6 && pos + 5 < extra_length) {
+            // UAC2 Type I: bSubslotSize = [4], bBitResolution = [5]
+            info.subframe_size = extra[pos + 4];
+            info.bit_resolution = extra[pos + 5];
+            found_format_type = true;
+          } else if (len >= 8 && pos + 6 < extra_length) {
+            // UAC1 Type I: bNrChannels = [4], bSubframeSize = [5], bBitResolution = [6]
+            if (extra[pos + 4] > 0) info.num_channels = extra[pos + 4];
+            info.subframe_size = extra[pos + 5];
+            info.bit_resolution = extra[pos + 6];
+            found_format_type = true;
+          }
+        } else if (pos + 3 < extra_length && extra[pos + 3] != 1) {
+          // Non-Type-I (e.g. Type II AC-3 / Type III IEC1937)
+          info.is_pcm = false;
+        }
+      }
+      pos += len;
+    }
+  };
+
+  scan_extra(alt->extra, alt->extra_length);
+  for (int k = 0; k < alt->bNumEndpoints; k++) {
+    scan_extra(alt->endpoint[k].extra, alt->endpoint[k].extra_length);
+  }
+
+  if (!found_format_type) {
+    info.subframe_size = get_subframe_size(alt);
+    info.bit_resolution = info.subframe_size * 8;
+  }
+  if (info.subframe_size < 2 || info.subframe_size > 4) {
+    info.subframe_size = std::max(2, std::min(4, info.subframe_size));
+  }
+  if (info.bit_resolution <= 0 || info.bit_resolution > info.subframe_size * 8) {
+    info.bit_resolution = info.subframe_size * 8;
+  }
+  if (!found_as_general) {
+    info.is_pcm = true; // Preserve compatibility with quirky legacy DACs
+  }
+  return info;
+}
+
 std::vector<uint32_t> get_uac1_sample_rates(const struct libusb_interface_descriptor *alt) {
   std::vector<uint32_t> rates;
   auto parse_extra = [&rates](const unsigned char *extra, int extra_length) {
@@ -512,6 +592,12 @@ void close_usb_dac_internal() {
     
     // Reset state to force hardware re-initialization on next playAudio
     g_audioState.subframeSize.store(0);
+    g_audioState.negotiatedBitResolution.store(0);
+    g_audioState.epFeedback = 0;
+    g_audioState.isAsync = false;
+    g_audioState.epFeedbackBInterval = 0;
+    g_audioState.epFeedbackMaxPkt = 0;
+    g_audioState.consecutiveSilentFrames = 0;
     g_audioState.sampleRate.store(0);
     g_audioState.channels.store(0);
     g_audioState.currentAltSetting.store(0);
@@ -694,6 +780,12 @@ bool init_usb_dac_internal(int fd) {
   g_audioState.currentAltSetting.store(0);
   g_audioState.lastActiveAltSetting.store(0);
   g_audioState.isAutoSuspending.store(false);
+  g_audioState.negotiatedBitResolution.store(0);
+  g_audioState.epFeedback = 0;
+  g_audioState.isAsync = false;
+  g_audioState.epFeedbackBInterval = 0;
+  g_audioState.epFeedbackMaxPkt = 0;
+  g_audioState.consecutiveSilentFrames = 0;
   g_audioState.resetErrorCounters();
   g_audioState.volumeChannel = 0;
 
@@ -893,6 +985,8 @@ bool init_usb_dac_internal(int fd) {
   int as_altsetting = -1;
   uint8_t ep_out = 0;
   int max_packet_size = 0;
+  AltSettingInfo init_selected_alt{};
+  bool has_init_selected_alt = false;
 
   {
     std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -914,7 +1008,15 @@ bool init_usb_dac_internal(int fd) {
       const struct libusb_interface_descriptor *alt =
           &config->interface[i].altsetting[j];
       if (alt->bInterfaceClass == 1 && alt->bInterfaceSubClass == 2) {
-        int subframe_size = get_subframe_size(alt);
+        AltAudioFormatInfo fmt = parse_alt_audio_format(alt, g_audioState.uacVersion.load());
+        if (!fmt.is_pcm) {
+          snprintf(dbg, sizeof(dbg),
+                   "  Alt[iface=%d, alt=%d]: Skipping non-PCM altsetting (DSD/raw/compressed)",
+                   alt->bInterfaceNumber, alt->bAlternateSetting);
+          record_usb_diag(dbg);
+          continue;
+        }
+        int subframe_size = fmt.subframe_size;
 
         for (int k = 0; k < alt->bNumEndpoints; k++) {
           if ((alt->endpoint[k].bEndpointAddress & 0x80) == 0 &&
@@ -952,28 +1054,41 @@ bool init_usb_dac_internal(int fd) {
               if (alt_fps < 125) alt_fps = 8000;
             }
 
-            // Find companion feedback endpoint if explicit or listed in same altsetting
+            // Find explicit companion Isochronous IN Feedback endpoint (USB 2.0 Table 9-13: Usage bits 5..4 = 0x10)
             uint8_t ep_fb = 0;
-            if (ep_sync != 0) {
-              ep_fb = ep_sync;
-            } else {
-              for (int fb_idx = 0; fb_idx < alt->bNumEndpoints; fb_idx++) {
-                if ((alt->endpoint[fb_idx].bEndpointAddress & 0x80) != 0 &&
-                    ((alt->endpoint[fb_idx].bmAttributes & 0x0C) == 0x10 ||
-                     (alt->endpoint[fb_idx].bmAttributes & 0x03) == 1)) {
-                  ep_fb = alt->endpoint[fb_idx].bEndpointAddress;
-                  break;
-                }
+            uint8_t ep_fb_bInterval = 0;
+            int ep_fb_max_pkt = 0;
+            for (int fb_idx = 0; fb_idx < alt->bNumEndpoints; fb_idx++) {
+              const auto &ep = alt->endpoint[fb_idx];
+              const bool is_in_iso = ((ep.bEndpointAddress & 0x80) != 0) && ((ep.bmAttributes & 0x03) == 0x01);
+              if (!is_in_iso) continue;
+              const bool is_explicit_fb_usage = ((ep.bmAttributes & 0x30) == 0x10);
+              const bool matches_synch_addr = (ep_sync != 0 && ep.bEndpointAddress == ep_sync);
+              const int fb_pkt = static_cast<int>(ep.wMaxPacketSize & 0x07FF);
+              // Explicit feedback endpoints carry only 3 or 4 bytes (<= 8 bytes), never audio capture payloads!
+              if ((matches_synch_addr || is_explicit_fb_usage) && fb_pkt > 0 && fb_pkt <= 8) {
+                ep_fb = ep.bEndpointAddress;
+                ep_fb_bInterval = ep.bInterval;
+                ep_fb_max_pkt = fb_pkt;
+                break;
               }
+            }
+            if (ep_fb == 0 && ep_sync != 0) {
+              // Fallback if bSynchAddress was populated without matching endpoint descriptor entry
+              ep_fb = ep_sync;
+              ep_fb_bInterval = (effective_speed == LIBUSB_SPEED_HIGH || effective_speed == LIBUSB_SPEED_SUPER || effective_speed == 5) ? 4 : 1;
+              ep_fb_max_pkt = (g_audioState.uacVersion.load() == 2) ? 4 : 3;
             }
 
             g_audioState.validAlts.push_back(
                 {alt->bInterfaceNumber, alt->bAlternateSetting,
-                 ep_addr, pk_size, subframe_size, ep_fb, is_async, alt_fps});
+                 ep_addr, pk_size, subframe_size, ep_fb, is_async, alt_fps,
+                 fmt.bit_resolution, fmt.num_channels, ep_fb_bInterval, ep_fb_max_pkt});
             snprintf(dbg, sizeof(dbg),
-                     "  Alt[iface=%d, alt=%d]: ep=0x%02X maxPkt=%d (raw=0x%04X) sf=%d (%d-bit) bInterval=%d fps=%d async=%d",
+                     "  Alt[iface=%d, alt=%d]: ep=0x%02X maxPkt=%d (raw=0x%04X) sf=%d (%d/%d-bit, %dch) bInterval=%d fps=%d async=%d fb=0x%02X(bInt=%d,pkt=%d)",
                      alt->bInterfaceNumber, alt->bAlternateSetting, ep_addr, pk_size, raw_wMax,
-                     subframe_size, subframe_size * 8, ep_bInterval, alt_fps, is_async ? 1 : 0);
+                     subframe_size, fmt.bit_resolution, subframe_size * 8, fmt.num_channels,
+                     ep_bInterval, alt_fps, is_async ? 1 : 0, ep_fb, ep_fb_bInterval, ep_fb_max_pkt);
             record_usb_diag(dbg);
           }
         }
@@ -995,7 +1110,8 @@ bool init_usb_dac_internal(int fd) {
     if (source_bytes > 4)
       source_bytes = 4;
 
-    const bool peq_active = g_audioState.peqState.enabled.load(std::memory_order_relaxed);
+    const PeqCoeffBank peqSnap = g_audioState.peqState.snapshotActiveBank();
+    const bool peq_active = g_audioState.peqState.enabled.load(std::memory_order_relaxed) && peqSnap.hasActiveFilter;
     const bool sw_vol_attenuating = !g_audioState.preferHardwareVolume.load(std::memory_order_relaxed) &&
                                     (g_audioState.rawLinearVolume.load(std::memory_order_relaxed) < 0.999f);
     const bool dsp_high_precision_alt = peq_active || sw_vol_attenuating;
@@ -1028,6 +1144,10 @@ bool init_usb_dac_internal(int fd) {
           else score = 50;
         }
       }
+      if (a.num_channels == 2) {
+        score += 500;
+      }
+      score += a.bit_resolution;
       if (score > best_score) {
         best_score = score;
         best_alt = a;
@@ -1038,6 +1158,8 @@ bool init_usb_dac_internal(int fd) {
     as_altsetting = best_alt.altsetting;
     ep_out = best_alt.ep_out;
     max_packet_size = best_alt.max_packet_size;
+    init_selected_alt = best_alt;
+    has_init_selected_alt = true;
     if (best_alt.packets_per_sec > 0) {
       g_audioState.usb_frames_per_sec.store(best_alt.packets_per_sec);
     }
@@ -1227,6 +1349,13 @@ bool init_usb_dac_internal(int fd) {
   g_audioState.usbAudioInterface = as_interface;
   g_audioState.epAddress = ep_out;
   g_audioState.maxPacketSize = max_packet_size;
+  if (has_init_selected_alt) {
+    g_audioState.epFeedback = init_selected_alt.ep_feedback;
+    g_audioState.isAsync = init_selected_alt.is_async;
+    g_audioState.epFeedbackBInterval = init_selected_alt.ep_feedback_bInterval;
+    g_audioState.epFeedbackMaxPkt = init_selected_alt.ep_feedback_max_pkt;
+    g_audioState.negotiatedBitResolution.store(init_selected_alt.bit_resolution);
+  }
 
   g_audioState.isForceSoftwareVolume.store(false);
   struct libusb_device_descriptor desc;

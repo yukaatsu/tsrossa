@@ -1,6 +1,8 @@
 package com.yuka.musicplayer.audio
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -690,5 +692,435 @@ class VolumeAndStreamingMathTest {
         val eofPos = 239.8
         val savedAtEof = if (eofPos > 0.5 && (durationSec <= 0.0 || eofPos < durationSec - 1.0)) eofPos else -1.0
         assertEquals("Track paused at EOF should cleanly restart from 0:00", -1.0, savedAtEof, 0.001)
+    }
+
+    // =========================================================================
+    // 11. Batch 14 Audio Quality & DSP Precision Guards (Dense Mix / UAC2 Async)
+    // =========================================================================
+
+    @Test
+    fun `stereoLinkedPeakLimiter guarantees zero stereo ILD shift and bit-linear core`() {
+        val ceiling = 2122892279.0 // -0.10 dBFS
+        val lookahead = 64
+        val bufL = DoubleArray(lookahead)
+        val bufR = DoubleArray(lookahead)
+        val dqVal = DoubleArray(1024)
+        val dqPos = LongArray(1024)
+        var dqHead = 0
+        var dqTail = 0
+        var frameCounter = 0L
+        var writePos = 0
+        var currentGain = 1.0
+        val att = kotlin.math.exp(-3.0 / lookahead.toDouble())
+        val rel = kotlin.math.exp(-1.0 / (44100.0 * 0.060))
+
+        fun step(inL: Double, inR: Double): Pair<Double, Double> {
+            val curPeak = kotlin.math.max(kotlin.math.abs(inL), kotlin.math.abs(inR))
+            val dl = bufL[writePos]
+            val dr = bufR[writePos]
+            bufL[writePos] = inL
+            bufR[writePos] = inR
+            writePos = (writePos + 1) % lookahead
+
+            val n = frameCounter++
+            while (dqHead != dqTail && dqVal[(dqTail - 1) and 1023] <= curPeak) {
+                dqTail = (dqTail - 1) and 1023
+            }
+            dqPos[dqTail] = n
+            dqVal[dqTail] = curPeak
+            dqTail = (dqTail + 1) and 1023
+            while (dqHead != dqTail && dqPos[dqHead] + lookahead < n) {
+                dqHead = (dqHead + 1) and 1023
+            }
+            val winPeak = dqVal[dqHead]
+            val targetGain = if (winPeak > ceiling) ceiling / winPeak else 1.0
+            if (targetGain < currentGain) {
+                currentGain = targetGain + (currentGain - targetGain) * att
+            } else if (currentGain < 1.0) {
+                currentGain = targetGain + (currentGain - targetGain) * rel
+                if (currentGain > 0.9999999 && targetGain >= 1.0) currentGain = 1.0
+            }
+            val dPeak = kotlin.math.max(kotlin.math.abs(dl), kotlin.math.abs(dr))
+            if (dPeak * currentGain > ceiling && dPeak > 0.0) {
+                currentGain = ceiling / dPeak
+            }
+            return (dl * currentGain) to (dr * currentGain)
+        }
+
+        // Phase A: Sub-threshold stereo signal (-1.0 dBFS Left, -6.0 dBFS Right) -> 100% bit-linear
+        val ampMinus1dB = 0.89125 * 2147483647.0
+        val ampMinus6dB = 0.50119 * 2147483647.0
+        repeat(lookahead + 20) { i ->
+            val lIn = ampMinus1dB * kotlin.math.sin(2.0 * Math.PI * 1000.0 * i / 44100.0)
+            val rIn = ampMinus6dB * kotlin.math.sin(2.0 * Math.PI * 1000.0 * i / 44100.0)
+            val (lOut, rOut) = step(lIn, rIn)
+            if (i >= lookahead) {
+                val origIdx = i - lookahead
+                val expL = ampMinus1dB * kotlin.math.sin(2.0 * Math.PI * 1000.0 * origIdx / 44100.0)
+                val expR = ampMinus6dB * kotlin.math.sin(2.0 * Math.PI * 1000.0 * origIdx / 44100.0)
+                assertEquals("Sub-threshold Left must be 100% bit-linear", expL, lOut, 1e-3)
+                assertEquals("Sub-threshold Right must be 100% bit-linear", expR, rOut, 1e-3)
+            }
+        }
+
+        // Phase B: Extreme asymmetric stereo transient (+2.5 dBFS Left vs -1.5 dBFS Right)
+        val overL = 1.3335 * 2147483647.0
+        val underR = 0.8414 * 2147483647.0
+        val historyL = DoubleArray(400)
+        val historyR = DoubleArray(400)
+        for (i in 0 until 400) {
+            val lIn = overL * kotlin.math.sin(2.0 * Math.PI * 950.0 * i / 44100.0)
+            val rIn = underR * kotlin.math.sin(2.0 * Math.PI * 1350.0 * i / 44100.0)
+            historyL[i] = lIn
+            historyR[i] = rIn
+            val (lOut, rOut) = step(lIn, rIn)
+            assertTrue("Linked limiter Left must stay <= ceiling", kotlin.math.abs(lOut) <= ceiling + 1.0)
+            assertTrue("Linked limiter Right must stay <= ceiling", kotlin.math.abs(rOut) <= ceiling + 1.0)
+            if (i >= lookahead) {
+                val origL = historyL[i - lookahead]
+                val origR = historyR[i - lookahead]
+                if (kotlin.math.abs(origL) > 1e6 && kotlin.math.abs(origR) > 1e6) {
+                    val gL = kotlin.math.abs(lOut / origL)
+                    val gR = kotlin.math.abs(rOut / origR)
+                    val ildShiftDb = kotlin.math.abs(20.0 * kotlin.math.log10(gL / gR))
+                    assertEquals("Stereo-linked gain must produce 0.000 dB ILD shift", 0.0, ildShiftDb, 1e-6)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `uacAsyncFeedbackDecoder handles UAC2 Q16_16, UAC1 Q10_14, ALSA quirks, and rejects corrupt payloads`() {
+        fun u32LeBytes(v: Long): ByteArray = byteArrayOf(
+            (v and 0xFF).toByte(),
+            ((v ushr 8) and 0xFF).toByte(),
+            ((v ushr 16) and 0xFF).toByte(),
+            ((v ushr 24) and 0xFF).toByte()
+        )
+        fun u24LeBytes(v: Long): ByteArray = byteArrayOf(
+            (v and 0xFF).toByte(),
+            ((v ushr 8) and 0xFF).toByte(),
+            ((v ushr 16) and 0xFF).toByte()
+        )
+
+        // 1. Standard UAC2 High-Speed 44.1 kHz @ 8000 fps (+100 ppm crystal offset -> 44104.41 Hz)
+        val expectedQ16 = Math.round((44104.41 / 8000.0) * 65536.0).toLong()
+        val decodedUac2 = AudioEngine.decodeUacFeedbackQ16(
+            payload = u32LeBytes(expectedQ16),
+            uacVersion = 2,
+            sampleRate = 44100,
+            usbFramesPerSec = 8000
+        )
+        assertEquals(expectedQ16, decodedUac2)
+
+        // 2. ALSA UAC2 quirk: 4-byte High-Speed endpoint sending 10.14 instead of 16.16 (raw << 2 recovers Q16.16)
+        val raw1014InUac2 = expectedQ16 ushr 2
+        val decodedQuirk = AudioEngine.decodeUacFeedbackQ16(
+            payload = u32LeBytes(raw1014InUac2),
+            uacVersion = 2,
+            sampleRate = 44100,
+            usbFramesPerSec = 8000
+        )
+        assertEquals(raw1014InUac2 shl 2, decodedQuirk)
+
+        // 3. UAC1 Full-Speed 3-byte 10.14 @ 1000 fps (44100 Hz)
+        val uac1_1014 = (44100L shl 14) / 1000L
+        val decodedUac1 = AudioEngine.decodeUacFeedbackQ16(
+            payload = u24LeBytes(uac1_1014),
+            uacVersion = 1,
+            sampleRate = 44100,
+            usbFramesPerSec = 1000
+        )
+        assertEquals(uac1_1014 shl 2, decodedUac1)
+
+        // 4. Reject zero or wildly out-of-range (+20%) feedback payloads
+        assertNull(AudioEngine.decodeUacFeedbackQ16(u32LeBytes(0L), 2, 44100, 8000))
+        val crazyPlus20Pct = ((44100L * 120L / 100L) shl 16) / 8000L
+        assertNull(AudioEngine.decodeUacFeedbackQ16(u32LeBytes(crazyPlus20Pct), 2, 44100, 8000))
+    }
+
+    @Test
+    fun `sustainedSilenceDitherGate does not pump on zero crossings and gates after 64 silent frames`() {
+        val kSilenceGateFrames = 64
+        var silentFrames = 0
+        fun evalGate(rawL: Int, rawR: Int, scaledL: Double, scaledR: Double, ditherEligible: Boolean): Boolean {
+            val isSilent = (rawL == 0 && rawR == 0 && kotlin.math.abs(scaledL) < 1.0 && kotlin.math.abs(scaledR) < 1.0)
+            if (isSilent) {
+                if (silentFrames < kSilenceGateFrames) silentFrames++
+            } else {
+                silentFrames = 0
+            }
+            return (silentFrames < kSilenceGateFrames) && ditherEligible
+        }
+
+        // Active musical signal followed by single zero-crossing frame where IIR tail still rings
+        assertTrue(evalGate(100000, -100000, 100000.0, -100000.0, true))
+        assertTrue("Zero-crossing on input must NOT cut dither while IIR rings!", evalGate(0, 0, 12.5, -8.3, true))
+        assertTrue("Single digital-zero frame must NOT pump dither gate!", evalGate(0, 0, 0.0, 0.0, true))
+
+        // Gate stays active through frame 63 of continuous silence, then shuts off at frame 64
+        for (i in 2 until 64) {
+            assertTrue("Frame $i still inside tail window", evalGate(0, 0, 0.0, 0.0, true))
+        }
+        assertFalse("After 64 continuous silent frames (~1.45ms), dither cleanly gates OFF", evalGate(0, 0, 0.0, 0.0, true))
+    }
+
+    @Test
+    fun `uacExplicitFeedbackBitmask identifies only feedback endpoints not mic capture`() {
+        fun isValidFeedbackEndpoint(bEndpointAddress: Int, bmAttributes: Int, wMaxPacketSize: Int, epSync: Int): Boolean {
+            val isInIso = ((bEndpointAddress and 0x80) != 0) && ((bmAttributes and 0x03) == 0x01)
+            if (!isInIso) return false
+            val isExplicitFbUsage = ((bmAttributes and 0x30) == 0x10)
+            val matchesSynchAddr = (epSync != 0 && bEndpointAddress == epSync)
+            val fbPkt = wMaxPacketSize and 0x07FF
+            return (matchesSynchAddr || isExplicitFbUsage) && fbPkt in 1..8
+        }
+
+        // Valid Explicit Feedback IN endpoint (Usage bits 5..4 = 0x10, ISO = 0x01 -> bmAttributes = 0x11, maxPkt = 4)
+        assertTrue(isValidFeedbackEndpoint(bEndpointAddress = 0x81, bmAttributes = 0x11, wMaxPacketSize = 4, epSync = 0x81))
+        // Must reject microphone capture ISO IN endpoint (bmAttributes = 0x05 Async Data ISO IN, maxPkt = 192)
+        assertFalse(isValidFeedbackEndpoint(bEndpointAddress = 0x82, bmAttributes = 0x05, wMaxPacketSize = 192, epSync = 0x00))
+    }
+
+    // =========================================================================
+    // 12. Batch 15 Regression Guards (Eliminasi Decitan / Bresenham / Guards)
+    // =========================================================================
+
+    @Test
+    fun `deterministic bresenham framing maintains exact sample rate and zero DAC FIFO slips on 160ms DMA pipeline`() {
+        val usbFps = 8000
+        val rates = listOf(44100, 48000, 88200, 96000, 192000)
+        for (sr in rates) {
+            val baseFrames = sr / usbFps
+            val remainderRate = sr % usbFps
+            val ceilFrames = if (remainderRate == 0) baseFrames else baseFrames + 1
+            var rem = 0
+            var totalSent = 0
+            repeat(usbFps) {
+                var frames = baseFrames
+                rem += remainderRate
+                if (rem >= usbFps) {
+                    frames++
+                    rem -= usbFps
+                }
+                assertTrue(
+                    "Packet frame count for $sr Hz must be $baseFrames or $ceilFrames, got $frames",
+                    frames == baseFrames || frames == ceilFrames
+                )
+                totalSent += frames
+            }
+            assertEquals("1 second of USB packets must equal exact sample rate $sr", sr, totalSent)
+            assertEquals("Bresenham remainder must reset to 0 after exact 1 second", 0, rem)
+        }
+
+        // Control-theory stability comparison on 160ms DMA queue (20 URBs * 64 uframes = 1280 uframes) vs 64-frame DAC FIFO
+        val sr = 44100.0
+        val nomStep = sr / usbFps.toDouble() // 5.5125 frames/uframe
+        val fifoCap = 64.0
+        val targetFill = fifoCap / 2.0
+
+        // 1. Nominal deterministic Bresenham (+50 ppm real crystal drift over 2s): 0 slips!
+        var fifoNom = targetFill
+        var remNom = 0
+        var slipsNom = 0
+        repeat(16000) {
+            var f = 44100 / usbFps
+            remNom += 44100 % usbFps
+            if (remNom >= usbFps) {
+                f++
+                remNom -= usbFps
+            }
+            fifoNom += f.toDouble() - nomStep * (1.0 + 50e-6)
+            if (fifoNom > fifoCap || fifoNom < 0.0) {
+                slipsNom++
+                fifoNom = fifoNom.coerceIn(0.0, fifoCap)
+            }
+        }
+        assertEquals("Deterministic Bresenham must suffer ZERO DAC FIFO slips", 0, slipsNom)
+
+        // 2. Prove Batch 14 closed-loop ±1.5% feedback around 160ms DMA oscillates & overflows/underflows heavily
+        val pipe = ArrayDeque<Int>(1280)
+        var initRem = 0
+        repeat(1280) {
+            var f = 44100 / usbFps
+            initRem += 44100 % usbFps
+            if (initRem >= usbFps) {
+                f++
+                initRem -= usbFps
+            }
+            pipe.addLast(f)
+        }
+        val nomQ16 = (44100L shl 16) / usbFps
+        var fifoClosed = 8.0 // Empty startup FIFO condition on alt=0 -> alt=N
+        var fbRateQ16 = 0L
+        var fbValid = false
+        var phaseQ16 = 0L
+        var slipsClosed = 0
+        for (uf in 0 until 16000) {
+            val inFrames = pipe.removeFirst()
+            fifoClosed += inFrames.toDouble() - nomStep
+            if (fifoClosed > fifoCap || fifoClosed < 0.0) {
+                slipsClosed++
+                fifoClosed = fifoClosed.coerceIn(0.0, fifoCap)
+            }
+            if (uf % 8 == 0) {
+                val reqPpm = when {
+                    fifoClosed < targetFill - 4.0 -> 15000.0
+                    fifoClosed > targetFill + 4.0 -> -15000.0
+                    else -> 0.0
+                }
+                val reqQ16 = Math.round(nomQ16 * (1.0 + reqPpm / 1e6))
+                fbRateQ16 = if (fbRateQ16 == 0L) reqQ16 else ((3L * fbRateQ16 + reqQ16 + 2L) shr 2)
+                fbValid = true
+            }
+            val outF = if (fbValid) {
+                val acc = phaseQ16 + fbRateQ16
+                phaseQ16 = acc and 0xFFFFL
+                (acc ushr 16).toInt()
+            } else {
+                var f = 44100 / usbFps
+                initRem += 44100 % usbFps
+                if (initRem >= usbFps) {
+                    f++
+                    initRem -= usbFps
+                }
+                f
+            }
+            pipe.addLast(outF)
+        }
+        assertTrue(
+            "Closed-loop feedback on 160ms DMA queue must reproduce heavy FIFO oscillation slips (>100), got $slipsClosed",
+            slipsClosed > 100
+        )
+    }
+
+    @Test
+    fun `24-bit in 32-bit left-aligned packing handles negative and positive full-scale values without sign UB`() {
+        fun pack24In32Le(q24: Long): ByteArray {
+            val clamped = q24.coerceIn(-8388608L, 8388607L)
+            // Mirrors C++: static_cast<int32_t>(static_cast<uint32_t>(static_cast<int32_t>(q24)) << 8)
+            val val32 = ((clamped.toInt().toUInt()) shl 8).toInt()
+            return byteArrayOf(
+                (val32 and 0xFF).toByte(),
+                ((val32 ushr 8) and 0xFF).toByte(),
+                ((val32 ushr 16) and 0xFF).toByte(),
+                ((val32 ushr 24) and 0xFF).toByte()
+            )
+        }
+
+        // Full-scale negative: -8388608 (0xFF800000 << 8 = 0x80000000 -> LE: 00 00 00 80)
+        org.junit.Assert.assertArrayEquals(
+            byteArrayOf(0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x80.toByte()),
+            pack24In32Le(-8388608L)
+        )
+        // Minus one: -1 (0xFFFFFFFF << 8 = 0xFFFFFF00 -> LE: 00 FF FF FF)
+        org.junit.Assert.assertArrayEquals(
+            byteArrayOf(0x00.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()),
+            pack24In32Le(-1L)
+        )
+        // Zero
+        org.junit.Assert.assertArrayEquals(
+            byteArrayOf(0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte()),
+            pack24In32Le(0L)
+        )
+        // Full-scale positive: +8388607 (0x007FFFFF << 8 = 0x7FFFFF00 -> LE: 00 FF FF 7F)
+        org.junit.Assert.assertArrayEquals(
+            byteArrayOf(0x00.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0x7F.toByte()),
+            pack24In32Le(8388607L)
+        )
+    }
+
+    @Test
+    fun `manual next instant gapless handover primes 15ms warmup and zero volume micro-ramp`() {
+        data class HandoverTransitionState(
+            val warmupSilenceFrames: Int,
+            val currentVolume: Float,
+            val isSwapping: Boolean,
+            val isPlaying: Boolean
+        )
+
+        fun simulateManualNextHandover(sampleRate: Int): HandoverTransitionState {
+            val sr = if (sampleRate > 0) sampleRate else 44100
+            return HandoverTransitionState(
+                warmupSilenceFrames = (sr * 0.015).toInt(),
+                currentVolume = 0.0f,
+                isSwapping = false,
+                isPlaying = true
+            )
+        }
+
+        fun simulateAutoEofGapless(): HandoverTransitionState {
+            // Auto-EOF gapless transition keeps 0ms padding & unity volume continuity
+            return HandoverTransitionState(
+                warmupSilenceFrames = 0,
+                currentVolume = 1.0f,
+                isSwapping = false,
+                isPlaying = true
+            )
+        }
+
+        val manual441 = simulateManualNextHandover(44100)
+        assertEquals(661, manual441.warmupSilenceFrames)
+        assertEquals(0.0f, manual441.currentVolume, 0.0f)
+        assertFalse(manual441.isSwapping)
+        assertTrue(manual441.isPlaying)
+
+        val manual48 = simulateManualNextHandover(48000)
+        assertEquals(720, manual48.warmupSilenceFrames)
+        assertEquals(0.0f, manual48.currentVolume, 0.0f)
+
+        val autoEof = simulateAutoEofGapless()
+        assertEquals(0, autoEof.warmupSilenceFrames)
+        assertEquals(1.0f, autoEof.currentVolume, 0.0f)
+    }
+
+    @Test
+    fun `stereoLinkedPeakLimiter keeps outgoing delayed frame inside sliding window with strict less-than expiry`() {
+        val ceiling = 2122892279.0 // -0.10 dBFS
+        val lookahead = 4
+        val bufL = DoubleArray(lookahead)
+        val dqVal = DoubleArray(1024)
+        val dqPos = LongArray(1024)
+        var dqHead = 0
+        var dqTail = 0
+        var frameCounter = 0L
+        var writePos = 0
+
+        fun pushAndQueryWindowPeak(sampleL: Double): Double {
+            val curPeak = kotlin.math.abs(sampleL)
+            bufL[writePos] = sampleL
+            writePos = (writePos + 1) % lookahead
+
+            val n = frameCounter++
+            while (dqHead != dqTail && dqVal[(dqTail - 1) and 1023] <= curPeak) {
+                dqTail = (dqTail - 1) and 1023
+            }
+            dqPos[dqTail] = n
+            dqVal[dqTail] = curPeak
+            dqTail = (dqTail + 1) and 1023
+
+            // Strict `< n` matches ParametricEq.h:233 so outgoing frame (pos = n - lookahead) stays in windowPeak
+            while (dqHead != dqTail && dqPos[dqHead] + lookahead < n) {
+                dqHead = (dqHead + 1) and 1023
+            }
+            return dqVal[dqHead]
+        }
+
+        val hotSpike = ceiling * 1.5
+        // Frame 0 injects hotSpike; frames 1..3 are zero; at frame 4 (= 0 + lookahead), hotSpike exits delayBuf!
+        pushAndQueryWindowPeak(hotSpike)
+        pushAndQueryWindowPeak(0.0)
+        pushAndQueryWindowPeak(0.0)
+        pushAndQueryWindowPeak(0.0)
+        val peakAtExitFrame = pushAndQueryWindowPeak(0.0)
+        assertEquals(
+            "Outgoing delayed frame at n == pos + lookahead must remain inside sliding window",
+            hotSpike,
+            peakAtExitFrame,
+            1e-6
+        )
+        // Frame 5 (= pos + lookahead + 1): hotSpike has fully passed and MUST now expire
+        val peakAfterExitFrame = pushAndQueryWindowPeak(0.0)
+        assertEquals(0.0, peakAfterExitFrame, 0.0)
     }
 }

@@ -61,13 +61,15 @@ data class PeqConfiguration(
 ) {
     val effectivePreampDb: Float
         get() = if (autoPreampEnabled) {
-            val maxPeak = PeqEvaluator.calculateMaxBoost(bands)
-            if (maxPeak > 0.05f) {
-                // Calibrated Energy-Weighted Headroom Compensation:
-                // Compensates narrow peak boost without excessive broadband RMS volume loss, preserving dynamic punch & slam.
-                (-(maxPeak * 0.78f + 0.25f)).coerceAtLeast(-24.0f)
+            val hasAnyActiveBand = bands.any { it.enabled && kotlin.math.abs(it.gainDb) >= 0.05f }
+            if (!hasAnyActiveBand) {
+                0.0f // 100% Bit-Perfect unity when all bands are flat
             } else {
-                0.0f
+                val maxPeak = PeqEvaluator.calculateMaxBoost(bands)
+                // Full 100% peak boost compensation + 1.0 dB minimum-phase IIR overshoot & True-Peak (ISP) headroom
+                // Protects dense DR4/DR5 brickwalled tracks ("Drown - BMTH") even under pure-cut EQ!
+                val rawPreamp = if (maxPeak > 0.05f) -(maxPeak + 1.0f) else -1.0f
+                rawPreamp.coerceAtLeast(-24.0f)
             }
         } else {
             preampDb
@@ -80,9 +82,7 @@ data class PeqConfiguration(
 
         fun defaultQForBandIndex(idx: Int): Float = when (idx) {
             0, 9 -> 0.707f // Butterworth shelf (smooth tilt, zero ringing)
-            1, 2 -> 0.95f  // Sub-bass & Mid-bass (punchy, full low-end extension)
-            3, 4 -> 1.25f  // Lower & Center Midrange (natural vocal body & weight)
-            else -> 1.41f  // Upper Mid & Treble (surgical clarity, presence, and air)
+            else -> 1.41f  // True 1-octave Constant-Q (surgical bass/mid/treble separation, zero mid-bass mud)
         }
 
         fun createDefaultBands(): List<PeqBand> = DEFAULT_FREQUENCIES.mapIndexed { idx, freq ->

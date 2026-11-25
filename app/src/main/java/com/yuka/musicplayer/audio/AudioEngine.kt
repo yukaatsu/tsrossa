@@ -121,6 +121,41 @@ class AudioEngine {
                 1.0f
             }
         }
+
+        /**
+         * Pure-math mirror of C++ `decode_uac_feedback_q16()` for JVM unit verification.
+         * Decodes UAC1 (10.14) / UAC2 (16.16) explicit feedback payloads with ALSA quirk
+         * normalization and strict ±1.5% sanity bounds. Returns null if invalid/out-of-range.
+         */
+        @JvmStatic
+        fun decodeUacFeedbackQ16(
+            payload: ByteArray,
+            uacVersion: Int,
+            sampleRate: Int,
+            usbFramesPerSec: Int
+        ): Long? {
+            if (payload.size < 3 || sampleRate <= 0 || usbFramesPerSec <= 0) return null
+            val nomQ16 = (sampleRate.toLong() shl 16) / usbFramesPerSec.toLong()
+            if (nomQ16 <= 0L) return null
+            val minQ16 = (nomQ16 * 985L) / 1000L
+            val maxQ16 = (nomQ16 * 1015L) / 1000L
+
+            val b0 = payload[0].toLong() and 0xFFL
+            val b1 = payload[1].toLong() and 0xFFL
+            val b2 = payload[2].toLong() and 0xFFL
+            val raw: Long = if (payload.size >= 4 && uacVersion == 2) {
+                val b3 = payload[3].toLong() and 0xFFL
+                b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+            } else {
+                (b0 or (b1 shl 8) or (b2 shl 16)) shl 2
+            }
+
+            val candidates = longArrayOf(raw, raw shl 2, raw shl 3, raw ushr 3)
+            for (c in candidates) {
+                if (c in minQ16..maxQ16) return c
+            }
+            return null
+        }
     }
 
 

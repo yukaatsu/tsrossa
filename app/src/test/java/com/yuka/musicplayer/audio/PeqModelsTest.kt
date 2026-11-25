@@ -20,14 +20,10 @@ class PeqModelsTest {
         assertEquals(8000.0f, defaultBands[8].freqHz, 0.1f)
         assertEquals(16000.0f, defaultBands[9].freqHz, 0.1f)
 
-        // Multi-Zone Q: 0.707 for Butterworth Shelf (bands 0 & 9), 0.95 for Bass (bands 1 & 2), 1.25 for Mid (bands 3 & 4), 1.41 for Treble (bands 5..8)
+        // True 1-octave Constant-Q: 0.707 Butterworth Shelf (bands 0 & 9), 1.41 surgical peaking (bands 1..8)
         assertEquals(0.707f, defaultBands[0].q, 0.01f)
-        assertEquals(0.95f, defaultBands[1].q, 0.01f)
-        assertEquals(0.95f, defaultBands[2].q, 0.01f)
-        assertEquals(1.25f, defaultBands[3].q, 0.01f)
-        assertEquals(1.25f, defaultBands[4].q, 0.01f)
-        for (i in 5..8) {
-            assertEquals("Band $i must use Constant-Q 1.41", 1.41f, defaultBands[i].q, 0.01f)
+        for (i in 1..8) {
+            assertEquals("Band $i must use surgical 1-octave Constant-Q 1.41", 1.41f, defaultBands[i].q, 0.01f)
         }
         assertEquals(0.707f, defaultBands[9].q, 0.01f)
 
@@ -64,11 +60,11 @@ class PeqModelsTest {
             autoPreampEnabled = true,
             bands = bands
         )
-        // Energy-weighted headroom formula: -(maxPeak * 0.78f + 0.25f)
-        // For +6.0 dB boost: -(6.0 * 0.78 + 0.25) = -4.93 dB
-        assertEquals(-4.93f, config.effectivePreampDb, 0.25f)
+        // Full 100% peak compensation + 1.0 dB IIR phase-rotation & ISP headroom: -(maxPeak + 1.0f)
+        // For +6.0 dB boost: -(6.0 + 1.0) = -7.0 dB
+        assertEquals(-7.0f, config.effectivePreampDb, 0.25f)
 
-        // For massive +12.0 dB boost: -(12.0 * 0.78 + 0.25) = -9.61 dB
+        // For massive +12.0 dB boost: -(12.0 + 1.0) = -13.0 dB
         val extremeBands = PeqConfiguration.createDefaultBands().mapIndexed { i, b ->
             if (i == 5) b.copy(gainDb = 12.0f) else b
         }
@@ -78,9 +74,9 @@ class PeqModelsTest {
             autoPreampEnabled = true,
             bands = extremeBands
         )
-        assertEquals(-9.61f, extremeConfig.effectivePreampDb, 0.35f)
+        assertEquals(-13.0f, extremeConfig.effectivePreampDb, 0.35f)
 
-        // For pure cut (Band 5 at -3.0 dB), zero unnecessary volume cut (0.0 dB!)
+        // For pure cut (Band 5 at -3.0 dB), reserve -1.0 dB IIR phase-overshoot headroom so DR4 masters never distort!
         val cutBands = PeqConfiguration.createDefaultBands().mapIndexed { i, b ->
             if (i == 5) b.copy(gainDb = -3.0f) else b
         }
@@ -90,7 +86,65 @@ class PeqModelsTest {
             autoPreampEnabled = true,
             bands = cutBands
         )
-        assertEquals(0.0f, cutConfig.effectivePreampDb, 0.01f)
+        assertEquals(-1.0f, cutConfig.effectivePreampDb, 0.01f)
+
+        // Flat EQ (all gains 0.0 dB): exact 0.0 dB (bit-perfect unity)
+        val flatConfig = PeqConfiguration(enabled = true, autoPreampEnabled = true)
+        assertEquals(0.0f, flatConfig.effectivePreampDb, 0.001f)
+    }
+
+    @Test
+    fun testAutoPreampEvaluatesBoth44100And48000HzAndProtectsPureCut() {
+        val highBoostBands = PeqConfiguration.createDefaultBands().mapIndexed { i, b ->
+            when (i) {
+                8 -> b.copy(gainDb = 4.0f)
+                9 -> b.copy(gainDb = 3.0f)
+                else -> b
+            }
+        }
+        val peakAt44k = PeqEvaluator.evaluateCurve(
+            highBoostBands,
+            floatArrayOf(8000f, 12000f, 16000f, 20000f),
+            0f,
+            44100.0
+        ).maxOrNull() ?: 0f
+        val peakAt48k = PeqEvaluator.evaluateCurve(
+            highBoostBands,
+            floatArrayOf(8000f, 12000f, 16000f, 20000f),
+            0f,
+            48000.0
+        ).maxOrNull() ?: 0f
+
+        val calculatedMax = PeqEvaluator.calculateMaxBoost(highBoostBands)
+        assertTrue(
+            "calculateMaxBoost must capture composite peaks across both 44.1 kHz & 48 kHz",
+            calculatedMax >= kotlin.math.max(peakAt44k, peakAt48k) - 0.1f
+        )
+
+        val config = PeqConfiguration(enabled = true, autoPreampEnabled = true, bands = highBoostBands)
+        assertTrue(
+            "Auto preamp must reserve >= 1.0 dB headroom above max boost",
+            config.effectivePreampDb <= -(calculatedMax + 0.99f)
+        )
+    }
+
+    @Test
+    fun testConstantQReducesLowMidMudOverlapAt200Hz() {
+        val rockBassBands = PeqConfiguration.createDefaultBands().mapIndexed { i, b ->
+            when (i) {
+                1 -> b.copy(gainDb = 4.0f) // 62 Hz Q=1.41
+                2 -> b.copy(gainDb = 2.5f) // 125 Hz Q=1.41
+                else -> b
+            }
+        }
+        val mudBleed = PeqEvaluator.evaluateCurve(
+            rockBassBands,
+            floatArrayOf(200f, 250f),
+            0f,
+            44100.0
+        )
+        assertTrue("200 Hz mud bleed with Q=1.41 must remain tight (< 1.35 dB), was ${mudBleed[0]}", mudBleed[0] < 1.35f)
+        assertTrue("250 Hz mud bleed with Q=1.41 must remain minimal (< 0.85 dB), was ${mudBleed[1]}", mudBleed[1] < 0.85f)
     }
 
     @Test

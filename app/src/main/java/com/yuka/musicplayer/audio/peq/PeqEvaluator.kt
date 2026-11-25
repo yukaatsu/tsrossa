@@ -11,10 +11,11 @@ object PeqEvaluator {
     fun evaluateCurve(
         bands: List<PeqBand>,
         frequenciesHz: FloatArray,
-        preampDb: Float = 0f
+        preampDb: Float = 0f,
+        sampleRateHz: Double = REFERENCE_SAMPLE_RATE
     ): FloatArray {
         val result = FloatArray(frequenciesHz.size)
-        val fs = REFERENCE_SAMPLE_RATE
+        val fs = sampleRateHz.coerceAtLeast(8000.0)
 
         for (i in frequenciesHz.indices) {
             val f = frequenciesHz[i].toDouble().coerceIn(10.0, fs * 0.49)
@@ -31,21 +32,24 @@ object PeqEvaluator {
     }
 
     /**
-     * Evaluates peak boost dB across the audible spectrum for anti-clipping headroom.
+     * Evaluates peak boost dB across the audible spectrum (both 44.1 kHz and 48 kHz)
+     * for anti-clipping headroom.
      */
     fun calculateMaxBoost(bands: List<PeqBand>): Float {
-        // 64 logarithmic frequency points from 20 Hz to 20,000 Hz for high-resolution peak evaluation
-        val numPoints = 64
+        // 128 logarithmic frequency points from 20 Hz to 20,000 Hz across both 44.1 kHz & 48 kHz
+        val numPoints = 128
         val logMin = log10(20.0)
         val logMax = log10(20000.0)
         val testFreqs = FloatArray(numPoints) { i ->
             val frac = i.toDouble() / (numPoints - 1)
             10.0.pow(logMin + frac * (logMax - logMin)).toFloat()
         }
-        val curve = evaluateCurve(bands, testFreqs, 0f)
         var maxVal = 0.0f
-        for (g in curve) {
-            if (g > maxVal) maxVal = g
+        for (fs in doubleArrayOf(44100.0, 48000.0)) {
+            val curve = evaluateCurve(bands, testFreqs, 0f, fs)
+            for (g in curve) {
+                if (g > maxVal) maxVal = g
+            }
         }
         return maxVal
     }
@@ -59,11 +63,8 @@ object PeqEvaluator {
         val cosW0 = cos(w0)
         val sinW0 = sin(w0)
         val aVal = 10.0.pow(gainDb / 40.0)
-        // Pure RBJ Audio EQ Cookbook bandwidth matching C++ engine with gentle Nyquist decramping
-        var alpha = sinW0 / (2.0 * q)
-        if (band.filterType == PeqFilterType.PEAKING && f0 > 0.16 * fs) {
-            alpha *= cos(w0 * 0.5).pow(0.18)
-        }
+        // Pure Robert Bristow-Johnson Audio EQ Cookbook bandwidth matching C++ engine
+        val alpha = sinW0 / (2.0 * q)
 
         val b0: Double; val b1: Double; val b2: Double
         val a0: Double; val a1: Double; val a2: Double

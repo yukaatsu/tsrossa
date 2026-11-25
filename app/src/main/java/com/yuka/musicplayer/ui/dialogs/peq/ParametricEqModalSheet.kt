@@ -486,7 +486,6 @@ fun ParametricEqModalSheet(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        val maxBoost = remember(config.bands) { PeqEvaluator.calculateMaxBoost(config.bands) }
                         val displayPreamp = config.effectivePreampDb
                         val preampText = String.format(Locale.US, "Pre-Amp: %+.1f dB", displayPreamp)
 
@@ -501,7 +500,7 @@ fun ParametricEqModalSheet(
                                 fontFamily = TerminalFont,
                                 fontWeight = FontWeight.SemiBold
                             )
-                            if (config.autoPreampEnabled && maxBoost > 0.05f) {
+                            if (config.autoPreampEnabled && displayPreamp < -0.05f) {
                                 Text(
                                     text = "Anti-Clip",
                                     color = effectiveAccent,
