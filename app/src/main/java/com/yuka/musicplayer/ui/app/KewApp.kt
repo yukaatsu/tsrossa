@@ -18,7 +18,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,12 +32,14 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -43,6 +47,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,6 +91,7 @@ import com.yuka.musicplayer.ui.theme.m3SurfaceBase
 import com.yuka.musicplayer.ui.views.AppBackgroundContainer
 import com.yuka.musicplayer.ui.views.AppScreenContent
 import com.yuka.musicplayer.ui.views.TrackView
+import com.yuka.musicplayer.ui.views.resolveActiveNavViewState
 import com.yuka.musicplayer.ui.views.settings.SettingsSubPage
 import com.yuka.musicplayer.update.AppUpdateManager
 import com.yuka.musicplayer.update.DownloadState
@@ -102,6 +108,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.absoluteValue
 
 @Composable
 fun rememberIsKeyboardOpen(): Boolean {
@@ -110,6 +117,7 @@ fun rememberIsKeyboardOpen(): Boolean {
     return imeBottom > 0
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun KewApp(audioEngine: AudioEngine) {
     val context = LocalContext.current
@@ -165,15 +173,75 @@ fun KewApp(audioEngine: AudioEngine) {
 
     val initialViewState = remember {
         val parsed = try { ViewState.valueOf(defaultScreenStr) } catch (_: Exception) { ViewState.LIBRARY }
-        if (parsed == ViewState.TRACK) ViewState.LIBRARY else parsed
+        if (parsed == ViewState.PLAYLIST) ViewState.PLAYLIST else ViewState.LIBRARY
     }
-    var viewState by remember { mutableStateOf(initialViewState) }
-    var lastMainTab by remember {
-        mutableStateOf(if (initialViewState == ViewState.PLAYLIST) ViewState.PLAYLIST else ViewState.LIBRARY)
+    val mainPagerState = rememberPagerState(
+        initialPage = if (initialViewState == ViewState.PLAYLIST) 1 else 0,
+        pageCount = { 2 }
+    )
+    val isPagerDraggedState = mainPagerState.interactionSource.collectIsDraggedAsState()
+    val pendingNavTargetPage = remember { mutableStateOf<Int?>(null) }
+    var navScrollJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var activeNavToken by remember { mutableIntStateOf(0) }
+
+    // If user starts dragging the pager mid-navbar-animation, immediately yield control to the gesture
+    LaunchedEffect(mainPagerState) {
+        snapshotFlow { isPagerDraggedState.value }.collect { dragged ->
+            if (dragged && pendingNavTargetPage.value != null) {
+                activeNavToken += 1
+                navScrollJob?.cancel()
+                navScrollJob = null
+                pendingNavTargetPage.value = null
+            }
+        }
     }
-    LaunchedEffect(viewState) {
-        if (viewState == ViewState.LIBRARY || viewState == ViewState.PLAYLIST) {
-            lastMainTab = viewState
+
+    // Single Source of Truth (SSOT): active main tab derived atomically from mainPagerState
+    val viewState by remember(mainPagerState) {
+        derivedStateOf {
+            resolveActiveNavViewState(
+                pendingNavTargetPage = pendingNavTargetPage.value,
+                isPagerDragged = isPagerDraggedState.value,
+                currentPage = mainPagerState.currentPage,
+                currentPageOffsetFraction = mainPagerState.currentPageOffsetFraction
+            )
+        }
+    }
+
+    val navigateToTab: (ViewState) -> Unit = { targetView ->
+        if (targetView == ViewState.LIBRARY || targetView == ViewState.PLAYLIST) {
+            val targetPage = if (targetView == ViewState.PLAYLIST) 1 else 0
+            val myToken = activeNavToken + 1
+            activeNavToken = myToken
+            navScrollJob?.cancel()
+            pendingNavTargetPage.value = targetPage
+            navScrollJob = coroutineScope.launch {
+                try {
+                    if (mainPagerState.currentPage != targetPage ||
+                        mainPagerState.currentPageOffsetFraction.absoluteValue > 0.0005f
+                    ) {
+                        mainPagerState.animateScrollToPage(
+                            page = targetPage,
+                            pageOffsetFraction = 0f,
+                            animationSpec = tween(
+                                durationMillis = 220,
+                                easing = FastOutSlowInEasing
+                            )
+                        )
+                    } else if (mainPagerState.isScrollInProgress) {
+                        mainPagerState.scrollToPage(targetPage, 0f)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    runCatching { mainPagerState.scrollToPage(targetPage, 0f) }
+                } finally {
+                    if (activeNavToken == myToken) {
+                        pendingNavTargetPage.value = null
+                        navScrollJob = null
+                    }
+                }
+            }
         }
     }
     var surfaceStyle by remember {
@@ -319,10 +387,6 @@ fun KewApp(audioEngine: AudioEngine) {
         currentTrack = playbackState.currentTrack,
         updateCheckState = updateCheckState
     )
-
-    BackHandler(enabled = viewState == ViewState.SETTINGS && !playbackState.isNowPlayingVisible) {
-        viewState = lastMainTab
-    }
 
     val accentFixedColor = remember(accentFixedColorStr) {
         try { Color(AndroidColor.parseColor(accentFixedColorStr)) } catch (_: Exception) { Color(0xFF00FF00) }
@@ -692,9 +756,8 @@ fun KewApp(audioEngine: AudioEngine) {
 
                         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                             AppScreenContent(
-                                viewState = viewState,
+                                pagerState = mainPagerState,
                                 modifier = Modifier.fillMaxSize(),
-                                onNavChange = { targetState -> viewState = targetState },
                                 musicRootDirectory = libraryState.musicRootDirectory,
                                 scannedItems = libraryState.scannedLibraryItems,
                                 isScanningLibrary = libraryState.isScanningLibrary,
@@ -892,7 +955,7 @@ fun KewApp(audioEngine: AudioEngine) {
                                         BottomNavigationBar(
                                             currentView = viewState,
                                             bgMode = bgMode,
-                                            onNavClick = { viewState = it }
+                                            onNavClick = navigateToTab
                                         )
                                     }
                                 }
@@ -1001,7 +1064,7 @@ fun KewApp(audioEngine: AudioEngine) {
                     welcomeModalState = welcomeModalCycle,
                     telemetry = telemetry,
                     viewState = viewState,
-                    onViewStateChange = { viewState = it },
+                    onViewStateChange = navigateToTab,
                     modalActionHandler = modalActionHandler,
                     upcomingTracks = upcomingTracks,
                     isDacConnected = isDacConnected,
@@ -1063,7 +1126,7 @@ fun KewApp(audioEngine: AudioEngine) {
                     onDismissTrackAction = { trackActionTarget = null },
                     onSelectMultiple = { file ->
                         initialMultiSelectFile = file
-                        viewState = ViewState.LIBRARY
+                        navigateToTab(ViewState.LIBRARY)
                     },
                     showWarmupConfirmModal = showWarmupConfirmModal,
                     onDismissWarmupConfirm = { showWarmupConfirmModal = false },

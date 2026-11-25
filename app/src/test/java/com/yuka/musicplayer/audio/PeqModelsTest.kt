@@ -633,4 +633,88 @@ class PeqModelsTest {
             )
         )
     }
+
+    @Test
+    fun `resolveActiveNavViewState stays 100 percent synchronized across fast swipes, rapid navbar taps, and drag interruptions`() {
+        // 1. Settled states (pendingNavTargetPage = null, isPagerDragged = false)
+        assertEquals(
+            com.yuka.musicplayer.model.ViewState.LIBRARY,
+            com.yuka.musicplayer.ui.views.resolveActiveNavViewState(
+                pendingNavTargetPage = null,
+                isPagerDragged = false,
+                currentPage = 0,
+                currentPageOffsetFraction = 0f
+            )
+        )
+        assertEquals(
+            com.yuka.musicplayer.model.ViewState.PLAYLIST,
+            com.yuka.musicplayer.ui.views.resolveActiveNavViewState(
+                pendingNavTargetPage = null,
+                isPagerDragged = false,
+                currentPage = 1,
+                currentPageOffsetFraction = 0f
+            )
+        )
+
+        // 2. Continuous fast left-right swipe across 0.50f midpoint without discontinuity
+        assertEquals(
+            com.yuka.musicplayer.model.ViewState.LIBRARY,
+            com.yuka.musicplayer.ui.views.resolveActiveNavViewState(
+                pendingNavTargetPage = null,
+                isPagerDragged = true,
+                currentPage = 0,
+                currentPageOffsetFraction = 0.49f
+            )
+        )
+        assertEquals(
+            com.yuka.musicplayer.model.ViewState.PLAYLIST,
+            com.yuka.musicplayer.ui.views.resolveActiveNavViewState(
+                pendingNavTargetPage = null,
+                isPagerDragged = true,
+                currentPage = 0,
+                currentPageOffsetFraction = 0.50f
+            )
+        )
+        assertEquals(
+            com.yuka.musicplayer.model.ViewState.PLAYLIST,
+            com.yuka.musicplayer.ui.views.resolveActiveNavViewState(
+                pendingNavTargetPage = null,
+                isPagerDragged = true,
+                currentPage = 1,
+                currentPageOffsetFraction = -0.49f
+            )
+        )
+        assertEquals(
+            com.yuka.musicplayer.model.ViewState.LIBRARY,
+            com.yuka.musicplayer.ui.views.resolveActiveNavViewState(
+                pendingNavTargetPage = null,
+                isPagerDragged = true,
+                currentPage = 0,
+                currentPageOffsetFraction = 0.49f
+            )
+        )
+
+        // 3. Instant 0ms visual feedback on navbar tap while pager is still animating from page 0 -> 1
+        assertEquals(
+            com.yuka.musicplayer.model.ViewState.PLAYLIST,
+            com.yuka.musicplayer.ui.views.resolveActiveNavViewState(
+                pendingNavTargetPage = 1,
+                isPagerDragged = false,
+                currentPage = 0,
+                currentPageOffsetFraction = 0.10f
+            )
+        )
+
+        // 4. User interrupts programmatic navbar animation by dragging back on page 0:
+        //    isPagerDragged = true must immediately override pendingNavTargetPage!
+        assertEquals(
+            com.yuka.musicplayer.model.ViewState.LIBRARY,
+            com.yuka.musicplayer.ui.views.resolveActiveNavViewState(
+                pendingNavTargetPage = 1,
+                isPagerDragged = true,
+                currentPage = 0,
+                currentPageOffsetFraction = 0.20f
+            )
+        )
+    }
 }

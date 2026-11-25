@@ -4,16 +4,12 @@ import androidx.compose.foundation.LocalOverscrollConfiguration
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -82,15 +78,39 @@ internal fun resolveViewStateForPagerPage(
 }
 
 /**
- * Top-level swipeable container providing smooth swipe gestures between LIBRARY and PLAYLIST views,
- * and seamlessly displays SETTINGS view.
+ * Single-Source-of-Truth (SSOT) resolver determining which main tab ([ViewState.LIBRARY] or
+ * [ViewState.PLAYLIST]) should be highlighted by [BottomNavigationBar].
+ *
+ * Rules:
+ * 1. When the user is actively dragging the pager ([isPagerDragged] == true), ignore any
+ *    pending programmatic navbar target and follow the live continuous page offset immediately.
+ * 2. When a programmatic navbar tap animation is active ([pendingNavTargetPage] != null) and
+ *    the user is NOT dragging, reflect [pendingNavTargetPage] immediately (0ms visual lag).
+ * 3. Otherwise (idle, flinging, settling, or after tap animation finishes), compute continuous
+ *    position `(currentPage + currentPageOffsetFraction).coerceIn(0f, 1f)` — avoiding Compose
+ *    1.5.4's `PagerState.targetPage` stale `animationTargetPage` cancellation bug.
+ */
+internal fun resolveActiveNavViewState(
+    pendingNavTargetPage: Int?,
+    isPagerDragged: Boolean,
+    currentPage: Int,
+    currentPageOffsetFraction: Float
+): ViewState {
+    if (pendingNavTargetPage != null && !isPagerDragged) {
+        return if (pendingNavTargetPage <= 0) ViewState.LIBRARY else ViewState.PLAYLIST
+    }
+    val continuousPage = (currentPage.toFloat() + currentPageOffsetFraction).coerceIn(0f, 1f)
+    return if (continuousPage >= 0.5f) ViewState.PLAYLIST else ViewState.LIBRARY
+}
+
+/**
+ * Top-level swipeable container providing smooth swipe gestures between LIBRARY and PLAYLIST views.
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun AppScreenContent(
-    viewState: ViewState,
+    pagerState: PagerState,
     modifier: Modifier = Modifier,
-    onNavChange: (ViewState) -> Unit = {},
     // Library
     musicRootDirectory: File,
     scannedItems: List<com.yuka.musicplayer.model.ScannedMusicItem>,
@@ -142,57 +162,11 @@ fun AppScreenContent(
     scannedItemsMap: Map<String, com.yuka.musicplayer.model.ScannedMusicItem> = emptyMap(),
     isNowPlayingVisible: Boolean = false
 ) {
-    val pagerState = rememberPagerState(
-        initialPage = if (viewState == ViewState.PLAYLIST) 1 else 0,
-        pageCount = { 2 }
-    )
-
-    val currentViewState by rememberUpdatedState(viewState)
-    val currentOnNavChange by rememberUpdatedState(onNavChange)
-    var isProgrammaticScroll by remember { mutableStateOf(false) }
-    val lastPagerDrivenViewState = remember { mutableStateOf<ViewState?>(null) }
-
-    val targetPage = resolvePagerTargetPage(
-        viewState = viewState,
-        currentPage = pagerState.currentPage
-    )
-
-    // 1. Navbar -> Pager synchronization: when user taps BottomNavigationBar (or external state changes viewState),
-    //    animate pager to targetPage. Skips redundant animation if viewState change originated from user pager swipe.
-    LaunchedEffect(viewState, targetPage) {
-        if (lastPagerDrivenViewState.value == viewState) {
-            lastPagerDrivenViewState.value = null
-            return@LaunchedEffect
-        }
-        lastPagerDrivenViewState.value = null
-        if (viewState != ViewState.LIBRARY && viewState != ViewState.PLAYLIST) {
-            return@LaunchedEffect
-        }
-        if (pagerState.currentPage != targetPage || pagerState.currentPageOffsetFraction.absoluteValue > 0.0005f) {
-            isProgrammaticScroll = true
-            try {
-                pagerState.animateScrollToPage(
-                    page = targetPage,
-                    pageOffsetFraction = 0f,
-                    animationSpec = androidx.compose.animation.core.tween(
-                        durationMillis = 250,
-                        easing = androidx.compose.animation.core.FastOutSlowInEasing
-                    )
-                )
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                runCatching { pagerState.scrollToPage(targetPage, 0f) }
-            } finally {
-                isProgrammaticScroll = false
-            }
-        }
-    }
-
-    // 2. Pager -> Navbar synchronization + Self-Healing Center-Snap Guard:
-    //    Uses rememberUpdatedState(viewState) so the closure never holds a stale initial ViewState.
-    //    Updates BottomNavigationBar indicator immediately when a user swipe crosses the midpoint
-    //    and guarantees exact center alignment + state sync once scrolling stops.
+    // 1. Self-Healing Center-Snap Guard: whenever scroll/touch stops (isScrollInProgress == false),
+    //    if the pager is ever left at a fractional horizontal offset (e.g. edge gesture cancel),
+    //    immediately animate/snap it back to exact center (pageOffsetFraction = 0f).
+    //    Navbar synchronization requires ZERO code here because BottomNavigationBar derives
+    //    its active indicator directly from this same hoisted pagerState (Single Source of Truth).
     LaunchedEffect(pagerState) {
         snapshotFlow {
             Triple(
@@ -201,61 +175,33 @@ fun AppScreenContent(
                 pagerState.currentPageOffsetFraction
             )
         }.collect { (isScrolling, currentPage, offsetFraction) ->
-            if (isProgrammaticScroll) return@collect
-
-            if (isScrolling) {
-                val activePage = currentPage.coerceIn(0, 1)
-                val activeTarget = resolveViewStateForPagerPage(
-                    page = activePage,
-                    currentViewState = currentViewState
-                )
-                if (activeTarget != null && currentViewState != activeTarget) {
-                    lastPagerDrivenViewState.value = activeTarget
-                    currentOnNavChange(activeTarget)
-                }
-            } else {
-                val snapPage = if (offsetFraction.absoluteValue > 0.0005f) {
-                    if (offsetFraction > 0.5f) {
-                        (currentPage + 1).coerceIn(0, 1)
-                    } else if (offsetFraction < -0.5f) {
-                        (currentPage - 1).coerceIn(0, 1)
-                    } else {
-                        currentPage.coerceIn(0, 1)
-                    }
+            if (!isScrolling && offsetFraction.absoluteValue > 0.0005f) {
+                val snapPage = if (offsetFraction > 0.5f) {
+                    (currentPage + 1).coerceIn(0, 1)
+                } else if (offsetFraction < -0.5f) {
+                    (currentPage - 1).coerceIn(0, 1)
                 } else {
                     currentPage.coerceIn(0, 1)
                 }
-
-                val settledTarget = resolveViewStateForPagerPage(
-                    page = snapPage,
-                    currentViewState = currentViewState
-                )
-                if (settledTarget != null && currentViewState != settledTarget) {
-                    lastPagerDrivenViewState.value = settledTarget
-                    currentOnNavChange(settledTarget)
-                }
-
-                if (offsetFraction.absoluteValue > 0.0005f) {
-                    try {
-                        pagerState.animateScrollToPage(
-                            page = snapPage,
-                            pageOffsetFraction = 0f,
-                            animationSpec = androidx.compose.animation.core.spring(
-                                dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                                stiffness = androidx.compose.animation.core.Spring.StiffnessMedium
-                            )
+                try {
+                    pagerState.animateScrollToPage(
+                        page = snapPage,
+                        pageOffsetFraction = 0f,
+                        animationSpec = androidx.compose.animation.core.spring(
+                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                            stiffness = androidx.compose.animation.core.Spring.StiffnessMedium
                         )
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        runCatching { pagerState.scrollToPage(snapPage, 0f) }
-                    }
+                    )
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    runCatching { pagerState.scrollToPage(snapPage, 0f) }
                 }
             }
         }
     }
 
-    // 3. Directional Boundary-Lock NestedScrollConnection: prevents pulling Playlist (page 1)
+    // 2. Directional Boundary-Lock NestedScrollConnection: prevents pulling Playlist (page 1)
     //    leftward past the right boundary or pulling Library (page 0) rightward past the left boundary.
     val boundaryLockNestedScroll = remember(pagerState) {
         object : NestedScrollConnection {
@@ -289,7 +235,7 @@ fun AppScreenContent(
         }
     }
 
-    val isPlaylistSettledActive = remember {
+    val isPlaylistSettledActive = remember(pagerState) {
         derivedStateOf { pagerState.settledPage == 1 }
     }
 
