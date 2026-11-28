@@ -141,7 +141,7 @@ fun classifyAudioQualityBadge(
     when {
         bitDepth >= 24 || sampleRateHz > 48000 || isFloatPcm -> {
             tier = AudioQualityTier.HI_RES
-            label = "Hi-Res"
+            label = "Hi-Res Lossless"
         }
         bitDepth > 0 || sampleRateHz > 0 -> {
             tier = AudioQualityTier.LOSSLESS
@@ -157,6 +157,11 @@ fun classifyAudioQualityBadge(
         primaryLabel = label,
         showMqaMicroTag = isMqa
     )
+}
+
+fun buildAudioQualityAccessibilityLabel(badgeModel: AudioQualityBadgeModel): String {
+    val mqaPart = if (badgeModel.showMqaMicroTag) " MQA" else ""
+    return "${badgeModel.primaryLabel}$mqaPart audio. Open Signal Path Inspector"
 }
 
 fun resolveSignalPathStatus(

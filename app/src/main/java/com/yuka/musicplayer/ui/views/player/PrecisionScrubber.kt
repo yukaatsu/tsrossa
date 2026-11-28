@@ -7,9 +7,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -35,6 +37,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.ui.theme.TerminalFont
@@ -53,6 +56,7 @@ fun PrecisionScrubber(
     dynamicColor: Color,
     onSeekTo: (Double) -> Unit,
     trackKey: Any? = null,
+    centerBadgeSlot: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val currentOnSeekTo by rememberUpdatedState(onSeekTo)
@@ -278,12 +282,12 @@ fun PrecisionScrubber(
                 )
             }
 
-            // Timestamps Row
+            // Timestamps & Centered Apple Music-style Audio Quality Indicator Row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                    .padding(horizontal = 4.dp)
+                    .padding(top = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -291,13 +295,31 @@ fun PrecisionScrubber(
                     color = if (isDragging) dynamicColor else m3OnSurfaceVariant(),
                     fontFamily = TerminalFont,
                     fontWeight = FontWeight.Medium,
-                    fontSize = 11.5.sp
+                    fontSize = 11.5.sp,
+                    textAlign = TextAlign.Start,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.defaultMinSize(minWidth = 42.dp)
                 )
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    centerBadgeSlot?.invoke()
+                }
+
                 Text(
                     text = durStr,
                     color = m3OnSurfaceVariant(),
                     fontFamily = TerminalFont,
-                    fontSize = 11.5.sp
+                    fontSize = 11.5.sp,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.defaultMinSize(minWidth = 42.dp)
                 )
             }
         }

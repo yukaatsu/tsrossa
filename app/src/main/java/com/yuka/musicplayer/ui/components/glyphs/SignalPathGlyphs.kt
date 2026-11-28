@@ -136,3 +136,59 @@ fun GlyphDspStack(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
         strokeWidth = 16f
     )
 }
+
+/**
+ * Apple Music-inspired concentric lossless acoustic wave emblem for CD-quality Lossless audio.
+ * Symmetrical mirrored twin-arc soundwave flanking a pure center axis on a 256x256 grid.
+ */
+@Composable
+fun GlyphLosslessBadge(color: Color, modifier: Modifier = Modifier.size(15.dp)) {
+    PhosphorIconCanvas(
+        "M128,60 V196",
+        "M92,84 C74,104 74,152 92,172",
+        "M164,84 C182,104 182,152 164,172",
+        "M56,64 C28,96 28,160 56,192",
+        "M200,64 C228,96 228,160 200,192",
+        color = color,
+        contentDescription = "Lossless Audio",
+        modifier = modifier,
+        filled = false,
+        strokeWidth = 20f
+    )
+}
+
+/**
+ * Distinct Hi-Res Lossless emblem combining mirrored lossless acoustic waves with a tall
+ * central harmonic master diamond representing extended resolution (>=24-bit / >48 kHz / 32-bit float).
+ */
+@Composable
+fun GlyphHiResLosslessBadge(color: Color, modifier: Modifier = Modifier.size(15.dp)) {
+    PhosphorIconCanvas(
+        "M128,44 L148,128 L128,212 L108,128 Z",
+        "M84,92 C68,110 68,146 84,164",
+        "M172,92 C188,110 188,146 172,164",
+        "M48,72 C24,100 24,156 48,184",
+        "M208,72 C232,100 232,156 208,184",
+        color = color,
+        contentDescription = "Hi-Res Lossless Audio",
+        modifier = modifier,
+        filled = false,
+        strokeWidth = 20f
+    )
+}
+
+/**
+ * Minimal 3-bar acoustic wave icon for fallback codec labels (e.g., FLAC / WAV / AUDIO)
+ * when bit-depth and sample-rate metadata are unavailable.
+ */
+@Composable
+fun GlyphAudioCodecBadge(color: Color, modifier: Modifier = Modifier.size(14.dp)) {
+    PhosphorIconCanvas(
+        "M72,96 V160 M128,64 V192 M184,96 V160",
+        color = color,
+        contentDescription = "Audio Format",
+        modifier = modifier,
+        filled = false,
+        strokeWidth = 22f
+    )
+}

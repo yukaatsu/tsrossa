@@ -200,18 +200,7 @@ internal fun TrackControlsSection(
             )
         }
 
-        // 3. M3 Precision Scrubber & Timecodes (direct beneath title/artist)
-        IsolatedPrecisionScrubber(
-            positionProvider = positionProvider,
-            durationSeconds = track.durationSeconds,
-            isPlaying = isPlaying,
-            dynamicColor = dynamicColor,
-            onSeekTo = onSeekTo,
-            trackKey = track.file.absolutePath,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        // 4. Compact Interactive Material You Audio Quality Badge (Tap -> Dynamic Signal Path Modal)
+        // 3. M3 Precision Scrubber, Timecodes & Apple Music-Style Quality Indicator (Tap -> Signal Path Modal)
         val qualityBadgeModel = remember(
             track.codec,
             track.bitDepth,
@@ -254,18 +243,23 @@ internal fun TrackControlsSection(
                 isHardwareVolumeLockedBySystem = isHardwareVolumeLockedBySystem
             )
         }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            AudioQualityBadge(
-                badgeModel = qualityBadgeModel,
-                signalPathStatus = signalPathStatus,
-                onClick = onOpenSignalPath
-            )
-        }
+
+        IsolatedPrecisionScrubber(
+            positionProvider = positionProvider,
+            durationSeconds = track.durationSeconds,
+            isPlaying = isPlaying,
+            dynamicColor = dynamicColor,
+            onSeekTo = onSeekTo,
+            trackKey = track.file.absolutePath,
+            centerBadgeSlot = {
+                AudioQualityBadge(
+                    badgeModel = qualityBadgeModel,
+                    signalPathStatus = signalPathStatus,
+                    onClick = onOpenSignalPath
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
 
         // 5. M3 Horizontal Transport Controls Row (Shuffle, Prev, Play/Pause Hero 68dp, Next, Repeat)
         Row(
@@ -578,6 +572,7 @@ private fun IsolatedPrecisionScrubber(
     dynamicColor: Color,
     onSeekTo: (Double) -> Unit,
     trackKey: String,
+    centerBadgeSlot: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     PrecisionScrubber(
@@ -587,6 +582,7 @@ private fun IsolatedPrecisionScrubber(
         dynamicColor = dynamicColor,
         onSeekTo = onSeekTo,
         trackKey = trackKey,
+        centerBadgeSlot = centerBadgeSlot,
         modifier = modifier
     )
 }

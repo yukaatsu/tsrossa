@@ -24,31 +24,40 @@ class SignalPathBadgeClassifierTest {
         assertEquals(AudioQualityTier.LOSSLESS, dat.tier)
         assertEquals("Lossless", dat.primaryLabel)
 
-        // 3. 24/48 -> Hi-Res
+        // 3. 24/48 -> Hi-Res Lossless
         val hiRes2448 = classifyAudioQualityBadge("FLAC", 24, 48000)
         assertEquals(AudioQualityTier.HI_RES, hiRes2448.tier)
-        assertEquals("Hi-Res", hiRes2448.primaryLabel)
+        assertEquals("Hi-Res Lossless", hiRes2448.primaryLabel)
 
-        // 4. 24/96 & 16/96 -> Hi-Res
+        // 4. 24/96 & 16/96 -> Hi-Res Lossless
         val hiRes2496 = classifyAudioQualityBadge("FLAC", 24, 96000)
         assertEquals(AudioQualityTier.HI_RES, hiRes2496.tier)
+        assertEquals("Hi-Res Lossless", hiRes2496.primaryLabel)
         val hiRes1696 = classifyAudioQualityBadge("WAV", 16, 96000)
         assertEquals(AudioQualityTier.HI_RES, hiRes1696.tier)
+        assertEquals("Hi-Res Lossless", hiRes1696.primaryLabel)
 
-        // 5. 32-bit IEEE Float WAV -> Hi-Res
+        // 5. 32-bit IEEE Float WAV -> Hi-Res Lossless
         val floatWav = classifyAudioQualityBadge("WAV", 32, 48000, isFloatPcm = true)
         assertEquals(AudioQualityTier.HI_RES, floatWav.tier)
-        assertEquals("Hi-Res", floatWav.primaryLabel)
+        assertEquals("Hi-Res Lossless", floatWav.primaryLabel)
 
         // 6. MQA flagged keeps base tier + micro tag
         val mqaTrack = classifyAudioQualityBadge("FLAC", 24, 48000, isMqa = true)
         assertEquals(AudioQualityTier.HI_RES, mqaTrack.tier)
+        assertEquals("Hi-Res Lossless", mqaTrack.primaryLabel)
         assertTrue(mqaTrack.showMqaMicroTag)
 
         // 7. Empty metadata fallback -> Codec uppercase
         val emptyMeta = classifyAudioQualityBadge("flac", 0, 0)
         assertEquals(AudioQualityTier.CODEC_FALLBACK, emptyMeta.tier)
         assertEquals("FLAC", emptyMeta.primaryLabel)
+
+        // 8. Accessibility labels for Signal Path Inspector trigger
+        assertEquals("Lossless audio. Open Signal Path Inspector", buildAudioQualityAccessibilityLabel(cd))
+        assertEquals("Hi-Res Lossless audio. Open Signal Path Inspector", buildAudioQualityAccessibilityLabel(hiRes2448))
+        assertEquals("Hi-Res Lossless MQA audio. Open Signal Path Inspector", buildAudioQualityAccessibilityLabel(mqaTrack))
+        assertEquals("FLAC audio. Open Signal Path Inspector", buildAudioQualityAccessibilityLabel(emptyMeta))
     }
 
     @Test
