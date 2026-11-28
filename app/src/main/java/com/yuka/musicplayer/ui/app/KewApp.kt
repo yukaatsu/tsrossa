@@ -120,6 +120,23 @@ fun rememberIsKeyboardOpen(): Boolean {
     return imeBottom > 0
 }
 
+/**
+ * Resolves the active backdrop bitmap for Album Artwork canvas without leaking
+ * the cold-start library preview onto actively playing tracks that lack embedded art.
+ */
+internal fun <T> resolveEffectiveBackdropBitmap(
+    activeTrackPath: String,
+    currentCoverBitmap: T?,
+    lastValidCoverBitmap: T?,
+    libraryPreviewBitmap: T?
+): T? {
+    return if (activeTrackPath.isEmpty()) {
+        libraryPreviewBitmap
+    } else {
+        currentCoverBitmap ?: lastValidCoverBitmap
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun KewApp(audioEngine: AudioEngine) {
@@ -625,9 +642,11 @@ fun KewApp(audioEngine: AudioEngine) {
             }
 
             LaunchedEffect(activeTrackPath, currentCoverBitmap) {
-                if (currentCoverBitmap != null) {
+                if (activeTrackPath.isEmpty()) {
+                    lastValidMainCoverBitmap = null
+                } else if (currentCoverBitmap != null) {
                     lastValidMainCoverBitmap = currentCoverBitmap
-                } else if (activeTrackPath.isNotEmpty()) {
+                } else {
                     val prepared = com.yuka.musicplayer.util.AlbumArtThumbnailCache.prepareTrackVisuals(activeTrackPath)
                     if (prepared != null) {
                         asyncPreparedBackdrop = prepared
@@ -654,7 +673,12 @@ fun KewApp(audioEngine: AudioEngine) {
                 }
             }
 
-            val effectiveMainCoverBitmap = currentCoverBitmap ?: lastValidMainCoverBitmap ?: libraryPreviewBackdrop
+            val effectiveMainCoverBitmap = resolveEffectiveBackdropBitmap(
+                activeTrackPath = activeTrackPath,
+                currentCoverBitmap = currentCoverBitmap,
+                lastValidCoverBitmap = lastValidMainCoverBitmap,
+                libraryPreviewBitmap = libraryPreviewBackdrop
+            )
 
             AppBackgroundContainer(
                 bgMode = bgMode,

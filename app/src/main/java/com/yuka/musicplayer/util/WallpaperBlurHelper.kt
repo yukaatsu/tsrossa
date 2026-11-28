@@ -34,19 +34,20 @@ object WallpaperBlurHelper {
                 b
             }
 
-            createBlurredArtworkBackdrop(bmp, targetSize = 128, blurRadius = 14).asImageBitmap()
+            createBlurredArtworkBackdrop(bmp).asImageBitmap()
         } catch (_: Exception) {
             null
         }
     }
 
     /**
-     * C1-continuous soft-knee highlight luma compression (knee = 96, ceiling = 132).
-     * Maps 0..96 identity, and 96..255 smoothly to 96..132 with zero step discontinuity.
+     * C1-continuous soft-knee highlight luma compression (knee = 108, ceiling = 148).
+     * Maps 0..108 identity (preserving rich midtone album colors) and 108..255 smoothly
+     * to 108..148 with zero step discontinuity so pure-white covers still keep WCAG AA contrast.
      */
     internal fun compressHighlightLuma(luma: Int): Int {
-        if (luma <= 96) return luma.coerceAtLeast(0)
-        return (96 + ((luma - 96) * 36) / 159).coerceIn(96, 132)
+        if (luma <= 108) return luma.coerceAtLeast(0)
+        return (108 + ((luma - 108) * 40) / 147).coerceIn(108, 148)
     }
 
     /**
@@ -59,7 +60,7 @@ object WallpaperBlurHelper {
     fun createBlurredArtworkBackdrop(
         source: Bitmap,
         targetSize: Int = 128,
-        blurRadius: Int = 14
+        blurRadius: Int = 8
     ): Bitmap {
         val safeTarget = targetSize.coerceIn(32, 256)
         val ratio = source.width.toFloat() / source.height.toFloat().coerceAtLeast(1f)
@@ -75,21 +76,21 @@ object WallpaperBlurHelper {
         val pixels = IntArray(w * h)
         small.getPixels(pixels, 0, w, 0, 0, w, h)
 
-        // Stage 1 (PRE-BLUR): Continuous vibrancy boost (1.20x saturation) + C1-continuous soft-knee
-        // highlight luma compression (knee = 96, max = 132). Running this BEFORE the 3-pass blur
-        // guarantees that no per-pixel clipping or luma adjustment ever creates sharp pixel edges.
+        // Stage 1 (PRE-BLUR): Continuous vibrancy boost (1.42x saturation) + C1-continuous soft-knee
+        // highlight luma compression (knee = 108, max = 148). Running this BEFORE the 3-pass blur
+        // counteracts Gaussian desaturation while guaranteeing zero sharp post-blur pixel edges.
         for (i in pixels.indices) {
             val c = pixels[i]
             val r = (c shr 16) and 0xFF
             val g = (c shr 8) and 0xFF
             val b = c and 0xFF
             val luma = (r * 77 + g * 150 + b * 29) shr 8
-            var nr = (luma + (((r - luma) * 307) shr 8)).coerceIn(0, 255)
-            var ng = (luma + (((g - luma) * 307) shr 8)).coerceIn(0, 255)
-            var nb = (luma + (((b - luma) * 307) shr 8)).coerceIn(0, 255)
+            var nr = (luma + (((r - luma) * 364) shr 8)).coerceIn(0, 255)
+            var ng = (luma + (((g - luma) * 364) shr 8)).coerceIn(0, 255)
+            var nb = (luma + (((b - luma) * 364) shr 8)).coerceIn(0, 255)
 
             val boostedLuma = (nr * 77 + ng * 150 + nb * 29) shr 8
-            if (boostedLuma > 96) {
+            if (boostedLuma > 108) {
                 val compressedLuma = compressHighlightLuma(boostedLuma)
                 nr = (nr * compressedLuma / boostedLuma).coerceIn(0, 255)
                 ng = (ng * compressedLuma / boostedLuma).coerceIn(0, 255)

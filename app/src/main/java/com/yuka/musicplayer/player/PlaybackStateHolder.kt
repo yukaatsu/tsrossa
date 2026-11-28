@@ -789,9 +789,7 @@ fun rememberPlaybackStateHolder(
                 if (cachedThumbBitmap != null && AlbumArtThumbnailCache.getBlurredBackdropImageBitmap(nextFile.absolutePath) == null) {
                     runCatching {
                         val instantBlur = com.yuka.musicplayer.util.WallpaperBlurHelper.createBlurredArtworkBackdrop(
-                            cachedThumbBitmap,
-                            targetSize = 96,
-                            blurRadius = 4
+                            cachedThumbBitmap
                         )
                         AlbumArtThumbnailCache.putBlurredBackdrop(nextFile.absolutePath, instantBlur)
                     }
