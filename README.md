@@ -43,7 +43,7 @@ What's in your file is bit-for-bit what reaches your DAC's converter chip. No re
     <td align="center" width="33%">
       <img src="screenshots/01_now_playing.png" alt="Now Playing Screen" width="100%"/>
       <br/><b>Now Playing</b><br/>
-      <sub>Adaptive album art theme, live Audio Quality Badge, precision scrubber, 0 dBFS volume pill, and quick lyrics/DSP/queue controls</sub>
+      <sub>Adaptive album art theme, minimal Lossless / Hi-Res Lossless indicator (tap for Signal Path), precision scrubber, and 0 dBFS volume control</sub>
     </td>
     <td align="center" width="33%">
       <img src="screenshots/04_signal_path.png" alt="Signal Path Inspector" width="100%"/>
