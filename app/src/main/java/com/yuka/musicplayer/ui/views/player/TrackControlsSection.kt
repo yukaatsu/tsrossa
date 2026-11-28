@@ -49,6 +49,9 @@ import androidx.compose.ui.unit.sp
 import com.yuka.musicplayer.model.RepeatMode
 import com.yuka.musicplayer.model.TrackInfo
 import com.yuka.musicplayer.ui.components.*
+import com.yuka.musicplayer.ui.diagnostics.classifyAudioQualityBadge
+import com.yuka.musicplayer.ui.diagnostics.evaluateSampleRateTransmission
+import com.yuka.musicplayer.ui.diagnostics.resolveSignalPathStatus
 import com.yuka.musicplayer.ui.dialogs.VolumeModalSheet
 import com.yuka.musicplayer.ui.theme.ModernSansFont
 import com.yuka.musicplayer.ui.theme.TerminalFont
@@ -86,12 +89,25 @@ internal fun TrackControlsSection(
     outputSampleRate: Int = 0,
     isDacConnected: Boolean = false,
     isPeqActive: Boolean = false,
+    isCompressorActive: Boolean = false,
+    isBitPerfectDirectPass: Boolean = false,
+    isSampleRateUnverified: Boolean = false,
+    isDeviceWedged: Boolean = false,
+    isHardwareVolumeLockedBySystem: Boolean = false,
+    onOpenSignalPath: () -> Unit = {},
+    onOpenVolumeModal: (() -> Unit)? = null,
     onOpenPeq: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var showVolumeModal by remember { mutableStateOf(false) }
+    var showLocalVolumeModal by remember { mutableStateOf(false) }
     var showAudioSpecsModal by remember { mutableStateOf(false) }
-    val haptic = LocalHapticFeedback.current
+    val openVolumeModal: () -> Unit = {
+        if (onOpenVolumeModal != null) {
+            onOpenVolumeModal()
+        } else {
+            showLocalVolumeModal = true
+        }
+    }
     val volumePulseAnim = remember { Animatable(0f) }
     val volumeScope = rememberCoroutineScope()
     val triggerVolumePulse: (Float) -> Unit = { direction ->
@@ -195,61 +211,60 @@ internal fun TrackControlsSection(
             modifier = Modifier.fillMaxWidth()
         )
 
-        // 4. Centered Audiophile Telemetry String (Single-Line Dynamic Engine Readout with Tap-to-Cycle)
-        var telemetryCycleIndex by remember { mutableIntStateOf(0) }
-        val engineArchReadout = if (isHardwareVolumeActive) "32-BIT HARDWARE CHIP" else "64-BIT BIT-PERFECT DSP"
-        val outKhzStr = if (outputSampleRate > 0) {
-            if (outputSampleRate % 1000 == 0) "${outputSampleRate / 1000} kHz" else String.format(java.util.Locale.US, "%.1f kHz", outputSampleRate / 1000.0)
-        } else null
-        val inKhzStr = if (track.sampleRateHz > 0) {
-            if (track.sampleRateHz % 1000 == 0) "${track.sampleRateHz / 1000} kHz" else String.format(java.util.Locale.US, "%.1f kHz", track.sampleRateHz / 1000.0)
-        } else null
-
-        val line1 = buildString {
-            if (isDacConnected && outputBitDepth > 0 && outKhzStr != null) {
-                val inBit = if (track.bitDepth > 0) "${track.bitDepth}-BIT / " else ""
-                val inRate = inKhzStr ?: ""
-                append("IN: $inBit$inRate  →  OUT: $outputBitDepth-BIT / $outKhzStr (DIRECT USB)")
-            } else {
-                append(track.codec.uppercase())
-                if (track.bitDepth > 0) append("  •  ${track.bitDepth}-BIT")
-                if (track.bitrateKbps > 0) append("  •  ${track.bitrateKbps} KBPS")
-                append("  •  $engineArchReadout")
-                if (track.isMqa) append("  •  MQA")
-            }
+        // 4. Compact Interactive Material You Audio Quality Badge (Tap -> Dynamic Signal Path Modal)
+        val qualityBadgeModel = remember(
+            track.codec,
+            track.bitDepth,
+            track.sampleRateHz,
+            track.isMqa,
+            track.isFloatPcm
+        ) {
+            classifyAudioQualityBadge(
+                codec = track.codec,
+                bitDepth = track.bitDepth,
+                sampleRateHz = track.sampleRateHz,
+                isMqa = track.isMqa,
+                isFloatPcm = track.isFloatPcm
+            )
         }
-        val line2 = buildString {
-            append(engineArchReadout)
-            if (isPeqActive) {
-                append("  •  PEQ: ON (10-BAND)")
-            } else {
-                append("  •  PEQ: OFF  •  DIRECT USB  •  BIT-PERFECT")
-            }
+        val sampleRateState = remember(isPlaying, track.sampleRateHz, outputSampleRate, isSampleRateUnverified) {
+            evaluateSampleRateTransmission(
+                isPlaying = isPlaying,
+                sourceSampleRate = track.sampleRateHz,
+                outputSampleRate = outputSampleRate,
+                isSampleRateUnverified = isSampleRateUnverified
+            )
         }
-
+        val signalPathStatus = remember(
+            isDacConnected,
+            isPlaying,
+            isBitPerfectDirectPass,
+            isHardwareVolumeActive,
+            sampleRateState,
+            isDeviceWedged,
+            isHardwareVolumeLockedBySystem
+        ) {
+            resolveSignalPathStatus(
+                isDacConnected = isDacConnected,
+                isPlaying = isPlaying,
+                isBitPerfectDirectPass = isBitPerfectDirectPass,
+                isHardwareVolumeActive = isHardwareVolumeActive,
+                sampleRateState = sampleRateState,
+                isDeviceWedged = isDeviceWedged,
+                isHardwareVolumeLockedBySystem = isHardwareVolumeLockedBySystem
+            )
+        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { telemetryCycleIndex++ }
-                .padding(vertical = 4.dp),
+                .padding(vertical = 2.dp),
             contentAlignment = Alignment.Center
         ) {
-            AnimatedContent(
-                targetState = if (telemetryCycleIndex % 2 == 0) line1 else line2,
-                transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(200)) },
-                label = "telemetryCycle"
-            ) { textToDisplay ->
-                Text(
-                    text = textToDisplay,
-                    color = com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
-                    fontFamily = TerminalFont,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 0.05.sp,
-                    textAlign = TextAlign.Center
-                )
-            }
+            AudioQualityBadge(
+                badgeModel = qualityBadgeModel,
+                signalPathStatus = signalPathStatus,
+                onClick = onOpenSignalPath
+            )
         }
 
         // 5. M3 Horizontal Transport Controls Row (Shuffle, Prev, Play/Pause Hero 68dp, Next, Repeat)
@@ -404,12 +419,8 @@ internal fun TrackControlsSection(
                     }
 
                     TactileBox(
-                        onClick = {
-                            showVolumeModal = true
-                        },
-                        onLongClick = {
-                            showVolumeModal = true
-                        },
+                        onClick = openVolumeModal,
+                        onLongClick = openVolumeModal,
                         pressedScale = 0.92f,
                         modifier = Modifier
                             .weight(1f)
@@ -474,8 +485,9 @@ internal fun TrackControlsSection(
                 }
             }
 
-            // PEQ Button (50dp height aligned with Volume Pill, Lyrics, and Queue)
+            // Audio DSP Studio Button (50dp height aligned with Volume Pill, Lyrics, and Queue)
             if (onOpenPeq != null) {
+                val isAnyDspActive = isPeqActive || isCompressorActive
                 TactileBox(
                     onClick = onOpenPeq,
                     pressedScale = 0.90f,
@@ -483,7 +495,7 @@ internal fun TrackControlsSection(
                         .size(50.dp)
                         .clip(RoundedCornerShape(25.dp))
                         .background(
-                            if (isPeqActive) dynamicColor.copy(alpha = 0.25f)
+                            if (isAnyDspActive) dynamicColor.copy(alpha = 0.25f)
                             else m3SurfaceContainer()
                         )
                 ) {
@@ -492,7 +504,7 @@ internal fun TrackControlsSection(
                         contentAlignment = Alignment.Center
                     ) {
                         GlyphEqualizer(
-                            color = if (isPeqActive) dynamicColor else com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
+                            color = if (isAnyDspActive) dynamicColor else com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -536,21 +548,24 @@ internal fun TrackControlsSection(
         }
     }
 
-    VolumeModalSheet(
-        visible = showVolumeModal,
-        currentVolume = currentVolume,
-        isHardwareVolumeActive = isHardwareVolumeActive,
-        isHardwareVolumeSupported = isHardwareVolumeSupported,
-        isHardwareVolumeEnabled = isHardwareVolumeEnabled,
-        onToggleHardwareVolume = onToggleHardwareVolume,
-        onVolumeChange = onVolumeChange,
-        onDismissRequest = { showVolumeModal = false }
-    )
+    if (onOpenVolumeModal == null) {
+        VolumeModalSheet(
+            visible = showLocalVolumeModal,
+            currentVolume = currentVolume,
+            isHardwareVolumeActive = isHardwareVolumeActive,
+            isHardwareVolumeSupported = isHardwareVolumeSupported,
+            isHardwareVolumeEnabled = isHardwareVolumeEnabled,
+            onToggleHardwareVolume = onToggleHardwareVolume,
+            onVolumeChange = onVolumeChange,
+            onDismissRequest = { showLocalVolumeModal = false }
+        )
+    }
 
     com.yuka.musicplayer.ui.dialogs.AudioSpecsAndLogsModalSheet(
         visible = showAudioSpecsModal,
         track = track,
         isHardwareVolumeActive = isHardwareVolumeActive,
+        outputBitDepth = outputBitDepth,
         onDismissRequest = { showAudioSpecsModal = false }
     )
 }

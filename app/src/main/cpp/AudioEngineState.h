@@ -14,6 +14,8 @@
 
 #include "AudioCommon.h"
 #include "AudioDecoder.h"
+#include "DynamicsCompressor.h"
+#include "DspPipeline.h"
 #include "ParametricEq.h"
 
 struct AtomicFloat {
@@ -55,17 +57,19 @@ struct RefusedTrackInfo {
 
 enum ControlRequestType {
   REQ_SET_VOLUME = 1,
+  REQ_CLEAR_ENDPOINT_HALT = 4,
   REQ_EVENT_TRACK_FINISHED = 10,
   REQ_EVENT_TRACK_TRANSITION = 11,
   REQ_EVENT_USB_STALL_FAULT = 12
 };
 
 struct ControlRequest {
-  int type; // 1 = SET_CUR Volume, 10 = onTrackFinished, 11 = onTrackTransition
+  int type; // 1 = SET_CUR Volume, 4 = Clear Endpoint Halt, 10 = onTrackFinished, 11 = onTrackTransition
   float volume = 0.0f;
   int sampleRate = 0;
   int interfaceNum = 0;
   int altSetting = 0;
+  uint8_t endpoint = 0;
   std::string eventArg;
 };
 
@@ -76,7 +80,7 @@ struct AudioEngineState {
   int usbAudioInterface = -1;
   uint8_t epAddress = 0;
   uint8_t epFeedback = 0;
-  bool isAsync = false;
+  std::atomic<bool> isAsync{false};
   uint8_t epFeedbackBInterval = 0;
   int epFeedbackMaxPkt = 0;
   int maxPacketSize = 0;
@@ -131,8 +135,6 @@ struct AudioEngineState {
   std::atomic<uint64_t> pausedZeroUrbCount{0};
   std::atomic<int> consecutiveSubmitErrors{0};
   uint32_t iso_fixed_rem = 0; // Jitterless Fixed-Point Bresenham remainder accumulator (immune to 160-192ms DMA feedback phase lag)
-  uint32_t consecutiveSilentFrames = 0; // Sustained digital-silence counter for glitchless dither gating
-  std::atomic<float> targetVolume{1.0f};
   std::atomic<float> rawLinearVolume{1.0f};
   
   std::atomic<uint32_t> prepareNextGen{0};
@@ -152,6 +154,7 @@ struct AudioEngineState {
   std::atomic<bool> isoThreadStarted{false};
   std::atomic<bool> isoThreadExited{true};
   std::atomic<bool> stallFaultReported{false};
+  std::atomic<bool> clearHaltPending{false};
   std::vector<libusb_transfer *> transfers;
   std::vector<struct libusb_transfer *> orphanTransfers;
 
@@ -205,6 +208,8 @@ struct AudioEngineState {
 
   std::atomic<int> sourceBitDepth{0};
   std::atomic<int> sourceBitDepthNext{0};
+  std::atomic<bool> sourceIsFloatPcm{false};
+  std::atomic<bool> sourceIsFloatPcmNext{false};
 
   // DAC Capabilities (populated once in initUsbDac)
   std::vector<int> supportedBitDepths;       // e.g. {16, 24, 32}
@@ -226,11 +231,22 @@ struct AudioEngineState {
   std::atomic<bool> bitPerfectDirectPassActive{false};
   std::atomic<int> isoTransfersCount{12};
   std::atomic<int> isoPacketsCount{16};
+  std::atomic<int> activeIsoPacketsPerTransfer{0};
+  std::atomic<bool> isMlockActive{false};
+  std::atomic<bool> isRtSchedFifoActive{false};
 
   // Professional 10-Band Parametric EQ State (Zero OS Resampling, Direct USB DSP)
   ParametricEqState peqState;
-  // Stereo-Linked Lookahead Peak Limiter (owned exclusively by real-time iso_callback thread)
-  StereoLinkedPeakLimiter peqLimiter;
+  // Stereo-Linked Dual-Slope Dynamics Compressor State (Downward + Noise-Floor-Gated Upward)
+  DynamicsCompressorState compressorState;
+  std::atomic<float> lastCompressorGainDb{0.0f};
+  std::atomic<float> lastLimiterGainReductionDb{0.0f};
+  std::atomic<bool> lastPeqEffective{false};
+  std::atomic<bool> lastCompEffective{false};
+  // Hard track-boundary reset (new track, seek, gapless handover) — distinct from live per-module PEQ toggle!
+  std::atomic<bool> trackHardResetPending{true};
+  // Pure C++17 Static Value-Composed Audio DSP Pipeline (owned exclusively by real-time iso_callback thread)
+  DspPipeline dspPipeline;
 };
 
 extern AudioEngineState g_audioState;

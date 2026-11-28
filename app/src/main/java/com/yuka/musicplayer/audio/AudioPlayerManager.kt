@@ -2,6 +2,7 @@ package com.yuka.musicplayer.audio
 
 import android.content.Context
 import android.util.Log
+import com.yuka.musicplayer.audio.compressor.CompressorPreferencesHelper
 import com.yuka.musicplayer.model.PlaybackSource
 import com.yuka.musicplayer.model.TrackInfo
 import java.io.File
@@ -45,6 +46,8 @@ object AudioPlayerManager {
         AudioEngine.applyBufferProfile(usbProfile)
         val peqConfig = PeqPreferencesHelper.load(prefs)
         PeqPreferencesHelper.applyToEngine(audioEngine, peqConfig)
+        val compConfig = CompressorPreferencesHelper.load(prefs)
+        CompressorPreferencesHelper.applyToEngine(audioEngine, compConfig)
         
         // Connect USB controller lifecycle directly to AudioPlayerManager
         usbAudioController.onDeviceReady = { fd ->
@@ -58,6 +61,7 @@ object AudioPlayerManager {
                 val currentPrefs = com.yuka.musicplayer.core.prefs.AppPreferences.get(context)
                 AudioEngine.applyBufferProfile(currentPrefs.getInt("usb_buffer_profile", 1))
                 PeqPreferencesHelper.applyToEngine(audioEngine, PeqPreferencesHelper.load(currentPrefs))
+                CompressorPreferencesHelper.applyToEngine(audioEngine, CompressorPreferencesHelper.load(currentPrefs))
                 // Activate phone speaker redirection immediately for both Standby/PAUSE and PLAY (#NOTE 1)
                 PhoneSpeakerRoutingCoordinator.onDacConnected(context.applicationContext)
                 val dacName = try {

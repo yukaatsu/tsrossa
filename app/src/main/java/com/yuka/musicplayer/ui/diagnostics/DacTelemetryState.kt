@@ -35,7 +35,10 @@ data class DacTelemetryState(
     val isForceSoftwareVolume: Boolean,
     val supportedBitDepths: String,
     val supportedSampleRates: String,
-    val refusedTrackHistory: List<RefusedTrackEntry>
+    val refusedTrackHistory: List<RefusedTrackEntry>,
+    val rawNegotiatedBitDepth: Int = 0,
+    val isBitPerfectDirectPass: Boolean = false,
+    val isGaplessReady: Boolean = false
 )
 
 @Composable
@@ -47,7 +50,8 @@ fun rememberDacTelemetry(
     isPlaying: Boolean = false,
     isHardwareVolumeEnabled: Boolean = false,
     isHardwareVolumeActive: Boolean = false,
-    isPeqEnabled: Boolean = false
+    isPeqEnabled: Boolean = false,
+    isCompressorEnabled: Boolean = false
 ): DacTelemetryState {
     var uacVersion by remember { mutableIntStateOf(0) }
     var claimedInterfaces by remember { mutableStateOf("") }
@@ -65,6 +69,9 @@ fun rememberDacTelemetry(
     var supportedBitDepths by remember { mutableStateOf("") }
     var supportedSampleRates by remember { mutableStateOf("") }
     var refusedTrackHistory by remember { mutableStateOf<List<RefusedTrackEntry>>(emptyList()) }
+    var rawNegotiatedBitDepth by remember { mutableIntStateOf(0) }
+    var isBitPerfectDirectPass by remember { mutableStateOf(false) }
+    var isGaplessReady by remember { mutableStateOf(false) }
 
     LaunchedEffect(isDacConnected) {
         if (isDacConnected) {
@@ -78,19 +85,24 @@ fun rememberDacTelemetry(
                 val rawNegBit = audioEngine.getNegotiatedBitDepth()
                 val rawRate = audioEngine.getSampleRate()
                 val rawSrcBit = audioEngine.getSourceBitDepth().takeIf { it > 0 } ?: (currentTrack?.bitDepth ?: 0)
+                val nativeBitPerfect = audioEngine.isBitPerfectIntegerPassActive()
                 val effOutBit = resolveEffectiveOutputBitDepth(
                     sourceBitDepth = rawSrcBit,
                     rawNegotiatedBitDepth = rawNegBit,
                     supportedBitDepths = supportedBitDepths,
                     isHardwareVolumeActive = isHardwareVolumeActive,
-                    isPeqEnabled = isPeqEnabled
+                    isPeqEnabled = isPeqEnabled,
+                    isCompressorEnabled = isCompressorEnabled,
+                    isPlaying = isPlaying
                 )
                 sourceBitDepth = rawSrcBit
                 sourceSampleRate = rawRate.takeIf { it > 0 } ?: (currentTrack?.sampleRateHz ?: 0)
+                rawNegotiatedBitDepth = rawNegBit
                 negotiatedBitDepth = effOutBit
                 negotiatedSampleRate = rawRate.takeIf { it > 0 } ?: (currentTrack?.sampleRateHz ?: 0)
                 outputBitDepth = effOutBit
                 outputSampleRate = negotiatedSampleRate
+                isBitPerfectDirectPass = nativeBitPerfect
             }
         } else {
             uacVersion = 0
@@ -101,6 +113,9 @@ fun rememberDacTelemetry(
             sourceBitDepth = 0
             outputBitDepth = 0
             outputSampleRate = 0
+            rawNegotiatedBitDepth = 0
+            isBitPerfectDirectPass = false
+            isGaplessReady = false
             supportedBitDepths = ""
             supportedSampleRates = ""
             refusedTrackHistory = emptyList()
@@ -119,6 +134,7 @@ fun rememberDacTelemetry(
         isHardwareVolumeEnabled,
         isHardwareVolumeActive,
         isPeqEnabled,
+        isCompressorEnabled,
         supportedBitDepths
     ) {
         if (isDacConnected) {
@@ -126,6 +142,7 @@ fun rememberDacTelemetry(
                 val rawRate = audioEngine.getSampleRate()
                 val rawNegBit = audioEngine.getNegotiatedBitDepth()
                 val rawSrcBit = audioEngine.getSourceBitDepth()
+                val nativeBitPerfect = audioEngine.isBitPerfectIntegerPassActive()
                 val effectiveSrcBit = if (rawSrcBit > 0) rawSrcBit else (currentTrack?.bitDepth ?: 0)
                 val effectiveRate = if (rawRate > 0) rawRate else (currentTrack?.sampleRateHz ?: 0)
                 val effectiveOutBit = resolveEffectiveOutputBitDepth(
@@ -133,38 +150,52 @@ fun rememberDacTelemetry(
                     rawNegotiatedBitDepth = rawNegBit,
                     supportedBitDepths = supportedBitDepths,
                     isHardwareVolumeActive = isHardwareVolumeActive,
-                    isPeqEnabled = isPeqEnabled
+                    isPeqEnabled = isPeqEnabled,
+                    isCompressorEnabled = isCompressorEnabled,
+                    isPlaying = isPlaying
                 )
                 val hwLocked = audioEngine.isHardwareVolumeLockedBySystem()
                 val forceSw = audioEngine.isForceSoftwareVolume()
 
                 sourceBitDepth = effectiveSrcBit
                 sourceSampleRate = effectiveRate
+                rawNegotiatedBitDepth = rawNegBit
                 negotiatedBitDepth = effectiveOutBit
                 negotiatedSampleRate = effectiveRate
                 outputBitDepth = effectiveOutBit
                 outputSampleRate = effectiveRate
+                isBitPerfectDirectPass = nativeBitPerfect
                 isHardwareVolumeLockedBySystem = hwLocked
                 isForceSoftwareVolume = forceSw
             }
         }
     }
 
-    LaunchedEffect(isDacConnected, isDiagnosticsOpen, isHardwareVolumeActive, isPeqEnabled) {
+    LaunchedEffect(isDacConnected, isDiagnosticsOpen, isHardwareVolumeActive, isPeqEnabled, isCompressorEnabled, isPlaying) {
         if (isDacConnected && isDiagnosticsOpen) {
             // Defer telemetry loop by 220ms so CyberBottomSheet entrance spring animation completes smoothly at 60/120 FPS
             delay(220L)
+            val snapFloats = FloatArray(LiveSignalPathSnapshot.FLOAT_ARRAY_SIZE)
+            val snapInts = IntArray(LiveSignalPathSnapshot.INT_ARRAY_SIZE)
             while (isDacConnected && isDiagnosticsOpen) {
                 withContext(Dispatchers.IO) {
                     val nSampleRate = audioEngine.getSampleRate().takeIf { it > 0 } ?: (currentTrack?.sampleRateHz ?: 0)
                     val nBitDepth = audioEngine.getNegotiatedBitDepth()
                     val sBitDepth = audioEngine.getSourceBitDepth().takeIf { it > 0 } ?: (currentTrack?.bitDepth ?: 0)
+                    val nativeBitPerfect = audioEngine.isBitPerfectIntegerPassActive()
+                    val gaplessReady = if (audioEngine.readLiveSignalPathSnapshot(snapFloats, snapInts)) {
+                        (snapInts[0] and LiveSignalPathSnapshot.FLAG_HAS_NEXT_TRACK) != 0
+                    } else {
+                        false
+                    }
                     val effOutBit = resolveEffectiveOutputBitDepth(
                         sourceBitDepth = sBitDepth,
                         rawNegotiatedBitDepth = nBitDepth,
                         supportedBitDepths = supportedBitDepths,
                         isHardwareVolumeActive = isHardwareVolumeActive,
-                        isPeqEnabled = isPeqEnabled
+                        isPeqEnabled = isPeqEnabled,
+                        isCompressorEnabled = isCompressorEnabled,
+                        isPlaying = isPlaying
                     )
                     val errCount = audioEngine.getRecentErrorCount()
                     val unverified = audioEngine.isSampleRateUnverified()
@@ -193,12 +224,15 @@ fun rememberDacTelemetry(
                         emptyList<RefusedTrackEntry>()
                     }
 
+                    rawNegotiatedBitDepth = nBitDepth
                     negotiatedSampleRate = nSampleRate
                     negotiatedBitDepth = effOutBit
                     sourceSampleRate = nSampleRate
                     sourceBitDepth = sBitDepth
                     outputBitDepth = effOutBit
                     outputSampleRate = nSampleRate
+                    isBitPerfectDirectPass = nativeBitPerfect
+                    isGaplessReady = gaplessReady
                     recentErrorCount = errCount
                     isSampleRateUnverified = unverified
                     isDeviceWedged = wedged
@@ -225,7 +259,10 @@ fun rememberDacTelemetry(
         isForceSoftwareVolume,
         supportedBitDepths,
         supportedSampleRates,
-        refusedTrackHistory
+        refusedTrackHistory,
+        rawNegotiatedBitDepth,
+        isBitPerfectDirectPass,
+        isGaplessReady
     ) {
         DacTelemetryState(
             uacVersion = uacVersion,
@@ -243,7 +280,10 @@ fun rememberDacTelemetry(
             isForceSoftwareVolume = isForceSoftwareVolume,
             supportedBitDepths = supportedBitDepths,
             supportedSampleRates = supportedSampleRates,
-            refusedTrackHistory = refusedTrackHistory
+            refusedTrackHistory = refusedTrackHistory,
+            rawNegotiatedBitDepth = rawNegotiatedBitDepth,
+            isBitPerfectDirectPass = isBitPerfectDirectPass,
+            isGaplessReady = isGaplessReady
         )
     }
 }

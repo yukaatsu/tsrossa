@@ -81,7 +81,8 @@ fun rememberDacVolumeState(
     audioEngine: AudioEngine,
     sharedPref: SharedPreferences,
     isDacConnected: Boolean,
-    isPeqEnabled: Boolean
+    isPeqEnabled: Boolean,
+    isCompressorEnabled: Boolean = false
 ): DacVolumeState {
     val coroutineScope = rememberCoroutineScope()
 
@@ -149,10 +150,15 @@ fun rememberDacVolumeState(
     }
     state.applyVolumeModeAtomic = applyVolumeModeAtomic
 
-    val onToggleHardwareVolume: (Boolean) -> Unit = remember(isPeqEnabled, applyVolumeModeAtomic) {
+    val onToggleHardwareVolume: (Boolean) -> Unit = remember(isPeqEnabled, isCompressorEnabled, applyVolumeModeAtomic) {
         { enabled ->
-            if (enabled && isPeqEnabled) {
-                state.peqDspNoticeMessage = "Hardware UAC mode cannot be enabled while Parametric Equalizer (PEQ) is active. Turn off PEQ first in the DSP menu to use Hardware UAC."
+            if (enabled && (isPeqEnabled || isCompressorEnabled)) {
+                val activeModule = when {
+                    isPeqEnabled && isCompressorEnabled -> "Parametric EQ and Dynamics Compressor are"
+                    isCompressorEnabled -> "Dynamics Compressor is"
+                    else -> "Parametric Equalizer (PEQ) is"
+                }
+                state.peqDspNoticeMessage = "Hardware UAC mode cannot be enabled while $activeModule active. Turn off active DSP modules first in the Audio DSP menu to use Hardware UAC."
                 state.showPeqDspNoticeDialog = true
             } else {
                 applyVolumeModeAtomic(enabled)

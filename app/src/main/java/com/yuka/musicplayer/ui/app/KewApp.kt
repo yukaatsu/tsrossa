@@ -64,6 +64,9 @@ import com.yuka.musicplayer.audio.AudioPlayerManager
 import com.yuka.musicplayer.audio.PeqConfiguration
 import com.yuka.musicplayer.audio.PeqPreferencesHelper
 import com.yuka.musicplayer.audio.UserPeqPreset
+import com.yuka.musicplayer.audio.compressor.CompressorConfig
+import com.yuka.musicplayer.audio.compressor.CompressorPreferencesHelper
+import com.yuka.musicplayer.audio.compressor.SavedCustomCompressorProfile
 import com.yuka.musicplayer.audio.rememberDacVolumeState
 import com.yuka.musicplayer.core.prefs.AppPreferences
 import com.yuka.musicplayer.model.LibrarySortMode
@@ -147,10 +150,17 @@ fun KewApp(audioEngine: AudioEngine) {
     var userPeqPresets by remember {
         mutableStateOf(PeqPreferencesHelper.loadUserPresets(sharedPref))
     }
+    var compressorConfig by remember {
+        mutableStateOf(CompressorPreferencesHelper.load(sharedPref))
+    }
+    var savedCustomCompressorProfile by remember {
+        mutableStateOf(CompressorPreferencesHelper.loadSavedCustomProfile(sharedPref))
+    }
 
     LaunchedEffect(Unit) {
         AudioEngine.applyBufferProfile(usbBufferProfile)
         PeqPreferencesHelper.applyToEngine(audioEngine, peqConfig)
+        CompressorPreferencesHelper.applyToEngine(audioEngine, compressorConfig)
     }
 
     val permState = rememberAppPermissionState(context)
@@ -271,6 +281,9 @@ fun KewApp(audioEngine: AudioEngine) {
     var selectedTracksForPlaylist by remember { mutableStateOf<List<File>>(emptyList()) }
     var settingsInitialSubPage by remember { mutableStateOf(SettingsSubPage.ROOT) }
     var showPeqModal by remember { mutableStateOf(false) }
+    var showSignalPathModal by remember { mutableStateOf(false) }
+    var showVolumeModal by remember { mutableStateOf(false) }
+    var pendingImportPeqEnableConfig by remember { mutableStateOf<PeqConfiguration?>(null) }
     var pendingDeleteFiles by remember { mutableStateOf<List<File>>(emptyList()) }
     var handleTracksDeletedRef by remember { mutableStateOf<((List<File>) -> Unit)?>(null) }
 
@@ -363,7 +376,8 @@ fun KewApp(audioEngine: AudioEngine) {
         audioEngine = audioEngine,
         sharedPref = sharedPref,
         isDacConnected = isDacConnected,
-        isPeqEnabled = peqConfig.enabled
+        isPeqEnabled = peqConfig.enabled,
+        isCompressorEnabled = compressorConfig.enabled
     )
 
     // Playback State Holder
@@ -442,10 +456,21 @@ fun KewApp(audioEngine: AudioEngine) {
                         autoPreampEnabled = active.autoPreampEnabled,
                         bands = active.bands
                     )
-                    dacVolume.notifyPeqDspModeSwitched()
-                    peqConfig = updatedConfig
-                    PeqPreferencesHelper.save(sharedPref, updatedConfig)
-                    PeqPreferencesHelper.applyToEngine(audioEngine, updatedConfig)
+                    if (shouldPromptPeqDspSwitch(
+                            wasPeqEnabled = peqConfig.enabled,
+                            willEnablePeq = true,
+                            isHardwareVolumeEnabled = dacVolume.isHardwareVolumeEnabled
+                        )
+                    ) {
+                        val savedOffConfig = updatedConfig.copy(enabled = false)
+                        peqConfig = savedOffConfig
+                        PeqPreferencesHelper.save(sharedPref, savedOffConfig)
+                        pendingImportPeqEnableConfig = updatedConfig
+                    } else {
+                        peqConfig = updatedConfig
+                        PeqPreferencesHelper.save(sharedPref, updatedConfig)
+                        PeqPreferencesHelper.applyToEngine(audioEngine, updatedConfig)
+                    }
                     Toast.makeText(context, "Imported ${newlyImported.size} preset(s) ('${active.name}')", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Unrecognized PEQ preset file format", Toast.LENGTH_SHORT).show()
@@ -562,7 +587,8 @@ fun KewApp(audioEngine: AudioEngine) {
         isPlaying = playbackState.isPlaying,
         isHardwareVolumeEnabled = dacVolume.isHardwareVolumeEnabled,
         isHardwareVolumeActive = dacVolume.isHardwareVolumeActive,
-        isPeqEnabled = peqConfig.enabled
+        isPeqEnabled = peqConfig.enabled,
+        isCompressorEnabled = compressorConfig.enabled
     )
 
     val currentDensity = LocalDensity.current
@@ -634,15 +660,26 @@ fun KewApp(audioEngine: AudioEngine) {
                 bgMode = bgMode,
                 coverArtBitmap = effectiveMainCoverBitmap
             ) {
-                val connectedDacName = remember(isDacConnected) {
+                val connectedDacIdentity = remember(isDacConnected) {
                     if (isDacConnected) {
                         try {
                             val info = org.json.JSONObject(audioEngine.getDacInfo())
-                            val name = info.optString("productName", "")
-                            if (name.isNotBlank()) name else "USB DAC"
+                            com.yuka.musicplayer.ui.diagnostics.ConnectedDacIdentity(
+                                productName = info.optString("productName", ""),
+                                manufacturerName = info.optString("manufacturerName", ""),
+                                vid = info.optInt("vid", 0),
+                                pid = info.optInt("pid", 0)
+                            )
                         } catch (_: Exception) {
-                            "USB DAC"
+                            com.yuka.musicplayer.ui.diagnostics.ConnectedDacIdentity(productName = "USB DAC")
                         }
+                    } else {
+                        com.yuka.musicplayer.ui.diagnostics.ConnectedDacIdentity()
+                    }
+                }
+                val connectedDacName = remember(isDacConnected, connectedDacIdentity) {
+                    if (isDacConnected) {
+                        connectedDacIdentity.productName.ifBlank { "USB DAC" }
                     } else {
                         ""
                     }
@@ -991,6 +1028,13 @@ fun KewApp(audioEngine: AudioEngine) {
                                 outputSampleRate = telemetry.outputSampleRate,
                                 isDacConnected = isDacConnected,
                                 isPeqActive = peqConfig.enabled,
+                                isCompressorActive = compressorConfig.enabled,
+                                isBitPerfectDirectPass = telemetry.isBitPerfectDirectPass,
+                                isSampleRateUnverified = telemetry.isSampleRateUnverified,
+                                isDeviceWedged = telemetry.isDeviceWedged,
+                                isHardwareVolumeLockedBySystem = telemetry.isHardwareVolumeLockedBySystem,
+                                onOpenSignalPath = { showSignalPathModal = true },
+                                onOpenVolumeModal = { showVolumeModal = true },
                                 onOpenPeq = { showPeqModal = true },
                                 onTogglePlay = playbackState.sharedOnTogglePlay,
                                 onVolumeChange = dacVolume.onVolumeChange,
@@ -1068,9 +1112,17 @@ fun KewApp(audioEngine: AudioEngine) {
                     modalActionHandler = modalActionHandler,
                     upcomingTracks = upcomingTracks,
                     isDacConnected = isDacConnected,
+                    dacIdentity = connectedDacIdentity,
                     showSystemLogs = showSystemLogs,
                     onDismissSystemLogs = { showSystemLogs = false },
                     onOpenSystemLogs = { showSystemLogs = true },
+                    showSignalPathModal = showSignalPathModal,
+                    onDismissSignalPathModal = { showSignalPathModal = false },
+                    showVolumeModal = showVolumeModal,
+                    onDismissVolumeModal = { showVolumeModal = false },
+                    onOpenVolumeModal = { showVolumeModal = true },
+                    pendingPeqEnableConfig = pendingImportPeqEnableConfig,
+                    onPendingPeqEnableConfigChange = { pendingImportPeqEnableConfig = it },
                     showHelpPanel = showHelpPanel,
                     onDismissHelpPanel = { showHelpPanel = false },
                     onOpenHelpPanel = { showHelpPanel = true },
@@ -1164,6 +1216,10 @@ fun KewApp(audioEngine: AudioEngine) {
                     onPeqConfigChange = { peqConfig = it },
                     userPeqPresets = userPeqPresets,
                     onUserPeqPresetsChange = { userPeqPresets = it },
+                    compressorConfig = compressorConfig,
+                    onCompressorConfigChange = { compressorConfig = it },
+                    savedCustomCompressorProfile = savedCustomCompressorProfile,
+                    onSavedCustomCompressorProfileChange = { savedCustomCompressorProfile = it },
                     onExportJsonFileRequest = { jsonContent, suggestedFileName ->
                         pendingPeqExportJson = jsonContent
                         exportPeqJsonLauncher.launch(suggestedFileName)

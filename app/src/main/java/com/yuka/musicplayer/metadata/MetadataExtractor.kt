@@ -130,7 +130,8 @@ fun extractMetadata(file: File): TrackInfo {
         channels = audioTags.channels,
         fileSizeBytes = file.length(),
         explicitCodec = codec,
-        explicitBitrateKbps = audioTags.bitrateKbps
+        explicitBitrateKbps = audioTags.bitrateKbps,
+        isFloatPcm = audioTags.isFloatPcm
     )
 }
 

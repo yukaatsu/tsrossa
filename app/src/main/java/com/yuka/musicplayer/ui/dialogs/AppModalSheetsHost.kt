@@ -7,6 +7,9 @@ import androidx.compose.ui.unit.dp
 import com.yuka.musicplayer.BuildConfig
 import com.yuka.musicplayer.audio.AudioEngine
 import com.yuka.musicplayer.audio.AudioPlayerManager
+import com.yuka.musicplayer.audio.PeqConfiguration
+import com.yuka.musicplayer.audio.UserPeqPreset
+import com.yuka.musicplayer.audio.compressor.CompressorConfig
 import com.yuka.musicplayer.model.PlaybackSource
 import com.yuka.musicplayer.model.RefusedTrackEntry
 import com.yuka.musicplayer.model.RepeatMode
@@ -39,11 +42,28 @@ fun AppModalSheetsHost(
     isDacConnected: Boolean,
     isPlaying: Boolean,
     telemetry: com.yuka.musicplayer.ui.diagnostics.DacTelemetryState,
+    dacIdentity: com.yuka.musicplayer.ui.diagnostics.ConnectedDacIdentity = com.yuka.musicplayer.ui.diagnostics.ConnectedDacIdentity(),
     isHardwareVolumeActive: Boolean = false,
+    isHardwareVolumeSupported: Boolean = false,
+    isHardwareVolumeEnabled: Boolean = false,
+    currentVolume: Float = 1.0f,
+    onVolumeChange: (Float) -> Unit = {},
+    onToggleHardwareVolume: ((Boolean) -> Unit)? = null,
     isPeqEnabled: Boolean = false,
+    isCompressorEnabled: Boolean = false,
+    peqConfig: PeqConfiguration = PeqConfiguration(),
+    userPeqPresets: List<UserPeqPreset> = emptyList(),
+    compressorConfig: CompressorConfig = CompressorConfig(),
+    usbBufferProfile: Int = 1,
     // Dialog visibility states
     showSystemLogs: Boolean,
     onDismissSystemLogs: () -> Unit,
+    onOpenSystemLogs: () -> Unit = {},
+    showSignalPathModal: Boolean = false,
+    onDismissSignalPathModal: () -> Unit = {},
+    showVolumeModal: Boolean = false,
+    onDismissVolumeModal: () -> Unit = {},
+    onOpenVolumeModal: () -> Unit = {},
     showHelpPanel: Boolean,
     onDismissHelpPanel: () -> Unit,
     showUpdatePanel: Boolean,
@@ -127,9 +147,50 @@ fun AppModalSheetsHost(
             refusedTrackHistory = telemetry.refusedTrackHistory,
             isHardwareVolumeActive = isHardwareVolumeActive,
             isPeqEnabled = isPeqEnabled,
+            isCompressorEnabled = isCompressorEnabled,
+            isBitPerfectDirectPass = telemetry.isBitPerfectDirectPass,
+            isGaplessReady = telemetry.isGaplessReady,
             onClose = onDismissSystemLogs
         )
     }
+
+    // 1.5. Interactive Signal Path Modal Sheet (Audio Info)
+    SignalPathModalSheet(
+        visible = showSignalPathModal,
+        track = currentTrack,
+        audioEngine = audioEngine,
+        telemetry = telemetry,
+        dacIdentity = dacIdentity,
+        isDacConnected = isDacConnected,
+        isPlaying = isPlaying,
+        currentVolume = currentVolume,
+        isHardwareVolumeActive = isHardwareVolumeActive,
+        peqConfig = peqConfig,
+        userPeqPresets = userPeqPresets,
+        compressorConfig = compressorConfig,
+        usbBufferProfile = usbBufferProfile,
+        onOpenVolumeModal = {
+            onDismissSignalPathModal()
+            onOpenVolumeModal()
+        },
+        onInspectRawLogs = {
+            onDismissSignalPathModal()
+            onOpenSystemLogs()
+        },
+        onDismissRequest = onDismissSignalPathModal
+    )
+
+    // 1.6. Hoisted Volume Control Modal Sheet
+    VolumeModalSheet(
+        visible = showVolumeModal,
+        currentVolume = currentVolume,
+        isHardwareVolumeActive = isHardwareVolumeActive,
+        isHardwareVolumeSupported = isHardwareVolumeSupported,
+        isHardwareVolumeEnabled = isHardwareVolumeEnabled,
+        onToggleHardwareVolume = onToggleHardwareVolume,
+        onVolumeChange = onVolumeChange,
+        onDismissRequest = onDismissVolumeModal
+    )
 
     // 2. Help Panel
     CyberBottomSheet(

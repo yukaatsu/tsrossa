@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -112,7 +113,7 @@ fun CyberBottomSheet(
         val accent = LocalAccentColor.current
         var isFullscreen by remember(wrapHeight) { mutableStateOf(!wrapHeight) }
 
-        val animatedDragOffset by animateFloatAsState(
+        val animatedDragOffsetState = animateFloatAsState(
             targetValue = dragOffsetY,
             animationSpec = spring(dampingRatio = 0.85f, stiffness = 500f),
             label = "sheetDragOffset"
@@ -204,7 +205,12 @@ fun CyberBottomSheet(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.40f * progress.value.coerceIn(0f, 1f)))
+                    .drawBehind {
+                        val scrimAlpha = 0.40f * progress.value.coerceIn(0f, 1f)
+                        if (scrimAlpha > 0.001f) {
+                            drawRect(Color.Black.copy(alpha = scrimAlpha))
+                        }
+                    }
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
@@ -226,7 +232,7 @@ fun CyberBottomSheet(
                         val p = progress.value.coerceIn(0f, 1.05f)
                         val sheetHeightPx = size.height.takeIf { it > 0f } ?: 1200f
                         val slideOffset = (1f - p) * sheetHeightPx
-                        translationY = (slideOffset + animatedDragOffset).coerceAtLeast(0f)
+                        translationY = (slideOffset + animatedDragOffsetState.value).coerceAtLeast(0f)
                         val scale = 0.94f + (0.06f * p.coerceIn(0f, 1f))
                         scaleX = scale
                         scaleY = scale

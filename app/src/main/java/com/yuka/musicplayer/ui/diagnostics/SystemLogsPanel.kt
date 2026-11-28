@@ -69,6 +69,9 @@ fun SystemLogsPanel(
     refusedTrackHistory: List<RefusedTrackEntry>,
     isHardwareVolumeActive: Boolean = false,
     isPeqEnabled: Boolean = false,
+    isCompressorEnabled: Boolean = false,
+    isBitPerfectDirectPass: Boolean = false,
+    isGaplessReady: Boolean = false,
     onClose: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -169,6 +172,11 @@ fun SystemLogsPanel(
                                 supportedBitDepths = supportedBitDepths,
                                 refusedTrackHistory = refusedTrackHistory,
                                 includeLogcat = true,
+                                isPeqEnabled = isPeqEnabled,
+                                isCompressorEnabled = isCompressorEnabled,
+                                isHardwareVolumeActive = isHardwareVolumeActive,
+                                isBitPerfectDirectPass = isBitPerfectDirectPass,
+                                isGaplessReady = isGaplessReady,
                                 appLogs = currentAppLogs,
                                 logcatLines = procLogcat,
                                 context = context
@@ -236,6 +244,11 @@ fun SystemLogsPanel(
                                 supportedBitDepths = supportedBitDepths,
                                 refusedTrackHistory = refusedTrackHistory,
                                 includeLogcat = true,
+                                isPeqEnabled = isPeqEnabled,
+                                isCompressorEnabled = isCompressorEnabled,
+                                isHardwareVolumeActive = isHardwareVolumeActive,
+                                isBitPerfectDirectPass = isBitPerfectDirectPass,
+                                isGaplessReady = isGaplessReady,
                                 logcatLines = procLogcat,
                                 context = context
                             )
@@ -419,19 +432,28 @@ fun SystemLogsPanel(
             // Section 3: Engine Configuration
             LogSectionHeader("ENGINE CONFIGURATION")
             LogItem("RAM Playback", "ACTIVE (Zero Jitter)", LocalAccentColor.current)
-            LogItem("Gapless Engine", "ACTIVE (Direct Handover)", LocalAccentColor.current)
+            LogItem(
+                "Gapless Engine",
+                if (isGaplessReady) "READY (Next Track Pre-Buffered)" else "IDLE (No Next Track Buffered)",
+                if (isGaplessReady) LocalAccentColor.current else TerminalGray
+            )
             LogItem(
                 "Volume Engine",
-                if (isHardwareVolumeActive) "32-BIT HARDWARE CHIP (UAC)" else "UNIVERSAL 64-BIT DSP",
+                if (isHardwareVolumeActive) {
+                    if (outputBitDepth > 0) "HYBRID HARDWARE UAC (${outputBitDepth}-BIT)" else "HYBRID HARDWARE UAC"
+                } else {
+                    "UNIVERSAL 64-BIT DSP"
+                },
                 LocalAccentColor.current
             )
             LogItem(
                 "DSP Pipeline",
-                when {
-                    isPeqEnabled -> "ACTIVE (64-Bit 10-Band PEQ)"
-                    !isHardwareVolumeActive -> "ACTIVE (64-Bit Float Gain)"
-                    else -> "BYPASSED (100% Bit-Perfect)"
-                },
+                resolveDspPipelineStatusLabel(
+                    isBitPerfectDirectPass = isBitPerfectDirectPass,
+                    isPeqEnabled = isPeqEnabled,
+                    isCompressorEnabled = isCompressorEnabled,
+                    isHardwareVolumeActive = isHardwareVolumeActive
+                ),
                 LocalAccentColor.current
             )
 

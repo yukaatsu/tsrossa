@@ -20,6 +20,26 @@
 
 void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer);
 
+// Offload synchronous EP0 libusb_clear_halt() off the real-time isoThread onto controlThread.
+static inline void request_endpoint_clear_halt_async(uint8_t ep) {
+  if (ep == 0 || g_audioState.usbHandle == nullptr) {
+    return;
+  }
+  if (g_audioState.clearHaltPending.exchange(true, std::memory_order_acq_rel)) {
+    return;
+  }
+  std::unique_lock<std::mutex> lock(g_controlMutex, std::try_to_lock);
+  if (lock.owns_lock()) {
+    ControlRequest req;
+    req.type = REQ_CLEAR_ENDPOINT_HALT;
+    req.endpoint = ep;
+    g_controlQueue.push(req);
+    g_controlCv.notify_one();
+  } else {
+    g_audioState.clearHaltPending.store(false, std::memory_order_release);
+  }
+}
+
 // NOTE (Batch 15 Control-Theory Invariant):
 // Tsrossa intentionally maintains a deep 160-192 ms OUT xHCI DMA queue (20-24 URBs x 64 uframes)
 // for rock-solid Android background/UI jitter immunity. Closing a proportional UAC2 explicit
@@ -127,7 +147,8 @@ bool start_iso_streaming_thread(const char *thread_name) {
     struct sched_param param;
     param.sched_priority = sched_get_priority_max(SCHED_FIFO);
     if (param.sched_priority > 2) param.sched_priority = 2; // Real-time audio priority
-    pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+    const int schedRc = pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+    g_audioState.isRtSchedFifoActive.store(schedRc == 0, std::memory_order_release);
 
     // 3. CPU Affinity: Include ALL online cores (or avoid restrictive mask) so cpuset transitions never strand the thread
     long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
@@ -157,8 +178,11 @@ bool start_iso_streaming_thread(const char *thread_name) {
     }
     int packet_size = g_audioState.maxPacketSize;
     if (packet_size <= 0) packet_size = 1024;
+    g_audioState.activeIsoPacketsPerTransfer.store(num_packets, std::memory_order_release);
     g_audioState.activeIsoTransfers.store(0);
-    g_audioState.consecutiveSilentFrames = 0;
+    g_audioState.clearHaltPending.store(false);
+    g_audioState.trackHardResetPending.store(true, std::memory_order_release);
+    g_audioState.dspPipeline.resetRuntimeState(g_audioState.sampleRate.load());
 
     uint32_t init_sr = g_audioState.sampleRate.load();
     if (init_sr == 0) init_sr = 44100;
@@ -173,6 +197,7 @@ bool start_iso_streaming_thread(const char *thread_name) {
 
     uint32_t init_rem_acc = 0;
     int first_sub_err = 0;
+    bool allMlocked = (num_transfers > 0);
 
     for (int i = 0; i < num_transfers; i++) {
       struct libusb_transfer *transfer = libusb_alloc_transfer(num_packets);
@@ -183,7 +208,11 @@ bool start_iso_streaming_thread(const char *thread_name) {
         memset(buffer, 0, num_packets * packet_size);
       }
       if (buffer) {
-        mlock(buffer, num_packets * packet_size);
+        if (mlock(buffer, num_packets * packet_size) != 0) {
+          allMlocked = false;
+        }
+      } else {
+        allMlocked = false;
       }
       libusb_fill_iso_transfer(transfer, g_audioState.usbHandle,
                                g_audioState.epAddress, buffer,
@@ -219,6 +248,7 @@ bool start_iso_streaming_thread(const char *thread_name) {
       }
     }
     g_audioState.iso_fixed_rem = init_rem_acc;
+    g_audioState.isMlockActive.store(allMlocked, std::memory_order_release);
 
     if (g_audioState.activeIsoTransfers.load() == 0) {
       for (auto *t : g_audioState.transfers) {
@@ -229,7 +259,15 @@ bool start_iso_streaming_thread(const char *thread_name) {
         libusb_free_transfer(t);
       }
       g_audioState.transfers.clear();
-      g_audioState.isoThreadExited.store(true);
+      g_audioState.isMlockActive.store(false, std::memory_order_release);
+    g_audioState.isRtSchedFifoActive.store(false, std::memory_order_release);
+    g_audioState.activeIsoPacketsPerTransfer.store(0, std::memory_order_release);
+    g_audioState.lastLimiterGainReductionDb.store(0.0f, std::memory_order_relaxed);
+    g_audioState.lastPeqEffective.store(false, std::memory_order_relaxed);
+    g_audioState.lastCompEffective.store(false, std::memory_order_relaxed);
+    g_audioState.bitPerfectDirectPassActive.store(false, std::memory_order_relaxed);
+
+    g_audioState.isoThreadExited.store(true);
       {
         std::lock_guard<std::mutex> lk(g_isoStartMutex);
         g_isoStartCv.notify_all();
@@ -316,6 +354,14 @@ bool start_iso_streaming_thread(const char *thread_name) {
       g_controlQueue.push(req);
       g_controlCv.notify_one();
     }
+
+    g_audioState.isMlockActive.store(false, std::memory_order_release);
+    g_audioState.isRtSchedFifoActive.store(false, std::memory_order_release);
+    g_audioState.activeIsoPacketsPerTransfer.store(0, std::memory_order_release);
+    g_audioState.lastLimiterGainReductionDb.store(0.0f, std::memory_order_relaxed);
+    g_audioState.lastPeqEffective.store(false, std::memory_order_relaxed);
+    g_audioState.lastCompEffective.store(false, std::memory_order_relaxed);
+    g_audioState.bitPerfectDirectPassActive.store(false, std::memory_order_relaxed);
 
     g_audioState.isoThreadExited.store(true);
     {
@@ -570,7 +616,7 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
 
     transfer_had_error = true;
     if (transfer->status == LIBUSB_TRANSFER_STALL) {
-      libusb_clear_halt(g_audioState.usbHandle, g_audioState.epAddress);
+      request_endpoint_clear_halt_async(g_audioState.epAddress);
     }
 
     uint64_t now = get_time_ms();
@@ -717,6 +763,43 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
       data_offset += bytes_to_send;
     }
   } else {
+  // Snapshot DSP state & volume ONCE per URB (125 Hz) instead of 64x/URB (8,000 Hz) -> 64x less RT overhead!
+  const uint32_t urb_channels = g_audioState.channels.load(std::memory_order_relaxed);
+  const int urb_sf_size = g_audioState.subframeSize.load(std::memory_order_relaxed);
+  const int urb_bit_res = g_audioState.negotiatedBitResolution.load(std::memory_order_relaxed);
+  const int urb_src_bits = g_audioState.sourceBitDepth.load(std::memory_order_relaxed);
+  const uint32_t active_sr = (sr > 0) ? sr : 48000U;
+
+  const bool urb_hw_vol_active = g_audioState.isHardwareVolumeActive.load(std::memory_order_acquire);
+  float raw_vol = g_audioState.rawLinearVolume.load(std::memory_order_relaxed);
+  float target_vol = 1.0f;
+  if (raw_vol <= 0.0f) {
+    target_vol = 0.0f;
+  } else if (raw_vol < 1.0f) {
+    float desired_db = compute_perceptual_db(raw_vol);
+    float hw_db = urb_hw_vol_active
+                      ? g_audioState.appliedHardwareDb.load(std::memory_order_relaxed)
+                      : 0.0f;
+    float residual_db = desired_db - hw_db;
+    target_vol = (residual_db < -0.05f) ? db_to_linear_gain(residual_db) : 1.0f;
+  }
+
+  bool urb_hard_reset = g_audioState.trackHardResetPending.exchange(false, std::memory_order_acq_rel);
+  bool urb_peq_reset = g_audioState.peqState.consumeStateResetIfPending();
+  bool urb_comp_reset = g_audioState.compressorState.consumeStateResetIfPending();
+  const bool urb_peq_enabled = !urb_hw_vol_active && g_audioState.peqState.enabled.load(std::memory_order_acquire);
+  const PeqCoeffBank urb_peq_bank = g_audioState.peqState.snapshotActiveBank();
+  const bool urb_comp_enabled = !urb_hw_vol_active && g_audioState.compressorState.enabled.load(std::memory_order_acquire);
+  const CompressorCoeffBank urb_comp_bank = g_audioState.compressorState.snapshotActiveBank();
+
+  double urb_cur_vol = static_cast<double>(g_audioState.currentVolume.load());
+  bool urb_bit_perfect = false;
+  float urb_comp_gain_db = 0.0f;
+  float urb_limiter_gr_db = 0.0f;
+  bool urb_peq_effective = false;
+  bool urb_comp_effective = false;
+  bool urb_processed_audio = false;
+
   for (int i = 0; i < num_packets; i++) {
     int audio_frames_to_send = static_cast<int>(base_frames);
     g_audioState.iso_fixed_rem += remainder_rate;
@@ -725,7 +808,7 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
       g_audioState.iso_fixed_rem -= usb_frames_per_sec;
     }
 
-    const int bytes_per_frame = g_audioState.channels.load() * g_audioState.subframeSize.load();
+    const int bytes_per_frame = static_cast<int>(urb_channels) * urb_sf_size;
     int bytes_to_send = audio_frames_to_send * bytes_per_frame;
     if (bytes_to_send > g_audioState.maxPacketSize && bytes_per_frame > 0) {
       // Round DOWN to an exact whole-frame multiple so stereo channels & MSB/LSB bytes NEVER misalign!
@@ -734,9 +817,9 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
     int bytes_filled = 0;
 
     // HARDWARE DAC WARMUP / PRE-ROLL ZERO-PADDING
-    uint32_t silenceRemaining = g_audioState.warmupSilenceFrames.load();
+    uint32_t silenceRemaining = g_audioState.warmupSilenceFrames.load(std::memory_order_relaxed);
     if (silenceRemaining > 0 && (g_audioState.isPlaying.load() || g_audioState.isWarmingUp.load())) {
-      int dst_bytes_per_frame = g_audioState.channels.load() * g_audioState.subframeSize.load();
+      int dst_bytes_per_frame = bytes_per_frame;
       if (dst_bytes_per_frame > 0) {
         int bytes_needed = bytes_to_send - bytes_filled;
         int frames_needed = bytes_needed / dst_bytes_per_frame;
@@ -756,10 +839,8 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
            !g_audioState.pcmBuffer.empty()) {
       size_t currentIndex = g_audioState.pcmIndex.load(std::memory_order_relaxed);
       size_t totalDecoded = g_audioState.decodedFrames.load(std::memory_order_acquire);
-      size_t src_bytes_per_frame =
-          g_audioState.channels.load() * sizeof(int32_t);
       size_t dst_bytes_per_frame =
-          g_audioState.channels.load() * g_audioState.subframeSize.load();
+          static_cast<size_t>(urb_channels) * static_cast<size_t>(urb_sf_size);
 
       size_t bytes_needed = bytes_to_send - bytes_filled;
       size_t frames_needed = bytes_needed / dst_bytes_per_frame;
@@ -786,250 +867,51 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
       }
 
       if (frames_to_read > 0) {
-        const size_t channels = g_audioState.channels.load(std::memory_order_relaxed);
-        const size_t num_samples = frames_to_read * channels;
-        const int sf_size = g_audioState.subframeSize.load(std::memory_order_relaxed);
-        const int bit_res = g_audioState.negotiatedBitResolution.load(std::memory_order_relaxed);
-        const uint32_t active_sr = (sr > 0) ? sr : 48000U;
-
-        float raw_vol = g_audioState.rawLinearVolume.load(std::memory_order_relaxed);
-        float target_vol = 1.0f;
-        if (raw_vol <= 0.0f) {
-          target_vol = 0.0f;
-        } else if (raw_vol < 1.0f) {
-          float desired_db = compute_perceptual_db(raw_vol);
-          float hw_db = g_audioState.isHardwareVolumeActive.load(std::memory_order_relaxed)
-                            ? g_audioState.appliedHardwareDb.load(std::memory_order_relaxed)
-                            : 0.0f;
-          float residual_db = desired_db - hw_db;
-          target_vol = (residual_db < -0.05f) ? db_to_linear_gain(residual_db) : 1.0f;
-        }
-
-        // True 15ms linear click-free volume ramp (replaces Zeno's Paradox + per-frame atomic CAS!)
-        double cur_vol = static_cast<double>(g_audioState.currentVolume.load());
-        const double tgt_vol = static_cast<double>(target_vol);
-        const double max_step_per_frame = 1.0 / std::max(64.0, static_cast<double>(active_sr) * 0.015);
-        double vol_delta = 0.0;
-        if (std::abs(tgt_vol - cur_vol) > 0.00005) {
-          vol_delta = (tgt_vol > cur_vol) ? max_step_per_frame : -max_step_per_frame;
-        } else {
-          cur_vol = tgt_vol;
-        }
-
-        int32_t *src = g_audioState.pcmBuffer.data() + (bufFrame * channels);
+        int32_t *src = g_audioState.pcmBuffer.data() + (bufFrame * urb_channels);
         uint8_t *dst_bytes = (uint8_t *)(buffer + data_offset + bytes_filled);
 
-        // Lock-free atomic state reset (filter TDF-II + Stereo-Linked Lookahead Limiter) on RT thread
-        if (g_audioState.peqState.consumeStateResetIfPending()) {
-          g_audioState.peqState.resetFilterStates();
-          g_audioState.peqLimiter.reset(active_sr);
-          g_audioState.consecutiveSilentFrames = 0;
-        }
+        DspProcessParams dspParams;
+        dspParams.src = src;
+        dspParams.dstBytes = dst_bytes;
+        dspParams.frames = frames_to_read;
+        dspParams.channels = urb_channels;
+        dspParams.sampleRate = active_sr;
+        dspParams.subframeSize = urb_sf_size;
+        dspParams.bitResolution = urb_bit_res;
+        dspParams.sourceBitDepth = urb_src_bits;
+        dspParams.currentVolume = urb_cur_vol;
+        dspParams.targetVolume = static_cast<double>(target_vol);
+        dspParams.peqEnabled = urb_peq_enabled;
+        dspParams.compEnabled = urb_comp_enabled;
+        dspParams.forceStateReset = urb_hard_reset;
+        dspParams.peqForceStateReset = urb_peq_reset;
+        dspParams.compForceStateReset = urb_comp_reset;
+        urb_hard_reset = false;
+        urb_peq_reset = false;
+        urb_comp_reset = false;
 
-        const bool peq_enabled = g_audioState.peqState.enabled.load(std::memory_order_acquire);
-        // Copy small (~440 B) coefficient bank by value onto stack -> 100% immune to UI drag data race!
-        const PeqCoeffBank bank = g_audioState.peqState.snapshotActiveBank();
-        const bool peq_effectively_active = peq_enabled && bank.hasActiveFilter;
+        DspProcessResult dspResult;
+        g_audioState.dspPipeline.processBlock(
+            dspParams,
+            urb_peq_bank,
+            g_audioState.peqState.filterStates,
+            urb_comp_bank,
+            dspResult
+        );
 
-        // BIT-PERFECT BYPASS: Active if PEQ is OFF or Flat, and volume is at unity (1.0)
-        if (!peq_effectively_active && cur_vol >= 0.9999 && tgt_vol >= 0.9999 && vol_delta == 0.0) {
-          g_audioState.currentVolume.store(1.0f);
-          g_audioState.bitPerfectDirectPassActive.store(true, std::memory_order_relaxed);
-          const int src_bits = g_audioState.sourceBitDepth.load(std::memory_order_relaxed);
-          if (sf_size == 4) {
-            if (bit_res == 24 && src_bits > 24) {
-              for (size_t s = 0; s < num_samples; s++) {
-                int64_t val = (static_cast<int64_t>(src[s]) + 0x80LL) >> 8;
-                if (val > 8388607LL) val = 8388607LL;
-                if (val < -8388608LL) val = -8388608LL;
-                int32_t val32 = static_cast<int32_t>(static_cast<uint32_t>(static_cast<int32_t>(val)) << 8);
-                dst_bytes[s * 4]     = static_cast<uint8_t>(val32 & 0xFF);
-                dst_bytes[s * 4 + 1] = static_cast<uint8_t>((val32 >> 8) & 0xFF);
-                dst_bytes[s * 4 + 2] = static_cast<uint8_t>((val32 >> 16) & 0xFF);
-                dst_bytes[s * 4 + 3] = static_cast<uint8_t>((val32 >> 24) & 0xFF);
-              }
-            } else {
-              memcpy(dst_bytes, src, num_samples * sizeof(int32_t));
-            }
-          } else if (sf_size == 2) {
-            if (src_bits > 16) {
-              for (size_t s = 0; s < num_samples; s++) {
-                int64_t val = (static_cast<int64_t>(src[s]) + 0x8000LL) >> 16;
-                if (val > 32767LL) val = 32767LL;
-                if (val < -32768LL) val = -32768LL;
-                int32_t val16 = static_cast<int32_t>(val);
-                dst_bytes[s * 2]     = static_cast<uint8_t>(val16 & 0xFF);
-                dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
-              }
-            } else {
-              for (size_t s = 0; s < num_samples; s++) {
-                int32_t val16 = src[s] >> 16;
-                dst_bytes[s * 2]     = static_cast<uint8_t>(val16 & 0xFF);
-                dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
-              }
-            }
-          } else if (sf_size == 3) {
-            if (src_bits > 24) {
-              for (size_t s = 0; s < num_samples; s++) {
-                int64_t val = (static_cast<int64_t>(src[s]) + 0x80LL) >> 8;
-                if (val > 8388607LL) val = 8388607LL;
-                if (val < -8388608LL) val = -8388608LL;
-                int32_t val24 = static_cast<int32_t>(val);
-                dst_bytes[s * 3]     = static_cast<uint8_t>(val24 & 0xFF);
-                dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
-                dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
-              }
-            } else {
-              for (size_t s = 0; s < num_samples; s++) {
-                int32_t val24 = src[s] >> 8;
-                dst_bytes[s * 3]     = static_cast<uint8_t>(val24 & 0xFF);
-                dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
-                dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
-              }
-            }
-          }
-        } else {
-          g_audioState.bitPerfectDirectPassActive.store(false, std::memory_order_relaxed);
-          if (peq_effectively_active) {
-            g_audioState.peqLimiter.ensureSampleRate(active_sr);
-          }
-
-          const uint32_t chCount = static_cast<uint32_t>(std::min<size_t>(channels, static_cast<size_t>(kMaxPeqChannels)));
-          const bool need_24bit_quant_in_32 = (sf_size == 4 && bit_res == 24);
-          constexpr uint32_t kSilenceGateFrames = 64U; // ~1.45ms continuous digital silence before gating dither off
-
-          // FRAME-MAJOR 64-Bit Floating-Point DSP Loop (zero `% channels`, zero per-frame atomic CAS, 100% stereo-linked!)
-          for (size_t f = 0; f < frames_to_read; ++f) {
-            if (vol_delta != 0.0) {
-              cur_vol += vol_delta;
-              if ((vol_delta > 0.0 && cur_vol >= tgt_vol) ||
-                  (vol_delta < 0.0 && cur_vol <= tgt_vol)) {
-                cur_vol = tgt_vol;
-                vol_delta = 0.0;
-              }
-            }
-            const double frame_vol = std::max(0.0, std::min(1.0, cur_vol));
-            const size_t base_s = f * channels;
-
-            double frame_samples[kMaxPeqChannels];
-            bool frame_is_silent = true;
-
-            // 1. Preamp + 10-Band TDF-II Biquad Cascade + Frame-Locked Software Volume
-            for (uint32_t ch = 0; ch < chCount; ++ch) {
-              const int32_t raw_in = src[base_s + ch];
-              if (raw_in != 0) frame_is_silent = false;
-              double x = static_cast<double>(raw_in);
-
-              if (peq_effectively_active) {
-                x *= bank.preampLinear;
-                for (int b = 0; b < kNumPeqBands; ++b) {
-                  const BiquadCoeffs &c = bank.bands[b];
-                  if (!c.isIdentity) {
-                    BiquadState &st = g_audioState.peqState.filterStates[ch][b];
-                    const double y = c.b0 * x + st.z1;
-                    st.z1 = c.b1 * x - c.a1 * y + st.z2;
-                    st.z2 = c.b2 * x - c.a2 * y;
-                    x = y;
-                  }
-                }
-              }
-
-              const double scaled = x * frame_vol;
-              if (std::abs(scaled) >= 1.0) frame_is_silent = false;
-              frame_samples[ch] = scaled;
-            }
-
-            // 2. Stereo-Linked Smooth Lookahead Peak Limiter (-0.10 dBFS linear core, 0.000 dB ILD shift!)
-            if (peq_effectively_active) {
-              g_audioState.peqLimiter.processFrame(frame_samples, chCount);
-              for (uint32_t ch = 0; ch < chCount; ++ch) {
-                if (std::abs(frame_samples[ch]) >= 1.0) frame_is_silent = false;
-              }
-            }
-
-            // 3. Sustained Digital-Silence Dither Gate (eliminates zero-crossing dither pumping!)
-            if (frame_is_silent) {
-              if (g_audioState.consecutiveSilentFrames < kSilenceGateFrames) {
-                g_audioState.consecutiveSilentFrames++;
-              }
-            } else {
-              g_audioState.consecutiveSilentFrames = 0;
-            }
-            const bool apply_dither =
-                (g_audioState.consecutiveSilentFrames < kSilenceGateFrames) &&
-                (peq_effectively_active || (frame_vol < 0.9999 && frame_vol > 0.00001));
-
-            // 4. Exact 1.0x Lipshitz-Vanderkooy Decorrelated Stereo TPDF Dither & Bit-Resolution Quantization
-            for (uint32_t ch = 0; ch < chCount; ++ch) {
-              const size_t s = base_s + ch;
-              double scaled32 = frame_samples[ch];
-
-              if (sf_size == 4) {
-                if (need_24bit_quant_in_32) {
-                  // DAC declares bSubslotSize=4, bBitResolution=24: exact 24-bit 1.0-LSB TPDF + left-aligned << 8
-                  double scaled24 = scaled32 * (1.0 / 256.0);
-                  if (apply_dither) {
-                    scaled24 += fast_tpdf_dither(ch);
-                  }
-                  int64_t q24 = std::llrint(scaled24);
-                  if (q24 > 8388607LL) q24 = 8388607LL;
-                  if (q24 < -8388608LL) q24 = -8388608LL;
-                  int32_t val32 = static_cast<int32_t>(static_cast<uint32_t>(static_cast<int32_t>(q24)) << 8);
-                  dst_bytes[s * 4]     = static_cast<uint8_t>(val32 & 0xFF);
-                  dst_bytes[s * 4 + 1] = static_cast<uint8_t>((val32 >> 8) & 0xFF);
-                  dst_bytes[s * 4 + 2] = static_cast<uint8_t>((val32 >> 16) & 0xFF);
-                  dst_bytes[s * 4 + 3] = static_cast<uint8_t>((val32 >> 24) & 0xFF);
-                } else {
-                  // True 32-bit container: full 1.0-LSB TPDF at 24-bit Delta-Sigma modulator boundary (256.0 = -141.5 dBFS RMS)
-                  if (apply_dither) {
-                    scaled32 += fast_tpdf_dither(ch) * 256.0;
-                  }
-                  int64_t q32 = std::llrint(scaled32);
-                  if (q32 > 2147483647LL) q32 = 2147483647LL;
-                  if (q32 < -2147483648LL) q32 = -2147483648LL;
-                  int32_t val32 = static_cast<int32_t>(q32);
-                  dst_bytes[s * 4]     = static_cast<uint8_t>(val32 & 0xFF);
-                  dst_bytes[s * 4 + 1] = static_cast<uint8_t>((val32 >> 8) & 0xFF);
-                  dst_bytes[s * 4 + 2] = static_cast<uint8_t>((val32 >> 16) & 0xFF);
-                  dst_bytes[s * 4 + 3] = static_cast<uint8_t>((val32 >> 24) & 0xFF);
-                }
-              } else if (sf_size == 3) {
-                // 24-bit packed container: exact 1.0-LSB TPDF dither
-                double scaled24 = scaled32 * (1.0 / 256.0);
-                if (apply_dither) {
-                  scaled24 += fast_tpdf_dither(ch);
-                }
-                int64_t q24 = std::llrint(scaled24);
-                if (q24 > 8388607LL) q24 = 8388607LL;
-                if (q24 < -8388608LL) q24 = -8388608LL;
-                int32_t val24 = static_cast<int32_t>(q24);
-                dst_bytes[s * 3]     = static_cast<uint8_t>(val24 & 0xFF);
-                dst_bytes[s * 3 + 1] = static_cast<uint8_t>((val24 >> 8) & 0xFF);
-                dst_bytes[s * 3 + 2] = static_cast<uint8_t>((val24 >> 16) & 0xFF);
-              } else if (sf_size == 2) {
-                // 16-bit container: exact 1.0-LSB Lipshitz-Vanderkooy TPDF dither (fixes 0.5x half-dither HD3!)
-                double scaled16 = scaled32 * (1.0 / 65536.0);
-                if (apply_dither) {
-                  scaled16 += fast_tpdf_dither(ch);
-                }
-                int64_t q16 = std::llrint(scaled16);
-                if (q16 > 32767LL) q16 = 32767LL;
-                if (q16 < -32768LL) q16 = -32768LL;
-                int32_t val16 = static_cast<int32_t>(q16);
-                dst_bytes[s * 2]     = static_cast<uint8_t>(val16 & 0xFF);
-                dst_bytes[s * 2 + 1] = static_cast<uint8_t>((val16 >> 8) & 0xFF);
-              }
-            }
-          }
-          // Single atomic store per packet (zero per-frame CAS contention!)
-          g_audioState.currentVolume.store(static_cast<float>(cur_vol));
-        }
+        urb_cur_vol = dspResult.finalVolume;
+        urb_bit_perfect = dspResult.bitPerfectDirectPass;
+        urb_comp_gain_db = dspResult.compressorGainDb;
+        urb_limiter_gr_db = std::min(urb_limiter_gr_db, dspResult.limiterGainReductionDb);
+        urb_peq_effective = dspResult.peqEffective;
+        urb_comp_effective = dspResult.compEffective;
+        urb_processed_audio = true;
 
         uint64_t expectedPcmIdx = static_cast<uint64_t>(currentIndex);
         g_audioState.pcmIndex.compare_exchange_strong(
             expectedPcmIdx, expectedPcmIdx + frames_to_read,
             std::memory_order_release, std::memory_order_relaxed);
-        bytes_filled += frames_to_read * channels * sf_size;
+        bytes_filled += frames_to_read * urb_channels * urb_sf_size;
       }
 
       // Check for End-of-Track (or buffering)
@@ -1079,9 +961,13 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
           g_audioState.sampleRate.store(g_audioState.sampleRateNext.load());
           g_audioState.channels.store(g_audioState.channelsNext.load());
           g_audioState.sourceBitDepth.store(g_audioState.sourceBitDepthNext.load());
+          g_audioState.sourceIsFloatPcm.store(g_audioState.sourceIsFloatPcmNext.load(std::memory_order_relaxed), std::memory_order_release);
           g_audioState.hasNextTrack.store(false);
-          g_audioState.peqState.requestStateReset();
+          urb_hard_reset = true;
+          urb_peq_reset = true;
+          urb_comp_reset = true;
           g_audioState.peqState.updateCoefficients(g_audioState.sampleRate.load());
+          g_audioState.compressorState.updateCoefficients(g_audioState.sampleRate.load());
 
           uint64_t nextTotal = g_audioState.nextTotalFrames.load();
           uint64_t nextDecoded = g_audioState.nextDecodedFrames.load();
@@ -1141,12 +1027,31 @@ void LIBUSB_CALL iso_callback(struct libusb_transfer *transfer) {
     transfer->iso_packet_desc[i].length = bytes_to_send;
     data_offset += bytes_to_send;
   }
+
+  // Publish DSP telemetry & volume once per URB; preserve unconsumed reset flags if URB was all-silence/warmup
+  if (urb_processed_audio) {
+    g_audioState.currentVolume.store(static_cast<float>(urb_cur_vol));
+    g_audioState.bitPerfectDirectPassActive.store(urb_bit_perfect, std::memory_order_relaxed);
+    g_audioState.lastCompressorGainDb.store(urb_comp_gain_db, std::memory_order_relaxed);
+    g_audioState.lastLimiterGainReductionDb.store(urb_limiter_gr_db, std::memory_order_relaxed);
+    g_audioState.lastPeqEffective.store(urb_peq_effective, std::memory_order_relaxed);
+    g_audioState.lastCompEffective.store(urb_comp_effective, std::memory_order_relaxed);
+  }
+  if (urb_hard_reset) {
+    g_audioState.trackHardResetPending.store(true, std::memory_order_release);
+  }
+  if (urb_peq_reset) {
+    g_audioState.peqState.requestStateReset();
+  }
+  if (urb_comp_reset) {
+    g_audioState.compressorState.requestStateReset();
+  }
   }
 
   if (!g_audioState.stopIsoThread.load()) {
     int r = libusb_submit_transfer(transfer);
     if (r == LIBUSB_ERROR_PIPE) {
-      libusb_clear_halt(g_audioState.usbHandle, g_audioState.epAddress);
+      request_endpoint_clear_halt_async(g_audioState.epAddress);
       r = libusb_submit_transfer(transfer);
     }
     if (r == LIBUSB_ERROR_NO_DEVICE || r == LIBUSB_ERROR_NOT_FOUND) {
@@ -1237,6 +1142,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   uint32_t newSampleRate = 0;
   uint32_t newChannels = 0;
   uint32_t newSourceBitDepth = 0;
+  bool newSourceIsFloatPcm = false;
   uint64_t totalFrames = 0;
   size_t initialRead = 0;
 
@@ -1283,9 +1189,13 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       g_audioState.sampleRate.store(g_audioState.sampleRateNext.load());
       g_audioState.channels.store(g_audioState.channelsNext.load());
       g_audioState.sourceBitDepth.store(g_audioState.sourceBitDepthNext.load());
+      g_audioState.sourceIsFloatPcm.store(g_audioState.sourceIsFloatPcmNext.load(std::memory_order_relaxed), std::memory_order_release);
       g_audioState.hasNextTrack.store(false);
+      g_audioState.trackHardResetPending.store(true, std::memory_order_release);
       g_audioState.peqState.requestStateReset();
       g_audioState.peqState.updateCoefficients(g_audioState.sampleRate.load());
+      g_audioState.compressorState.requestStateReset();
+      g_audioState.compressorState.updateCoefficients(g_audioState.sampleRate.load());
       size_t handoverFrames = g_audioState.pcmBuffer.size() / g_audioState.channels.load();
       uint64_t handoverTotal = g_audioState.nextTotalFrames.load();
       uint64_t handoverDecoded = g_audioState.nextDecodedFrames.load();
@@ -1338,6 +1248,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       newSampleRate = g_audioState.sampleRateNext.load();
       newChannels = g_audioState.channelsNext.load();
       newSourceBitDepth = g_audioState.sourceBitDepthNext.load();
+      newSourceIsFloatPcm = g_audioState.sourceIsFloatPcmNext.load(std::memory_order_relaxed);
       totalFrames = g_audioState.nextTotalFrames.load();
       initialRead = g_audioState.nextDecodedFrames.load();
       if (totalFrames == 0) totalFrames = g_audioState.pcmBuffer.size() / (newChannels > 0 ? newChannels : 2);
@@ -1370,6 +1281,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
     newSampleRate = dec->sampleRate;
     newChannels = dec->channels;
     newSourceBitDepth = dec->bitsPerSample;
+    newSourceIsFloatPcm = dec->isFloatPcm;
     totalFrames = dec->totalPCMFrameCount;
     stop_and_join_decode_thread();
     {
@@ -1510,12 +1422,18 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
 
     if (iso_running_for_swap && g_audioState.isoThread != nullptr) {
       auto swap_start = std::chrono::steady_clock::now();
+      bool swap_ack_timeout = false;
       while (!g_audioState.isSwappingAck.load() && !g_audioState.stopIsoThread.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         if (std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - swap_start).count() > 120) {
+          swap_ack_timeout = true;
           break;
         }
+      }
+      if (swap_ack_timeout) {
+        LOGW("playAudio: isSwappingAck timeout (120ms); stopping isoThread cleanly before resizing pcmBuffer.");
+        stop_and_join_iso_thread("playAudio swap ack timeout");
       }
     }
 
@@ -1578,15 +1496,21 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   if (target_sf < 2) target_sf = 2;
   if (target_sf > 4) target_sf = 4;
 
+  const bool prefer_hw = g_audioState.preferHardwareVolume.load(std::memory_order_relaxed);
   const PeqCoeffBank peqSnap = g_audioState.peqState.snapshotActiveBank();
-  const bool peq_active = g_audioState.peqState.enabled.load(std::memory_order_relaxed) && peqSnap.hasActiveFilter;
-  const bool sw_vol_attenuating = !g_audioState.preferHardwareVolume.load(std::memory_order_relaxed) &&
+  const bool peq_active = !prefer_hw && g_audioState.peqState.enabled.load(std::memory_order_relaxed) && peqSnap.hasActiveFilter;
+  const CompressorCoeffBank compSnap = g_audioState.compressorState.snapshotActiveBank();
+  const bool comp_active = !prefer_hw && g_audioState.compressorState.enabled.load(std::memory_order_relaxed) && compSnap.hasActiveProcessing;
+  const bool sw_vol_attenuating = !prefer_hw &&
                                   (g_audioState.rawLinearVolume.load(std::memory_order_relaxed) < 0.999f);
-  const bool dsp_high_precision_alt = peq_active || sw_vol_attenuating;
+  const bool dsp_high_precision_alt = peq_active || comp_active || sw_vol_attenuating;
 
-  // Sync PEQ sample rate if necessary
+  // Sync PEQ & Dynamics Compressor sample rate if necessary
   if (peqSnap.sampleRate != newSampleRate) {
     g_audioState.peqState.updateCoefficients(newSampleRate);
+  }
+  if (compSnap.sampleRate != newSampleRate) {
+    g_audioState.compressorState.updateCoefficients(newSampleRate);
   }
 
   // Find optimal DAC container altsetting:
@@ -1661,8 +1585,12 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
   g_audioState.sampleRate.store(newSampleRate);
   g_audioState.channels.store(newChannels);
   g_audioState.sourceBitDepth.store(newSourceBitDepth);
+  g_audioState.sourceIsFloatPcm.store(newSourceIsFloatPcm, std::memory_order_release);
+  g_audioState.trackHardResetPending.store(true, std::memory_order_release);
   g_audioState.peqState.requestStateReset();
   g_audioState.peqState.updateCoefficients(newSampleRate);
+  g_audioState.compressorState.requestStateReset();
+  g_audioState.compressorState.updateCoefficients(newSampleRate);
 
   // === STEP 2: HARDWARE USB INTERFACE & CLOCK NEGOTIATION (STRICT ALSA UAC2 ORDER) ===
   if (g_audioState.usbHandle != nullptr && needs_reconfig) {
@@ -1856,7 +1784,7 @@ int play_audio_internal(const std::string &savedPath, jobject thiz, JNIEnv *env)
       g_audioState.usbAudioInterface = selected_alt.interface_num;
       g_audioState.epAddress = selected_alt.ep_out;
       g_audioState.epFeedback = selected_alt.ep_feedback;
-      g_audioState.isAsync = selected_alt.is_async;
+      g_audioState.isAsync.store(selected_alt.is_async, std::memory_order_release);
       g_audioState.epFeedbackBInterval = selected_alt.ep_feedback_bInterval;
       g_audioState.epFeedbackMaxPkt = selected_alt.ep_feedback_max_pkt;
       g_audioState.negotiatedBitResolution.store(selected_alt.bit_resolution);
@@ -2068,6 +1996,7 @@ bool prepare_next_track_internal(const std::string &path) {
   int channels = nextDecoder->channels;
   int sampleRate = nextDecoder->sampleRate;
   int bitsPerSample = nextDecoder->bitsPerSample;
+  bool isFloatPcm = nextDecoder->isFloatPcm;
   if (channels <= 0) channels = 2;
   
   // Partial pre-buffering up to MAX_NEXT_RING_BUFFER_BYTES (32 MB) without rejecting tracks > 32 MB
@@ -2139,6 +2068,7 @@ bool prepare_next_track_internal(const std::string &path) {
   g_audioState.sampleRateNext.store(sampleRate);
   g_audioState.channelsNext.store(channels);
   g_audioState.sourceBitDepthNext.store(bitsPerSample);
+  g_audioState.sourceIsFloatPcmNext.store(isFloatPcm, std::memory_order_release);
   g_audioState.nextTotalFrames.store(totalFrames);
   g_audioState.nextDecodedFrames.store(framesRead);
   g_audioState.nextPcmBufferCapacityFrames.store(targetCapacityFrames);
@@ -2164,6 +2094,7 @@ bool clear_next_track_internal() {
   g_audioState.sampleRateNext.store(0);
   g_audioState.channelsNext.store(0);
   g_audioState.sourceBitDepthNext.store(0);
+  g_audioState.sourceIsFloatPcmNext.store(false, std::memory_order_release);
   g_audioState.nextTotalFrames.store(0);
   g_audioState.nextDecodedFrames.store(0);
   g_audioState.nextPcmBufferCapacityFrames.store(0);
@@ -2239,7 +2170,9 @@ bool seek_to_internal(double targetSeconds) {
       // Fallback if activeDecoder is null but targetFrame is within decoded linear buffer
       g_audioState.pcmIndex.store(targetFrame, std::memory_order_release);
     }
+    g_audioState.trackHardResetPending.store(true, std::memory_order_release);
     g_audioState.peqState.requestStateReset();
+    g_audioState.compressorState.requestStateReset();
   }
 
   g_audioState.decoderCv.notify_one();
@@ -2293,7 +2226,7 @@ bool trigger_warmup_internal(int durationMs) {
     g_audioState.maxPacketSize = alt.max_packet_size;
     g_audioState.epAddress = alt.ep_out;
     g_audioState.epFeedback = alt.ep_feedback;
-    g_audioState.isAsync = alt.is_async;
+    g_audioState.isAsync.store(alt.is_async, std::memory_order_release);
     g_audioState.epFeedbackBInterval = alt.ep_feedback_bInterval;
     g_audioState.epFeedbackMaxPkt = alt.ep_feedback_max_pkt;
     g_audioState.usbAudioInterface = alt.interface_num;

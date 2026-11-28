@@ -191,6 +191,10 @@ public:
         currentGain = 1.0;
     }
 
+    inline int getLookaheadFrames() const { return lookaheadFrames; }
+
+    inline double getCurrentGain() const { return currentGain; }
+
     inline void ensureSampleRate(uint32_t sampleRate) {
         if (sampleRate > 0 && sampleRate != configuredSampleRate) {
             reset(sampleRate);
@@ -365,6 +369,52 @@ struct ParametricEqState {
             requestStateReset();
         }
         enabled.store(isEnabled, std::memory_order_release);
+    }
+
+    void setSingleBand(
+        int bandIndex,
+        float freqHz,
+        float gainDb,
+        float q,
+        int filterType,
+        bool isBandEnabled,
+        uint32_t currentSampleRate
+    ) {
+        if (bandIndex < 0 || bandIndex >= kNumPeqBands) return;
+        std::lock_guard<std::mutex> lock(coeffWriteMutex);
+        auto &p = bandParams[bandIndex];
+        p.freqHz = static_cast<double>(freqHz);
+        p.gainDb = static_cast<double>(gainDb);
+        p.q = static_cast<double>(q);
+        p.filterType = filterType;
+        p.enabled = isBandEnabled;
+        if (currentSampleRate > 0) {
+            updateCoefficientsLocked(currentSampleRate);
+        }
+    }
+
+    void setAllBands(
+        const float *freqs,
+        const float *gains,
+        const float *qs,
+        const int *types,
+        int count,
+        uint32_t currentSampleRate
+    ) {
+        if (!freqs || !gains || !qs || !types) return;
+        std::lock_guard<std::mutex> lock(coeffWriteMutex);
+        const int n = std::min(count, kNumPeqBands);
+        for (int i = 0; i < n; ++i) {
+            auto &p = bandParams[i];
+            p.freqHz = static_cast<double>(freqs[i]);
+            p.gainDb = static_cast<double>(gains[i]);
+            p.q = static_cast<double>(qs[i]);
+            p.filterType = types[i];
+            p.enabled = true;
+        }
+        if (currentSampleRate > 0) {
+            updateCoefficientsLocked(currentSampleRate);
+        }
     }
 
     void updateCoefficients(uint32_t targetSampleRate) {

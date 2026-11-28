@@ -1123,4 +1123,175 @@ class VolumeAndStreamingMathTest {
         val peakAfterExitFrame = pushAndQueryWindowPeak(0.0)
         assertEquals(0.0, peakAfterExitFrame, 0.0)
     }
+
+    // =========================================================================
+    // 13. Batch 16 DspPipeline Crossfade, 8-Ch TPDF, & Non-Blocking Clear-Halt
+    // =========================================================================
+
+    @Test
+    fun `dspPipeline crossfade pre-fills limiter lookahead and ramps wetMix linearly over 8ms with zero step jump`() {
+        val sr = 48000.0
+        val lookahead = 64
+        val crossfadeStep = 1.0 / kotlin.math.max(64.0, sr * 0.008) // 384 frames = 8 ms
+        var wetMix = 0.0
+        var prefillRemaining = 0
+        var prevActive = false
+
+        fun stepCrossfade(anyModuleActive: Boolean): Pair<Double, Boolean> {
+            if (anyModuleActive && !prevActive) {
+                prefillRemaining = lookahead
+                wetMix = 0.0
+            }
+            prevActive = anyModuleActive
+
+            val frameWetMix: Double
+            if (anyModuleActive) {
+                if (prefillRemaining > 0) {
+                    prefillRemaining--
+                    frameWetMix = 0.0
+                    wetMix = 0.0
+                } else if (wetMix < 1.0) {
+                    wetMix = kotlin.math.min(1.0, wetMix + crossfadeStep)
+                    frameWetMix = wetMix
+                } else {
+                    frameWetMix = 1.0
+                }
+            } else if (wetMix > 0.0 || prefillRemaining > 0) {
+                prefillRemaining = 0
+                wetMix = kotlin.math.max(0.0, wetMix - crossfadeStep)
+                frameWetMix = wetMix
+            } else {
+                frameWetMix = 0.0
+            }
+            val crossfadeActive = (!anyModuleActive && (wetMix > 0.0 || prefillRemaining > 0))
+            val canUseBitPerfect = !anyModuleActive && !crossfadeActive
+            return frameWetMix to canUseBitPerfect
+        }
+
+        // 1. Engage DSP ON: first 64 frames hold wetMix = 0.0 while limiter delayBuf fills
+        var lastWet = 0.0
+        repeat(lookahead) {
+            val (w, bp) = stepCrossfade(true)
+            assertEquals("During limiter pre-fill, wetMix must stay 0.0", 0.0, w, 0.0)
+            assertFalse(bp)
+        }
+        // Next 384 frames (8 ms): smooth monotonic linear ramp 0 -> 1 without step jumps
+        repeat(384) {
+            val (w, bp) = stepCrossfade(true)
+            assertFalse(bp)
+            assertTrue("Step jump must stay <= crossfadeStep", (w - lastWet) <= crossfadeStep + 1e-9)
+            lastWet = w
+        }
+        assertEquals(1.0, lastWet, 1e-6)
+
+        // 2. Disengage DSP OFF: ramps smoothly down 1 -> 0 over 8 ms before re-entering Bit-Perfect direct pass
+        repeat(383) {
+            val (w, bp) = stepCrossfade(false)
+            assertTrue("Must remain >= 0 during ramp-out", w > 0.0)
+            assertFalse("Bit-Perfect direct pass MUST wait until wetMix reaches 0.0", bp)
+            assertTrue("Step jump must stay <= crossfadeStep", kotlin.math.abs(lastWet - w) <= crossfadeStep + 1e-9)
+            lastWet = w
+        }
+        val (wEnd, bpAtZero) = stepCrossfade(false)
+        assertEquals(0.0, wEnd, 1e-9)
+        assertTrue("Once wetMix hits 0.0, Bit-Perfect direct pass safely re-engages", bpAtZero)
+    }
+
+    @Test
+    fun `multiChannelTpdfDither produces 8 independent zero-mean decorrelated channels`() {
+        val kWeyl = longArrayOf(
+            -0x61c8864680b583ebL, // 0x9E3779B97F4A7C15
+            -0x2e4ab5cd2e6d12fdL, // 0xD1B54A32D192ED03
+            -0x6b2fb644ecceee15L, // 0x94D049BB133111EB
+            -0x40a7b892e31b1a47L, // 0xBF58476D1CE4E5B9
+            -0x24b0f46e8a51de9bL, // 0xDB4F0B9175AE2165
+            -0x5f89e29b87429bd1L, // 0xA0761D6478BD642F
+            -0x18fc812e5f4bd725L, // 0xE7037ED1A0B428DB
+            -0x7143950f6377391dL  // 0x8EBC6AF09C88C6E3
+        )
+        val states = longArrayOf(
+            -0x61c8864680b583ebL,
+            -0x40a7b892e31b1a47L,
+            0x243F6A8885A308D3L,
+            0x13198A2E03707344L,
+            -0x5bf0c7ddd660ce30L, // 0xA4093822299F31D0
+            0x082EFA98EC4E6C89L,
+            0x452821E638D01377L,
+            -0x41ab9930cb16f394L  // 0xBE5466CF34E90C6C
+        )
+
+        fun nextUniform(ch: Int): Double {
+            var z = states[ch] + kWeyl[ch]
+            states[ch] = z
+            z = (z xor (z ushr 30)) * -0x40a7b892e31b1a47L
+            z = (z xor (z ushr 27)) * -0x6b2fb644ecceee15L
+            z = z xor (z ushr 31)
+            return (z ushr 11).toDouble() * (1.0 / 9007199254740992.0)
+        }
+
+        val samplesPerCh = 4096
+        val channels = Array(8) { DoubleArray(samplesPerCh) }
+        for (i in 0 until samplesPerCh) {
+            for (ch in 0 until 8) {
+                val tpdf = nextUniform(ch) - nextUniform(ch)
+                assertTrue("TPDF dither must stay within [-1.0, +1.0)", tpdf >= -1.0 && tpdf < 1.0)
+                channels[ch][i] = tpdf
+            }
+        }
+        // Verify zero-mean and pairwise decorrelation between L(0), R(1), and ch2/ch3
+        for (ch in 0 until 8) {
+            val mean = channels[ch].average()
+            assertTrue("Channel $ch TPDF mean must be ~0, got $mean", kotlin.math.abs(mean) < 0.03)
+        }
+        for (a in 0 until 8) {
+            for (b in a + 1 until 8) {
+                var num = 0.0; var da = 0.0; var db = 0.0
+                for (i in 0 until samplesPerCh) {
+                    num += channels[a][i] * channels[b][i]
+                    da += channels[a][i] * channels[a][i]
+                    db += channels[b][i] * channels[b][i]
+                }
+                val corr = num / kotlin.math.sqrt(da * db)
+                assertTrue("Channels $a & $b must be decorrelated (|r| < 0.05), got $corr", kotlin.math.abs(corr) < 0.05)
+            }
+        }
+    }
+
+    @Test
+    fun `nonBlockingClearHalt deduplicates concurrent stall requests and resets pending flag on controlThread completion`() {
+        var clearHaltPending = false
+        val queuedEndpoints = mutableListOf<Int>()
+
+        fun requestClearHaltAsync(ep: Int, controlMutexAvailable: Boolean) {
+            if (ep == 0) return
+            if (clearHaltPending) return
+            clearHaltPending = true
+            if (controlMutexAvailable) {
+                queuedEndpoints.add(ep)
+            } else {
+                clearHaltPending = false
+            }
+        }
+
+        fun drainControlThread() {
+            while (queuedEndpoints.isNotEmpty()) {
+                queuedEndpoints.removeAt(0)
+                clearHaltPending = false
+            }
+        }
+
+        // Burst of 5 consecutive STALL/PIPE callbacks before controlThread drains -> only 1 queued
+        repeat(5) { requestClearHaltAsync(ep = 0x07, controlMutexAvailable = true) }
+        assertEquals(1, queuedEndpoints.size)
+        assertTrue(clearHaltPending)
+
+        // Control thread handles REQ_CLEAR_ENDPOINT_HALT and clears pending flag
+        drainControlThread()
+        assertFalse(clearHaltPending)
+        assertEquals(0, queuedEndpoints.size)
+
+        // New stall later can re-queue cleanly
+        requestClearHaltAsync(ep = 0x07, controlMutexAvailable = true)
+        assertEquals(1, queuedEndpoints.size)
+    }
 }

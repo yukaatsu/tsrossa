@@ -17,14 +17,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import com.yuka.musicplayer.ui.theme.LocalAccentColor
 import com.yuka.musicplayer.ui.theme.ModernSansFont
 import com.yuka.musicplayer.ui.theme.glassMorphic
@@ -83,8 +86,8 @@ fun LibraryFastScroller(
     val thumbHeightDp = 28.dp
     val thumbHeightPx = with(density) { thumbHeightDp.toPx() }
 
-    // Live scroll position calculation when not dragging (smooth sub-item + viewport-aware interpolation)
-    val derivedScrollProgress by remember(lazyListState, itemCount) {
+    // Live scroll position calculation when not dragging (deferred to Layout/Draw phase -> 0 recompositions/px!)
+    val derivedScrollProgressState = remember(lazyListState, itemCount) {
         derivedStateOf {
             val layoutInfo = lazyListState.layoutInfo
             val visibleItems = layoutInfo.visibleItemsInfo
@@ -106,14 +109,6 @@ fun LibraryFastScroller(
             )
         }
     }
-
-    // Evaluated inside LibraryFastScroller's isolated Composable scope so Compose 1.5.4
-    // reliably observes snapshot changes on every scroll frame without recomposing LazyColumn.
-    val activeProgress = if (isDragging) dragProgress else derivedScrollProgress
-    val maxScrollableDistancePx = (barHeightPx - thumbHeightPx).coerceAtLeast(0f)
-    val thumbOffsetPx = (activeProgress.coerceIn(0f, 1f) * maxScrollableDistancePx)
-        .coerceIn(0f, maxScrollableDistancePx)
-    val thumbOffsetDp = with(density) { thumbOffsetPx.toDp() }
 
     // Letter is ONLY evaluated when dragging, preventing recomposition storms during regular scroll
     val currentLetter by remember(letterProvider, isDragging, itemCount) {
@@ -171,27 +166,33 @@ fun LibraryFastScroller(
                 .background(m3SubtleFill(alpha = if (isDragging) 0.25f else 0.12f))
         )
 
-        // Active thumb pill (centered horizontally in 16.dp width, 6.dp wide)
+        // Active thumb pill (centered horizontally in 16.dp width, 6.dp wide) — translated on RenderThread!
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .offset(y = thumbOffsetDp)
+                .graphicsLayer {
+                    val p = if (isDragging) dragProgress else derivedScrollProgressState.value
+                    val maxDist = (barHeightPx - thumbHeightPx).coerceAtLeast(0f)
+                    translationY = (p.coerceIn(0f, 1f) * maxDist).coerceIn(0f, maxDist)
+                }
                 .size(width = 6.dp, height = thumbHeightDp)
                 .clip(RoundedCornerShape(3.dp))
                 .background(if (isDragging) accent else m3OnSurface().copy(alpha = 0.40f))
         )
 
-        // Floating Glassmorphic Letter Bubble following thumb position
+        // Floating Glassmorphic Letter Bubble following thumb position (Placement-phase offset)
         AnimatedVisibility(
             visible = isDragging && currentLetter.isNotEmpty(),
             enter = fadeIn() + scaleIn(),
             exit = fadeOut() + scaleOut(),
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset(
-                    x = (-46).dp,
-                    y = (thumbOffsetDp - 12.dp).coerceAtLeast(0.dp)
-                )
+                .offset {
+                    val p = if (isDragging) dragProgress else derivedScrollProgressState.value
+                    val maxDist = (barHeightPx - thumbHeightPx).coerceAtLeast(0f)
+                    val yPx = ((p.coerceIn(0f, 1f) * maxDist) - 12.dp.toPx()).coerceAtLeast(0f)
+                    IntOffset((-46).dp.roundToPx(), yPx.roundToInt())
+                }
         ) {
             Box(
                 modifier = Modifier

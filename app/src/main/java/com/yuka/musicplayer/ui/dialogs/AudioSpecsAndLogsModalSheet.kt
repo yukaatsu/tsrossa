@@ -43,6 +43,7 @@ fun AudioSpecsAndLogsModalSheet(
     visible: Boolean,
     track: TrackInfo,
     isHardwareVolumeActive: Boolean,
+    outputBitDepth: Int = 0,
     onDismissRequest: () -> Unit
 ) {
     val accent = LocalAccentColor.current
@@ -54,8 +55,12 @@ fun AudioSpecsAndLogsModalSheet(
         else String.format(Locale.US, "%.1f kHz (%d Hz)", track.sampleRateHz / 1000.0, track.sampleRateHz)
     }
 
-    val bitDepthStr = remember(track.bitDepth) {
-        if (track.bitDepth > 0) "${track.bitDepth}-bit" else "Standard PCM"
+    val bitDepthStr = remember(track.bitDepth, track.isFloatPcm) {
+        when {
+            track.bitDepth > 0 && track.isFloatPcm -> "${track.bitDepth}-bit Float"
+            track.bitDepth > 0 -> "${track.bitDepth}-bit"
+            else -> "Standard PCM"
+        }
     }
 
     val bitrateStr = remember(track.bitrateKbps) {
@@ -152,7 +157,11 @@ fun AudioSpecsAndLogsModalSheet(
                 SpecRow("File Size", fileSizeStr)
                 SpecRow(
                     "Volume & DSP Path",
-                    if (isHardwareVolumeActive) "32-Bit Hardware DAC Chip" else "64-Bit Bit-Perfect DSP"
+                    if (isHardwareVolumeActive) {
+                        if (outputBitDepth > 0) "Hybrid Hardware UAC (${outputBitDepth}-Bit)" else "Hybrid Hardware UAC"
+                    } else {
+                        "Universal 64-Bit DSP"
+                    }
                 )
                 SpecRow("Source File", track.file.name)
             }

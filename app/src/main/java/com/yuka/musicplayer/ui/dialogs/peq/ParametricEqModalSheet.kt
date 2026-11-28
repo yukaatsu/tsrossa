@@ -44,10 +44,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.yuka.musicplayer.audio.AudioEngine
 import com.yuka.musicplayer.audio.PeqConfiguration
 import com.yuka.musicplayer.audio.PeqEvaluator
 import com.yuka.musicplayer.audio.UserPeqPreset
+import com.yuka.musicplayer.audio.compressor.CompressorConfig
+import com.yuka.musicplayer.audio.compressor.SavedCustomCompressorProfile
 import com.yuka.musicplayer.ui.components.*
+import com.yuka.musicplayer.ui.dialogs.compressor.DynamicsCompressorTabContent
 import com.yuka.musicplayer.ui.theme.LocalAccentColor
 import com.yuka.musicplayer.ui.theme.LocalIsDarkTheme
 import com.yuka.musicplayer.ui.theme.ModernSansFont
@@ -65,7 +69,13 @@ fun ParametricEqModalSheet(
     visible: Boolean,
     config: PeqConfiguration,
     userPresets: List<UserPeqPreset> = emptyList(),
+    compressorConfig: CompressorConfig = CompressorConfig(),
+    savedCustomCompressorProfile: SavedCustomCompressorProfile? = null,
+    audioEngine: AudioEngine? = null,
     onConfigChange: (PeqConfiguration) -> Unit,
+    onCompressorConfigChange: (CompressorConfig) -> Unit = {},
+    onSaveCustomCompressorProfile: (String) -> Unit = {},
+    onDeleteCustomCompressorProfile: () -> Unit = {},
     onSaveUserPreset: (name: String, overwriteId: String?) -> Unit = { _, _ -> },
     onDeleteUserPreset: (presetId: String) -> Unit = {},
     onImportPresetsText: (rawText: String) -> Int = { 0 },
@@ -84,12 +94,14 @@ fun ParametricEqModalSheet(
         val isDark = LocalIsDarkTheme.current
         val onSurfaceColor = m3OnSurface()
         val isEqEnabled = config.enabled
+        val isAnyDspActive = config.enabled || compressorConfig.enabled
         val disabledGrey = m3OnSurfaceVariant().copy(alpha = 0.42f)
         val effectiveAccent = if (isEqEnabled) accent else disabledGrey
         val sectionAlpha = if (isEqEnabled) 1.0f else 0.50f
         val subtleBorder = onSurfaceColor.copy(alpha = if (isDark) 0.08f else 0.14f)
         val subtleDivider = onSurfaceColor.copy(alpha = if (isDark) 0.08f else 0.12f)
 
+        var selectedStudioTab by remember { mutableIntStateOf(0) } // 0 = Parametric EQ, 1 = Dynamics
         var selectedBandIndex by remember { mutableIntStateOf(5) } // Default: 1 kHz Vocal Focus
         var showGuideCard by remember { mutableStateOf(false) }
         var showSavePresetCard by remember { mutableStateOf(false) }
@@ -117,7 +129,7 @@ fun ParametricEqModalSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // =====================================================================
-            // 1. CLEAN HEADER BAR & MASTER BYPASS SWITCH
+            // 1. UNIFIED AUDIO DSP STUDIO HEADER BAR & 2-TAB SELECTOR
             // =====================================================================
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -129,9 +141,12 @@ fun ParametricEqModalSheet(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        GlyphEqualizer(color = effectiveAccent, modifier = Modifier.size(22.dp))
+                        GlyphEqualizer(
+                            color = if (isAnyDspActive) accent else disabledGrey,
+                            modifier = Modifier.size(22.dp)
+                        )
                         Text(
-                            text = "Parametric EQ",
+                            text = "Audio DSP Studio",
                             color = onSurfaceColor,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
@@ -140,12 +155,13 @@ fun ParametricEqModalSheet(
                     }
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = if (isEqEnabled) {
-                            "ACTIVE • 64-BIT DSP • ZERO OS RESAMPLING"
-                        } else {
-                            "BYPASSED • 100% BIT-PERFECT DIRECT USB"
+                        text = when {
+                            config.enabled && compressorConfig.enabled -> "ACTIVE • PEQ + DYNAMICS • 64-BIT DSP"
+                            config.enabled -> "ACTIVE • 64-BIT PEQ • ZERO OS RESAMPLING"
+                            compressorConfig.enabled -> "ACTIVE • 64-BIT DYNAMICS • ZERO-CLIP"
+                            else -> "BYPASSED • 100% BIT-PERFECT DIRECT USB"
                         },
-                        color = if (isEqEnabled) accent else disabledGrey,
+                        color = if (isAnyDspActive) accent else disabledGrey,
                         fontSize = 10.5.sp,
                         fontFamily = TerminalFont,
                         fontWeight = FontWeight.SemiBold
@@ -156,50 +172,114 @@ fun ParametricEqModalSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(
-                                if (isEqEnabled) accent
-                                else m3SurfaceContainerHigh()
+                    if (selectedStudioTab == 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(
+                                    if (isEqEnabled) accent
+                                    else m3SurfaceContainerHigh()
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isEqEnabled) accent else onSurfaceColor.copy(alpha = 0.25f),
+                                    shape = RoundedCornerShape(50)
+                                )
+                                .clickable {
+                                    onConfigChange(config.copy(enabled = !config.enabled))
+                                }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (isEqEnabled) "PEQ ON" else "PEQ OFF",
+                                color = if (isEqEnabled) onAccent else onSurfaceColor,
+                                fontSize = 11.sp,
+                                fontFamily = TerminalFont,
+                                fontWeight = FontWeight.Bold
                             )
-                            .border(
-                                width = 1.dp,
-                                color = if (isEqEnabled) accent else onSurfaceColor.copy(alpha = 0.25f),
-                                shape = RoundedCornerShape(50)
+                        }
+
+                        Switch(
+                            checked = config.enabled,
+                            onCheckedChange = { isEnabled ->
+                                onConfigChange(config.copy(enabled = isEnabled))
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = onAccent,
+                                checkedTrackColor = accent,
+                                checkedBorderColor = accent,
+                                uncheckedThumbColor = onSurfaceColor.copy(alpha = 0.85f),
+                                uncheckedTrackColor = m3SurfaceContainerHigh(),
+                                uncheckedBorderColor = onSurfaceColor.copy(alpha = 0.28f)
                             )
-                            .clickable {
-                                onConfigChange(config.copy(enabled = !config.enabled))
-                            }
-                            .padding(horizontal = 10.dp, vertical = 5.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (isEqEnabled) "PEQ ON" else "PEQ OFF",
-                            color = if (isEqEnabled) onAccent else onSurfaceColor,
-                            fontSize = 11.sp,
-                            fontFamily = TerminalFont,
-                            fontWeight = FontWeight.Bold
                         )
                     }
-
-                    Switch(
-                        checked = config.enabled,
-                        onCheckedChange = { isEnabled ->
-                            onConfigChange(config.copy(enabled = isEnabled))
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = onAccent,
-                            checkedTrackColor = accent,
-                            checkedBorderColor = accent,
-                            uncheckedThumbColor = onSurfaceColor.copy(alpha = 0.85f),
-                            uncheckedTrackColor = m3SurfaceContainerHigh(),
-                            uncheckedBorderColor = onSurfaceColor.copy(alpha = 0.28f)
-                        )
-                    )
                     ModalCloseButton(onClick = onDismissRequest)
                 }
             }
+
+            // Segmented 2-Tab Bar: [ Parametric EQ ] | [ Dynamics ]
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(m3SurfaceContainerHigh())
+                    .border(1.dp, subtleBorder, RoundedCornerShape(12.dp))
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                listOf(
+                    Triple(0, "Parametric EQ", config.enabled),
+                    Triple(1, "Dynamics", compressorConfig.enabled)
+                ).forEach { (tabIdx, tabTitle, moduleOn) ->
+                    val isSelected = selectedStudioTab == tabIdx
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(if (isSelected) m3SurfaceContainerLow() else Color.Transparent)
+                            .border(
+                                width = if (isSelected) 1.dp else 0.dp,
+                                color = if (isSelected) accent.copy(alpha = 0.45f) else Color.Transparent,
+                                shape = RoundedCornerShape(9.dp)
+                            )
+                            .clickable { selectedStudioTab = tabIdx }
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (moduleOn) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(androidx.compose.foundation.shape.CircleShape)
+                                    .background(Color(0xFF00E676))
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Text(
+                            text = tabTitle,
+                            color = if (isSelected) onSurfaceColor else m3OnSurfaceVariant(),
+                            fontSize = 12.sp,
+                            fontFamily = ModernSansFont,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            if (selectedStudioTab == 1) {
+                DynamicsCompressorTabContent(
+                    visible = visible,
+                    config = compressorConfig,
+                    audioEngine = audioEngine,
+                    savedCustomProfile = savedCustomCompressorProfile,
+                    onConfigChange = onCompressorConfigChange,
+                    onSaveCustomProfile = onSaveCustomCompressorProfile,
+                    onDeleteCustomProfile = onDeleteCustomCompressorProfile
+                )
+            } else {
 
             // =====================================================================
             // 2. ERGONOMIC ACTION TOOLBAR (minHeight = 40.dp, 100% Phosphor Icons)
@@ -672,6 +752,7 @@ fun ParametricEqModalSheet(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+            } // end selectedStudioTab == 0
         }
     }
 }

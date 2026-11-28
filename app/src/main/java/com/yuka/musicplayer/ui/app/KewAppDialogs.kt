@@ -14,6 +14,10 @@ import com.yuka.musicplayer.audio.DacVolumeState
 import com.yuka.musicplayer.audio.PeqConfiguration
 import com.yuka.musicplayer.audio.PeqPreferencesHelper
 import com.yuka.musicplayer.audio.UserPeqPreset
+import com.yuka.musicplayer.audio.compressor.CompressorConfig
+import com.yuka.musicplayer.audio.compressor.CompressorPreferencesHelper
+import com.yuka.musicplayer.audio.compressor.CompressorPresets
+import com.yuka.musicplayer.audio.compressor.SavedCustomCompressorProfile
 import com.yuka.musicplayer.model.Playlist
 import com.yuka.musicplayer.model.ViewState
 import com.yuka.musicplayer.player.LibraryStateHolder
@@ -43,18 +47,23 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Pure helper determining whether enabling Parametric EQ (PEQ) must prompt the user
- * to switch from Hybrid Hardware UAC to Universal 64-Bit DSP.
- * Returns true ONLY when PEQ is transitioning from OFF -> ON AND Hybrid Hardware UAC mode is currently selected.
- * When Master Output Gain is already in Universal 64-Bit DSP mode (isHardwareVolumeEnabled == false), returns false.
+ * Pure helper determining whether enabling any DSP module (PEQ or Dynamics Compressor) must
+ * prompt the user to switch from Hybrid Hardware UAC to Universal 64-Bit DSP.
  */
+internal fun shouldPromptDspModeSwitch(
+    wasModuleEnabled: Boolean,
+    willEnableModule: Boolean,
+    isHardwareVolumeEnabled: Boolean
+): Boolean {
+    return !wasModuleEnabled && willEnableModule && isHardwareVolumeEnabled
+}
+
+/** Backwards-compatible alias kept for existing PEQ unit tests. */
 internal fun shouldPromptPeqDspSwitch(
     wasPeqEnabled: Boolean,
     willEnablePeq: Boolean,
     isHardwareVolumeEnabled: Boolean
-): Boolean {
-    return !wasPeqEnabled && willEnablePeq && isHardwareVolumeEnabled
-}
+): Boolean = shouldPromptDspModeSwitch(wasPeqEnabled, willEnablePeq, isHardwareVolumeEnabled)
 
 @Suppress("UNUSED_PARAMETER")
 @Composable
@@ -73,9 +82,17 @@ fun KewAppDialogs(
     modalActionHandler: AppModalActionHandler,
     upcomingTracks: List<File>,
     isDacConnected: Boolean = false,
+    dacIdentity: com.yuka.musicplayer.ui.diagnostics.ConnectedDacIdentity = com.yuka.musicplayer.ui.diagnostics.ConnectedDacIdentity(),
     showSystemLogs: Boolean,
     onDismissSystemLogs: () -> Unit,
     onOpenSystemLogs: () -> Unit = {},
+    showSignalPathModal: Boolean = false,
+    onDismissSignalPathModal: () -> Unit = {},
+    showVolumeModal: Boolean = false,
+    onDismissVolumeModal: () -> Unit = {},
+    onOpenVolumeModal: () -> Unit = {},
+    pendingPeqEnableConfig: PeqConfiguration? = null,
+    onPendingPeqEnableConfigChange: (PeqConfiguration?) -> Unit = {},
     showHelpPanel: Boolean,
     onDismissHelpPanel: () -> Unit,
     onOpenHelpPanel: () -> Unit = {},
@@ -139,6 +156,10 @@ fun KewAppDialogs(
     onPeqConfigChange: (PeqConfiguration) -> Unit,
     userPeqPresets: List<UserPeqPreset>,
     onUserPeqPresetsChange: (List<UserPeqPreset>) -> Unit,
+    compressorConfig: CompressorConfig = CompressorConfig(),
+    onCompressorConfigChange: (CompressorConfig) -> Unit = {},
+    savedCustomCompressorProfile: SavedCustomCompressorProfile? = null,
+    onSavedCustomCompressorProfileChange: (SavedCustomCompressorProfile?) -> Unit = {},
     onExportJsonFileRequest: (String, String) -> Unit,
     onImportJsonFileRequest: () -> Unit,
     bgMode: String,
@@ -195,10 +216,27 @@ fun KewAppDialogs(
         isDacConnected = isDacConnected,
         isPlaying = playbackState.isPlaying,
         telemetry = telemetry,
+        dacIdentity = dacIdentity,
         isHardwareVolumeActive = dacVolumeState.isHardwareVolumeActive,
+        isHardwareVolumeSupported = dacVolumeState.isHardwareVolumeSupported,
+        isHardwareVolumeEnabled = dacVolumeState.isHardwareVolumeEnabled,
+        currentVolume = dacVolumeState.currentVolume,
+        onVolumeChange = dacVolumeState.onVolumeChange,
+        onToggleHardwareVolume = dacVolumeState.onToggleHardwareVolume,
         isPeqEnabled = peqConfig.enabled,
+        isCompressorEnabled = compressorConfig.enabled,
+        peqConfig = peqConfig,
+        userPeqPresets = userPeqPresets,
+        compressorConfig = compressorConfig,
+        usbBufferProfile = usbBufferProfile,
         showSystemLogs = showSystemLogs,
         onDismissSystemLogs = onDismissSystemLogs,
+        onOpenSystemLogs = onOpenSystemLogs,
+        showSignalPathModal = showSignalPathModal,
+        onDismissSignalPathModal = onDismissSignalPathModal,
+        showVolumeModal = showVolumeModal,
+        onDismissVolumeModal = onDismissVolumeModal,
+        onOpenVolumeModal = onOpenVolumeModal,
         showHelpPanel = showHelpPanel,
         onDismissHelpPanel = onDismissHelpPanel,
         showUpdatePanel = welcomeModalState.showUpdatePanel,
@@ -392,6 +430,7 @@ fun KewAppDialogs(
             usbBufferProfile = usbBufferProfile,
             onUsbBufferProfileChange = onUsbBufferProfileChange,
             isPeqActive = peqConfig.enabled,
+            isCompressorActive = compressorConfig.enabled,
             onOpenPeq = {
                 onDismissSettingsModal()
                 onOpenPeqModal()
@@ -408,29 +447,75 @@ fun KewAppDialogs(
         )
     }
 
-    val pendingPeqEnableConfigState = androidx.compose.runtime.remember {
+    val localPendingPeqState = androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf<PeqConfiguration?>(null)
     }
+    val activePendingPeqConfig = pendingPeqEnableConfig ?: localPendingPeqState.value
+    val setPendingPeqConfig: (PeqConfiguration?) -> Unit = { cfg ->
+        localPendingPeqState.value = cfg
+        onPendingPeqEnableConfigChange(cfg)
+    }
+    val pendingCompEnableConfigState = androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<CompressorConfig?>(null)
+    }
 
-    // 5. Parametric Equalizer Modal Sheet
+    // 5. Audio DSP Studio Modal Sheet (2 Tabs: Parametric EQ | Dynamics)
     ParametricEqModalSheet(
         visible = showPeqModal,
         config = peqConfig,
         userPresets = userPeqPresets,
+        compressorConfig = compressorConfig,
+        savedCustomCompressorProfile = savedCustomCompressorProfile,
+        audioEngine = audioEngine,
         onConfigChange = { newConfig ->
-            if (shouldPromptPeqDspSwitch(
-                    wasPeqEnabled = peqConfig.enabled,
-                    willEnablePeq = newConfig.enabled,
+            if (shouldPromptDspModeSwitch(
+                    wasModuleEnabled = peqConfig.enabled,
+                    willEnableModule = newConfig.enabled,
                     isHardwareVolumeEnabled = dacVolumeState.isHardwareVolumeEnabled
                 )
             ) {
                 // Ask explicit Yes/No user consent to switch from Hybrid Hardware UAC -> Universal 64-Bit DSP
-                pendingPeqEnableConfigState.value = newConfig
+                setPendingPeqConfig(newConfig)
             } else {
                 onPeqConfigChange(newConfig)
                 PeqPreferencesHelper.save(sharedPref, newConfig)
                 PeqPreferencesHelper.applyToEngine(audioEngine, newConfig)
             }
+        },
+        onCompressorConfigChange = { newCompConfig ->
+            if (shouldPromptDspModeSwitch(
+                    wasModuleEnabled = compressorConfig.enabled,
+                    willEnableModule = newCompConfig.enabled,
+                    isHardwareVolumeEnabled = dacVolumeState.isHardwareVolumeEnabled
+                )
+            ) {
+                pendingCompEnableConfigState.value = newCompConfig
+            } else {
+                val clamped = newCompConfig.clamped()
+                onCompressorConfigChange(clamped)
+                CompressorPreferencesHelper.save(sharedPref, clamped)
+                CompressorPreferencesHelper.applyToEngine(audioEngine, clamped)
+            }
+        },
+        onSaveCustomCompressorProfile = { customName ->
+            val saved = CompressorPreferencesHelper.saveCustomProfile(
+                prefs = sharedPref,
+                name = customName,
+                config = compressorConfig
+            )
+            onSavedCustomCompressorProfileChange(saved)
+            val updatedActive = compressorConfig
+                .copy(selectedPresetId = CompressorPresets.CUSTOM_ID)
+                .clamped()
+            onCompressorConfigChange(updatedActive)
+            CompressorPreferencesHelper.save(sharedPref, updatedActive)
+            CompressorPreferencesHelper.applyToEngine(audioEngine, updatedActive)
+            Toast.makeText(context, "Custom Dynamics '${saved.name}' saved", Toast.LENGTH_SHORT).show()
+        },
+        onDeleteCustomCompressorProfile = {
+            CompressorPreferencesHelper.clearSavedCustomProfile(sharedPref)
+            onSavedCustomCompressorProfileChange(null)
+            Toast.makeText(context, "Saved Custom Dynamics profile cleared", Toast.LENGTH_SHORT).show()
         },
         onSaveUserPreset = { name, overwriteId ->
             val (updatedList, saved) = PeqPreferencesHelper.saveOrUpdateUserPreset(
@@ -477,7 +562,7 @@ fun KewAppDialogs(
                     val savedOffConfig = updatedConfig.copy(enabled = false)
                     onPeqConfigChange(savedOffConfig)
                     PeqPreferencesHelper.save(sharedPref, savedOffConfig)
-                    pendingPeqEnableConfigState.value = updatedConfig
+                    setPendingPeqConfig(updatedConfig)
                 } else {
                     onPeqConfigChange(updatedConfig)
                     PeqPreferencesHelper.save(sharedPref, updatedConfig)
@@ -497,15 +582,15 @@ fun KewAppDialogs(
 
     // 6a. PEQ Activation Consent Dialog (Yes / No to switch to Universal 64-Bit DSP)
     PeqDspSwitchNoticeDialog(
-        visible = pendingPeqEnableConfigState.value != null && dacVolumeState.isHardwareVolumeEnabled,
+        visible = activePendingPeqConfig != null && dacVolumeState.isHardwareVolumeEnabled,
         title = "Switch to Universal 64-Bit DSP?",
         subtitle = "Parametric EQ Activation Consent",
         message = "Enabling Parametric Equalizer (PEQ) will switch the audio output pipeline to Universal 64-Bit DSP mode so 10-band biquad filters can be processed with 64-bit floating-point precision.\n\nDo you want to switch to Universal 64-Bit DSP and enable PEQ?",
         confirmText = "Yes",
         cancelText = "No",
         onConfirm = {
-            val targetConfig = pendingPeqEnableConfigState.value
-            pendingPeqEnableConfigState.value = null
+            val targetConfig = activePendingPeqConfig
+            setPendingPeqConfig(null)
             if (targetConfig != null) {
                 dacVolumeState.applyVolumeModeAtomic(false)
                 onPeqConfigChange(targetConfig)
@@ -514,13 +599,39 @@ fun KewAppDialogs(
             }
         },
         onDismissRequest = {
-            pendingPeqEnableConfigState.value = null
+            setPendingPeqConfig(null)
         }
     )
 
-    // 6b. PEQ DSP Info Notice Dialog
+    // 6a-bis. Dynamics Compressor Activation Consent Dialog (Yes / No to switch to Universal 64-Bit DSP)
     PeqDspSwitchNoticeDialog(
-        visible = dacVolumeState.showPeqDspNoticeDialog && pendingPeqEnableConfigState.value == null,
+        visible = pendingCompEnableConfigState.value != null && dacVolumeState.isHardwareVolumeEnabled,
+        title = "Switch to Universal 64-Bit DSP?",
+        subtitle = "Dynamics Compressor Activation Consent",
+        message = "Enabling Dynamics Compressor will switch the audio output pipeline to Universal 64-Bit DSP mode so dual-slope dynamics and 64-bit lookahead limiting can run cleanly.\n\nDo you want to switch to Universal 64-Bit DSP and enable Dynamics?",
+        confirmText = "Yes",
+        cancelText = "No",
+        onConfirm = {
+            val targetConfig = pendingCompEnableConfigState.value
+            pendingCompEnableConfigState.value = null
+            if (targetConfig != null) {
+                val clamped = targetConfig.clamped()
+                dacVolumeState.applyVolumeModeAtomic(false)
+                onCompressorConfigChange(clamped)
+                CompressorPreferencesHelper.save(sharedPref, clamped)
+                CompressorPreferencesHelper.applyToEngine(audioEngine, clamped)
+            }
+        },
+        onDismissRequest = {
+            pendingCompEnableConfigState.value = null
+        }
+    )
+
+    // 6b. PEQ / DSP Info Notice Dialog
+    PeqDspSwitchNoticeDialog(
+        visible = dacVolumeState.showPeqDspNoticeDialog &&
+            activePendingPeqConfig == null &&
+            pendingCompEnableConfigState.value == null,
         message = dacVolumeState.peqDspNoticeMessage,
         onDismissRequest = { dacVolumeState.showPeqDspNoticeDialog = false }
     )

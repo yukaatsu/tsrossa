@@ -13,7 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
@@ -90,7 +90,7 @@ fun AppBackgroundContainer(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .drawBehind {
+                                .drawWithCache {
                                     val artworkScrimGradient = if (currentIsDark) {
                                         Brush.verticalGradient(
                                             0.00f to currentBaseLowest.copy(alpha = 0.54f),
@@ -114,8 +114,10 @@ fun AppBackgroundContainer(
                                         center = Offset(size.width * 0.5f, size.height * 0.24f),
                                         radius = size.width * 0.98f
                                     )
-                                    drawRect(artworkScrimGradient)
-                                    drawRect(tonalAccentGlow)
+                                    onDrawBehind {
+                                        drawRect(artworkScrimGradient)
+                                        drawRect(tonalAccentGlow)
+                                    }
                                 }
                         )
                     }
@@ -124,7 +126,7 @@ fun AppBackgroundContainer(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .drawBehind {
+                                .drawWithCache {
                                     val radialGlow = Brush.radialGradient(
                                         colors = listOf(currentAccent.copy(alpha = if (currentIsDark) 0.07f else 0.09f), Color.Transparent),
                                         center = Offset(size.width * 0.5f, size.height * 0.22f),
@@ -133,8 +135,10 @@ fun AppBackgroundContainer(
                                     val vertGradient = Brush.verticalGradient(
                                         colors = listOf(currentBaseLowest, currentBaseSurface, currentBaseLowest)
                                     )
-                                    drawRect(vertGradient)
-                                    drawRect(radialGlow)
+                                    onDrawBehind {
+                                        drawRect(vertGradient)
+                                        drawRect(radialGlow)
+                                    }
                                 }
                         )
                     }
@@ -143,14 +147,17 @@ fun AppBackgroundContainer(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .drawBehind {
+                                .drawWithCache {
                                     val radialGlow = Brush.radialGradient(
                                         colors = listOf(currentAccent.copy(alpha = if (currentIsDark) 0.05f else 0.07f), Color.Transparent),
                                         center = Offset(size.width * 0.5f, size.height * 0.22f),
                                         radius = size.width * 0.90f
                                     )
-                                    drawRect(currentOledOrLight)
-                                    drawRect(radialGlow)
+                                    val bgColor = currentOledOrLight
+                                    onDrawBehind {
+                                        drawRect(bgColor)
+                                        drawRect(radialGlow)
+                                    }
                                 }
                         )
                     }

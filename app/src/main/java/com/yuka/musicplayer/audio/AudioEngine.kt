@@ -156,6 +156,75 @@ class AudioEngine {
             }
             return null
         }
+
+        /**
+         * Pure-Kotlin mirror of C++ `DynamicsCompressor::computeStaticGainDb` & clamping bounds
+         * (used for real-time UI Transfer Curve Canvas and headless JVM verification).
+         */
+        @JvmStatic
+        fun evaluateCompressorStaticGainDb(
+            inDb: Double,
+            downThresholdDb: Double,
+            downRatio: Double,
+            upThresholdDb: Double,
+            upRatio: Double,
+            maxUpwardBoostDb: Double,
+            floorThresholdDb: Double,
+            kneeDb: Double,
+            makeupGainDb: Double = 0.0,
+            includeMakeup: Boolean = false
+        ): Double {
+            val downThresh = downThresholdDb.coerceIn(-40.0, 0.0)
+            val downRat = downRatio.coerceIn(1.0, 20.0)
+            val upThresh = upThresholdDb.coerceIn(-54.0, minOf(downThresh, -6.0))
+            val upRat = upRatio.coerceIn(1.0, 10.0)
+            val maxUp = maxUpwardBoostDb.coerceIn(0.0, 12.0)
+            val floorThresh = floorThresholdDb.coerceIn(-80.0, minOf(upThresh - 6.0, -30.0))
+            val knee = kneeDb.coerceIn(0.0, 12.0)
+            val makeup = makeupGainDb.coerceIn(-6.0, 12.0)
+
+            var downGainDb = 0.0
+            if (downRat > 1.001) {
+                val halfW = 0.5 * knee
+                val sd = 1.0 - (1.0 / downRat)
+                downGainDb = when {
+                    inDb <= downThresh - halfW -> 0.0
+                    inDb >= downThresh + halfW || knee <= 0.01 -> -(inDb - downThresh) * sd
+                    else -> {
+                        val u = inDb - downThresh + halfW
+                        -(sd * u * u) / (2.0 * knee)
+                    }
+                }
+            }
+
+            var upGainDb = 0.0
+            if (upRat > 1.001 && maxUp > 0.01) {
+                val halfW = 0.5 * knee
+                val su = 1.0 - (1.0 / upRat)
+                val upRawDb = when {
+                    inDb >= upThresh + halfW -> 0.0
+                    inDb <= upThresh - halfW || knee <= 0.01 -> (upThresh - inDb) * su
+                    else -> {
+                        val v = upThresh + halfW - inDb
+                        (su * v * v) / (2.0 * knee)
+                    }
+                }
+                val upCapped = minOf(upRawDb, maxUp)
+                val wg = 6.0
+                val gateFactor = when {
+                    inDb <= floorThresh -> 0.0
+                    inDb >= floorThresh + wg -> 1.0
+                    else -> {
+                        val t = (inDb - floorThresh) / wg
+                        t * t * (3.0 - 2.0 * t)
+                    }
+                }
+                upGainDb = upCapped * gateFactor
+            }
+
+            val baseGain = downGainDb + upGainDb
+            return if (includeMakeup) baseGain + makeup else baseGain
+        }
     }
 
 
@@ -219,6 +288,29 @@ class AudioEngine {
     external fun setPeqAllBands(freqsHz: FloatArray, gainsDb: FloatArray, qs: FloatArray, filterTypes: IntArray)
     external fun setPeqFullConfig(enabled: Boolean, preampDb: Float, freqsHz: FloatArray, gainsDb: FloatArray, qs: FloatArray, filterTypes: IntArray)
     external fun resetPeqState()
+
+    // Stereo-Linked Dual-Slope Dynamics Compressor (Direct USB C++ Engine)
+    external fun setCompressorFullConfig(
+        enabled: Boolean,
+        downThresholdDb: Float,
+        downRatio: Float,
+        upThresholdDb: Float,
+        upRatio: Float,
+        maxUpwardBoostDb: Float,
+        floorThresholdDb: Float,
+        kneeDb: Float,
+        attackMs: Float,
+        releaseMs: Float,
+        makeupGainDb: Float,
+        sidechainHpfHz: Float,
+        useRmsDetector: Boolean
+    )
+    external fun isCompressorEnabled(): Boolean
+    external fun resetCompressorState()
+    external fun getCompressorGainDb(): Float
+
+    // Batched Zero-Allocation Lock-Free Signal Path Snapshot (7 floats, 6 ints)
+    external fun readLiveSignalPathSnapshot(outFloats: FloatArray, outInts: IntArray): Boolean
 
     // C++ callback when track playback completes
     var onTrackFinishedCallback: (() -> Unit)? = null

@@ -31,6 +31,7 @@ fun PlaybackLaunchSection(
     usbBufferProfile: Int = 1,
     onUsbBufferProfileChange: (Int) -> Unit = {},
     isPeqActive: Boolean = false,
+    isCompressorActive: Boolean = false,
     onOpenPeq: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -114,15 +115,16 @@ fun PlaybackLaunchSection(
                 .padding(14.dp),
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
         ) {
+            val isAnyDspActive = isPeqActive || isCompressorActive
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     GlyphEqualizer(
-                        color = if (isPeqActive) Color(0xFF00E676) else com.yuka.musicplayer.ui.theme.m3OnSurface(),
+                        color = if (isAnyDspActive) Color(0xFF00E676) else com.yuka.musicplayer.ui.theme.m3OnSurface(),
                         modifier = Modifier.size(15.dp)
                     )
                     Spacer(modifier = Modifier.width(7.dp))
                     Text(
-                        text = "10-Band Parametric EQ",
+                        text = "Audio DSP Studio (PEQ & Dynamics)",
                         color = com.yuka.musicplayer.ui.theme.m3OnSurface(),
                         fontFamily = ModernSansFont,
                         fontSize = 13.sp,
@@ -131,8 +133,13 @@ fun PlaybackLaunchSection(
                 }
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
-                    text = if (isPeqActive) "Active (TDF-II 64-bit Direct Native)" else "Bypass (100% Bit-Perfect Audio)",
-                    color = if (isPeqActive) Color(0xFF00E676) else com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
+                    text = when {
+                        isPeqActive && isCompressorActive -> "Active (64-Bit PEQ + Dynamics)"
+                        isPeqActive -> "Active (TDF-II 64-Bit 10-Band PEQ)"
+                        isCompressorActive -> "Active (64-Bit Dynamics Compressor)"
+                        else -> "Bypass (100% Bit-Perfect Audio)"
+                    },
+                    color = if (isAnyDspActive) Color(0xFF00E676) else com.yuka.musicplayer.ui.theme.m3OnSurfaceVariant(),
                     fontFamily = ModernSansFont,
                     fontSize = 11.sp
                 )

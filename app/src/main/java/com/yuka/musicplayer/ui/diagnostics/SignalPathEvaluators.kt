@@ -118,8 +118,13 @@ fun resolveEffectiveOutputBitDepth(
     rawNegotiatedBitDepth: Int,
     supportedBitDepths: String,
     isHardwareVolumeActive: Boolean,
-    isPeqEnabled: Boolean
+    isPeqEnabled: Boolean,
+    isCompressorEnabled: Boolean = false,
+    isPlaying: Boolean = false
 ): Int {
+    if (isPlaying && rawNegotiatedBitDepth > 0) {
+        return rawNegotiatedBitDepth
+    }
     val supportedSet = supportedBitDepths
         .split(Regex("[,/|\\s]+"))
         .mapNotNull { token ->
@@ -131,7 +136,7 @@ fun resolveEffectiveOutputBitDepth(
     val effectiveSource = if (sourceBitDepth > 0) sourceBitDepth else rawNegotiatedBitDepth
     if (effectiveSource <= 0) return rawNegotiatedBitDepth
 
-    val usePureOneToOneNative = isHardwareVolumeActive && !isPeqEnabled
+    val usePureOneToOneNative = isHardwareVolumeActive && !isPeqEnabled && !isCompressorEnabled
     return if (usePureOneToOneNative) {
         when {
             supportedSet.contains(effectiveSource) -> effectiveSource
@@ -154,6 +159,22 @@ fun resolveEffectiveOutputBitDepth(
             rawNegotiatedBitDepth > effectiveSource -> rawNegotiatedBitDepth
             else -> effectiveSource
         }
+    }
+}
+
+fun resolveDspPipelineStatusLabel(
+    isBitPerfectDirectPass: Boolean,
+    isPeqEnabled: Boolean,
+    isCompressorEnabled: Boolean = false,
+    isHardwareVolumeActive: Boolean = false
+): String {
+    return when {
+        isPeqEnabled && isCompressorEnabled -> "ACTIVE (64-Bit PEQ + Dynamics)"
+        isPeqEnabled -> "ACTIVE (64-Bit 10-Band PEQ)"
+        isCompressorEnabled -> "ACTIVE (64-Bit Dynamics Compressor)"
+        isBitPerfectDirectPass -> "BYPASSED (100% Bit-Perfect)"
+        !isHardwareVolumeActive -> "ACTIVE (64-Bit Float Gain)"
+        else -> "BYPASSED (100% Bit-Perfect)"
     }
 }
 

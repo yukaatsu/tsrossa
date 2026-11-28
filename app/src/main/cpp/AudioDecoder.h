@@ -22,6 +22,7 @@ struct AudioDecoder {
   uint32_t channels = 0;
   uint32_t bitsPerSample = 0;
   uint64_t totalPCMFrameCount = 0;
+  bool isFloatPcm = false;
 
   AudioDecoder() {
     memset(&wav, 0, sizeof(wav));
@@ -53,6 +54,7 @@ struct AudioDecoder {
       channels = pFlac->channels;
       bitsPerSample = pFlac->bitsPerSample;
       totalPCMFrameCount = pFlac->totalPCMFrameCount;
+      isFloatPcm = false;
       return true;
     }
 
@@ -64,6 +66,7 @@ struct AudioDecoder {
       channels = wav.channels;
       bitsPerSample = wav.bitsPerSample;
       totalPCMFrameCount = wav.totalPCMFrameCount;
+      isFloatPcm = (wav.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT);
       return true;
     }
 
@@ -103,6 +106,7 @@ struct AudioDecoder {
     channels = 0;
     bitsPerSample = 0;
     totalPCMFrameCount = 0;
+    isFloatPcm = false;
   }
 
   ~AudioDecoder() {

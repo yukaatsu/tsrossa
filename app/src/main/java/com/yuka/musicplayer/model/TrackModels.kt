@@ -165,7 +165,8 @@ data class TrackInfo(
     val channels: Int = 2,
     val fileSizeBytes: Long = 0L,
     val explicitCodec: String? = null,
-    val explicitBitrateKbps: Int = 0
+    val explicitBitrateKbps: Int = 0,
+    val isFloatPcm: Boolean = false
 ) {
     val codec: String
         get() = explicitCodec ?: when (file.extension.lowercase()) {

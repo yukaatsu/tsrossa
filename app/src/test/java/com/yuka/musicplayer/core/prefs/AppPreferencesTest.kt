@@ -120,4 +120,33 @@ class AppPreferencesTest {
         assertFalse("Migration should return false when already unified", result)
         assertEquals("/storage/emulated/0/CurrentMusic", target.getString("music_root_directory", null))
     }
+
+    @Test
+    fun inPlaceUpdate_preservesUnifiedUserSettingsPeqAndDynamicsCustomProfile() {
+        val legacyPrefs = FakeSharedPreferences(
+            mutableMapOf(
+                AppPreferences.KEY_MUSIC_ROOT_DIRECTORY to "/storage/emulated/0/OldMusic",
+                "theme_mode" to "LIGHT"
+            )
+        )
+        val unifiedPrefs = FakeSharedPreferences(
+            mutableMapOf(
+                AppPreferences.KEY_PREFS_UNIFIED to true,
+                AppPreferences.KEY_MUSIC_ROOT_DIRECTORY to "/storage/emulated/0/HiResFLAC",
+                "theme_mode" to "DARK",
+                "peq_user_presets_json" to """[{"id":"u1","name":"My IEM"}]""",
+                "comp_saved_custom_profile_json" to """{"name":"Night Custom","downRatio":3.5}""",
+                "vol_dac_jcally_jm6_pro" to 0.62f
+            )
+        )
+
+        val migrated = AppPreferences.migrate(legacyPrefs, unifiedPrefs)
+
+        assertFalse("Already-unified prefs must not re-run legacy migration on app update", migrated)
+        assertEquals("/storage/emulated/0/HiResFLAC", unifiedPrefs.getString(AppPreferences.KEY_MUSIC_ROOT_DIRECTORY, null))
+        assertEquals("DARK", unifiedPrefs.getString("theme_mode", null))
+        assertEquals("""[{"id":"u1","name":"My IEM"}]""", unifiedPrefs.getString("peq_user_presets_json", null))
+        assertEquals("""{"name":"Night Custom","downRatio":3.5}""", unifiedPrefs.getString("comp_saved_custom_profile_json", null))
+        assertEquals(0.62f, unifiedPrefs.getFloat("vol_dac_jcally_jm6_pro", 0f), 1e-5f)
+    }
 }

@@ -74,6 +74,7 @@ fun SettingsView(
     usbBufferProfile: Int = 1,
     onUsbBufferProfileChange: (Int) -> Unit = {},
     isPeqActive: Boolean = false,
+    isCompressorActive: Boolean = false,
     onOpenPeq: () -> Unit = {},
     initialSubPage: SettingsSubPage = SettingsSubPage.ROOT,
     onBackFromRoot: () -> Unit = {},
@@ -303,6 +304,7 @@ fun SettingsView(
                             usbBufferProfile = usbBufferProfile,
                             onUsbBufferProfileChange = onUsbBufferProfileChange,
                             isPeqActive = isPeqActive,
+                            isCompressorActive = isCompressorActive,
                             onOpenPeq = onOpenPeq
                         )
                     }

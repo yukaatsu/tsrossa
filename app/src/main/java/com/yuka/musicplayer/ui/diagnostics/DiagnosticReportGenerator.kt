@@ -27,6 +27,11 @@ fun generateDiagnosticReport(
     supportedBitDepths: String,
     refusedTrackHistory: List<RefusedTrackEntry>,
     includeLogcat: Boolean = true,
+    isPeqEnabled: Boolean = false,
+    isCompressorEnabled: Boolean = false,
+    isHardwareVolumeActive: Boolean = false,
+    isBitPerfectDirectPass: Boolean = false,
+    isGaplessReady: Boolean = false,
     appLogs: List<AppLogEntry> = com.yuka.musicplayer.utils.AppLogger.entries.value,
     logcatLines: List<String> = emptyList(),
     context: Context? = null
@@ -123,8 +128,17 @@ fun generateDiagnosticReport(
     // 4. Engine Configuration
     sb.appendLine("[ENGINE CONFIGURATION]")
     sb.appendLine("RAM Playback: ACTIVE (Zero Jitter)")
-    sb.appendLine("Gapless Engine: ACTIVE (Direct Handover)")
-    sb.appendLine("DSP Pipeline: BYPASSED (Bit-Perfect)")
+    sb.appendLine(
+        "Gapless Engine: " +
+            if (isGaplessReady) "READY (Next Track Pre-Buffered)" else "IDLE (No Next Track Buffered)"
+    )
+    val dspStatusLabel = resolveDspPipelineStatusLabel(
+        isBitPerfectDirectPass = isBitPerfectDirectPass,
+        isPeqEnabled = isPeqEnabled,
+        isCompressorEnabled = isCompressorEnabled,
+        isHardwareVolumeActive = isHardwareVolumeActive
+    )
+    sb.appendLine("DSP Pipeline: $dspStatusLabel")
     sb.appendLine()
 
     // 5. USB Hardware & Audit

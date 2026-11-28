@@ -96,6 +96,13 @@ fun TrackView(
     outputSampleRate: Int = 0,
     isDacConnected: Boolean = false,
     isPeqActive: Boolean = false,
+    isCompressorActive: Boolean = false,
+    isBitPerfectDirectPass: Boolean = false,
+    isSampleRateUnverified: Boolean = false,
+    isDeviceWedged: Boolean = false,
+    isHardwareVolumeLockedBySystem: Boolean = false,
+    onOpenSignalPath: () -> Unit = {},
+    onOpenVolumeModal: (() -> Unit)? = null,
     onOpenPeq: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -428,6 +435,13 @@ fun TrackView(
                         outputSampleRate = outputSampleRate,
                         isDacConnected = isDacConnected,
                         isPeqActive = isPeqActive,
+                        isCompressorActive = isCompressorActive,
+                        isBitPerfectDirectPass = isBitPerfectDirectPass,
+                        isSampleRateUnverified = isSampleRateUnverified,
+                        isDeviceWedged = isDeviceWedged,
+                        isHardwareVolumeLockedBySystem = isHardwareVolumeLockedBySystem,
+                        onOpenSignalPath = onOpenSignalPath,
+                        onOpenVolumeModal = onOpenVolumeModal,
                         onOpenPeq = onOpenPeq
                     )
                 }
@@ -496,6 +510,13 @@ fun TrackView(
                     outputSampleRate = outputSampleRate,
                     isDacConnected = isDacConnected,
                     isPeqActive = isPeqActive,
+                    isCompressorActive = isCompressorActive,
+                    isBitPerfectDirectPass = isBitPerfectDirectPass,
+                    isSampleRateUnverified = isSampleRateUnverified,
+                    isDeviceWedged = isDeviceWedged,
+                    isHardwareVolumeLockedBySystem = isHardwareVolumeLockedBySystem,
+                    onOpenSignalPath = onOpenSignalPath,
+                    onOpenVolumeModal = onOpenVolumeModal,
                     onOpenPeq = onOpenPeq,
                     modifier = Modifier.fillMaxWidth()
                 )

@@ -45,7 +45,7 @@ target_include_directories(kewmobile PRIVATE
 
 target_compile_definitions(kewmobile PRIVATE -D_GNU_SOURCE=1)
 
-target_compile_options(kewmobile PRIVATE -fvisibility=hidden -pthread)
+target_compile_options(kewmobile PRIVATE -O2 -fvisibility=hidden -pthread)
 
 target_link_libraries(
         kewmobile

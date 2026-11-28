@@ -19,7 +19,8 @@ data class AudioFileTags(
     val sampleRate: Int = 0,
     val bitsPerSample: Int = 0,
     val channels: Int = 2,
-    val bitrateKbps: Int = 0
+    val bitrateKbps: Int = 0,
+    val isFloatPcm: Boolean = false
 )
 
 object AudioTagReader {
@@ -232,6 +233,7 @@ object AudioTagReader {
             var wavChannels = 2
             var wavSampleRate = 0
             var wavBitsPerSample = 16
+            var wavIsFloat = false
 
             val chunkHeader = ByteArray(8)
             while (stream.read(chunkHeader) == 8) {
@@ -244,6 +246,13 @@ object AudioTagReader {
                         if (chunkSize >= 16) {
                             val fmtData = ByteArray(chunkSize.toInt())
                             stream.readFully(fmtData)
+                            val formatTag = readLeShort(fmtData, 0) and 0xFFFF
+                            wavIsFloat = when {
+                                formatTag == 3 -> true
+                                formatTag == 0xFFFE && fmtData.size >= 26 ->
+                                    (readLeShort(fmtData, 24) and 0xFFFF) == 3
+                                else -> false
+                            }
                             wavChannels = readLeShort(fmtData, 2).coerceAtLeast(1)
                             wavSampleRate = readLeInt(fmtData, 4)
                             byteRate = readLeInt(fmtData, 8)
@@ -332,7 +341,8 @@ object AudioTagReader {
                 sampleRate = wavSampleRate,
                 bitsPerSample = wavBitsPerSample,
                 channels = wavChannels,
-                bitrateKbps = bitrateKbps
+                bitrateKbps = bitrateKbps,
+                isFloatPcm = wavIsFloat
             )
         }
     }

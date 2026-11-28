@@ -268,6 +268,11 @@ void control_thread_func() {
     } else if (req.type == 3) { // SET_INTERFACE
       libusb_set_interface_alt_setting(g_audioState.usbHandle, req.interfaceNum,
                                        req.altSetting);
+    } else if (req.type == REQ_CLEAR_ENDPOINT_HALT) {
+      if (req.endpoint != 0) {
+        libusb_clear_halt(g_audioState.usbHandle, req.endpoint);
+      }
+      g_audioState.clearHaltPending.store(false, std::memory_order_release);
     }
   }
 }
@@ -594,10 +599,22 @@ void close_usb_dac_internal() {
     g_audioState.subframeSize.store(0);
     g_audioState.negotiatedBitResolution.store(0);
     g_audioState.epFeedback = 0;
-    g_audioState.isAsync = false;
+    g_audioState.isAsync.store(false, std::memory_order_release);
     g_audioState.epFeedbackBInterval = 0;
     g_audioState.epFeedbackMaxPkt = 0;
-    g_audioState.consecutiveSilentFrames = 0;
+    g_audioState.clearHaltPending.store(false);
+    g_audioState.lastCompressorGainDb.store(0.0f);
+    g_audioState.lastLimiterGainReductionDb.store(0.0f, std::memory_order_relaxed);
+    g_audioState.lastPeqEffective.store(false, std::memory_order_relaxed);
+    g_audioState.lastCompEffective.store(false, std::memory_order_relaxed);
+    g_audioState.bitPerfectDirectPassActive.store(false, std::memory_order_relaxed);
+    g_audioState.isMlockActive.store(false, std::memory_order_release);
+    g_audioState.isRtSchedFifoActive.store(false, std::memory_order_release);
+    g_audioState.activeIsoPacketsPerTransfer.store(0, std::memory_order_release);
+    g_audioState.sourceIsFloatPcm.store(false, std::memory_order_release);
+    g_audioState.sourceIsFloatPcmNext.store(false, std::memory_order_release);
+    g_audioState.compressorState.requestStateReset();
+    g_audioState.dspPipeline.resetRuntimeState(0);
     g_audioState.sampleRate.store(0);
     g_audioState.channels.store(0);
     g_audioState.currentAltSetting.store(0);
@@ -765,6 +782,8 @@ bool init_usb_dac_internal(int fd) {
   g_audioState.clockSelectorId = -1;
   g_audioState.clockSelectorPin = 1;
   g_audioState.sourceBitDepthNext.store(0);
+  g_audioState.sourceIsFloatPcm.store(false);
+  g_audioState.sourceIsFloatPcmNext.store(false);
   g_audioState.isHardwareVolumeActive.store(false);
   g_audioState.isHardwareVolumeSupported.store(false);
   g_audioState.volumeMasterSupported.store(false);
@@ -782,10 +801,13 @@ bool init_usb_dac_internal(int fd) {
   g_audioState.isAutoSuspending.store(false);
   g_audioState.negotiatedBitResolution.store(0);
   g_audioState.epFeedback = 0;
-  g_audioState.isAsync = false;
+  g_audioState.isAsync.store(false, std::memory_order_release);
   g_audioState.epFeedbackBInterval = 0;
   g_audioState.epFeedbackMaxPkt = 0;
-  g_audioState.consecutiveSilentFrames = 0;
+  g_audioState.clearHaltPending.store(false);
+  g_audioState.lastCompressorGainDb.store(0.0f);
+  g_audioState.compressorState.requestStateReset();
+  g_audioState.dspPipeline.resetRuntimeState(0);
   g_audioState.resetErrorCounters();
   g_audioState.volumeChannel = 0;
 
@@ -1112,9 +1134,11 @@ bool init_usb_dac_internal(int fd) {
 
     const PeqCoeffBank peqSnap = g_audioState.peqState.snapshotActiveBank();
     const bool peq_active = g_audioState.peqState.enabled.load(std::memory_order_relaxed) && peqSnap.hasActiveFilter;
+    const CompressorCoeffBank compSnap = g_audioState.compressorState.snapshotActiveBank();
+    const bool comp_active = g_audioState.compressorState.enabled.load(std::memory_order_relaxed) && compSnap.hasActiveProcessing;
     const bool sw_vol_attenuating = !g_audioState.preferHardwareVolume.load(std::memory_order_relaxed) &&
                                     (g_audioState.rawLinearVolume.load(std::memory_order_relaxed) < 0.999f);
-    const bool dsp_high_precision_alt = peq_active || sw_vol_attenuating;
+    const bool dsp_high_precision_alt = peq_active || comp_active || sw_vol_attenuating;
 
     AltSettingInfo best_alt = g_audioState.validAlts[0];
     int best_score = -1;
@@ -1351,7 +1375,7 @@ bool init_usb_dac_internal(int fd) {
   g_audioState.maxPacketSize = max_packet_size;
   if (has_init_selected_alt) {
     g_audioState.epFeedback = init_selected_alt.ep_feedback;
-    g_audioState.isAsync = init_selected_alt.is_async;
+    g_audioState.isAsync.store(init_selected_alt.is_async, std::memory_order_release);
     g_audioState.epFeedbackBInterval = init_selected_alt.ep_feedback_bInterval;
     g_audioState.epFeedbackMaxPkt = init_selected_alt.ep_feedback_max_pkt;
     g_audioState.negotiatedBitResolution.store(init_selected_alt.bit_resolution);

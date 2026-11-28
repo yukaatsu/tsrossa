@@ -25,7 +25,6 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        com.yuka.musicplayer.core.migration.CleanInstallMigrationHelper.ensureCleanInstallOnUpdate(applicationContext)
         AudioPlayerManager.initialize(applicationContext)
         AlbumArtThumbnailCache.init(applicationContext)
 

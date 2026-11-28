@@ -270,4 +270,60 @@ class DiagnosticReportTest {
         )
         org.junit.Assert.assertEquals(24, max24Dac)
     }
+
+    @Test
+    fun dacTelemetry_reportsBitPerfectDirectPassFromNativeSsotAndPrefersActualNegotiatedBitDepthWhilePlaying() {
+        // 1. While playing, actual C++ rawNegotiatedBitDepth MUST take precedence over client estimation
+        val actualPlaying24 = resolveEffectiveOutputBitDepth(
+            sourceBitDepth = 24,
+            rawNegotiatedBitDepth = 24,
+            supportedBitDepths = "16 / 24 / 32",
+            isHardwareVolumeActive = false,
+            isPeqEnabled = false,
+            isCompressorEnabled = false,
+            isPlaying = true
+        )
+        org.junit.Assert.assertEquals(24, actualPlaying24)
+
+        // 2. While playing in 32-bit container with compressor ON, actual 32-bit C++ negotiation wins
+        val actualPlaying32 = resolveEffectiveOutputBitDepth(
+            sourceBitDepth = 16,
+            rawNegotiatedBitDepth = 32,
+            supportedBitDepths = "16 / 24 / 32",
+            isHardwareVolumeActive = false,
+            isPeqEnabled = false,
+            isCompressorEnabled = true,
+            isPlaying = true
+        )
+        org.junit.Assert.assertEquals(32, actualPlaying32)
+
+        // 3. SSOT DSP pipeline label matches native Bit-Perfect state strictly
+        org.junit.Assert.assertEquals(
+            "BYPASSED (100% Bit-Perfect)",
+            resolveDspPipelineStatusLabel(
+                isBitPerfectDirectPass = true,
+                isPeqEnabled = false,
+                isCompressorEnabled = false,
+                isHardwareVolumeActive = false
+            )
+        )
+        org.junit.Assert.assertEquals(
+            "ACTIVE (64-Bit Float Gain)",
+            resolveDspPipelineStatusLabel(
+                isBitPerfectDirectPass = false,
+                isPeqEnabled = false,
+                isCompressorEnabled = false,
+                isHardwareVolumeActive = false
+            )
+        )
+        org.junit.Assert.assertEquals(
+            "ACTIVE (64-Bit PEQ + Dynamics)",
+            resolveDspPipelineStatusLabel(
+                isBitPerfectDirectPass = false,
+                isPeqEnabled = true,
+                isCompressorEnabled = true,
+                isHardwareVolumeActive = false
+            )
+        )
+    }
 }
